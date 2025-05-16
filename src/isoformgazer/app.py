@@ -4,6 +4,7 @@ import plotly.graph_objs as go
 import numpy as np
 import pandas as pd
 from dash.dash_table.Format import Format, Scheme
+from dash.exceptions import PreventUpdate
 from utils import generate_mock_data
 
 RANDOM_SEED = 18
@@ -51,45 +52,8 @@ app.index_string = '''
 ###################################################################
 header = html.Div(className='app-header', children=[
     html.Div('daklab ---', style={'fontWeight': 'bold'}),
-    html.Div('Isoform Gazers', className='app-header--title'),
-    html.Div(className='binder-tabs-container', children=[
-        dcc.Link('Junction-level', href='/junction-level', className='binder-tab', id='junction-tab'),
-        dcc.Link('Isoform-level', href='/isoform-level', className='binder-tab', id='isoform-tab'),
-        dcc.Link('Protein-level', href='/protein-level', className='binder-tab', id='protein-tab'),
-    ])
+    html.Div('Isoform Gazers', className='app-header--title')
 ])
-
-###################################################################
-# TAB PAGES
-###################################################################
-def create_junction_layout():
-    return html.Div(className='app-body', children=[
-        # Control panel (left sidebar)
-        html.Div(id='control-tabs', className='control-tabs', style={
-            'width': '340px', 
-            'backgroundColor': 'white', 
-            'borderRight': '1px solid #e1e1e1'
-        }, children=[]),
-        
-        html.Div(className='main-content', children=[
-            html.Div(className='panels-container', children=[
-            ])
-        ])
-    ])
-
-def create_isoform_layout():
-    # Placeholder for Isoform-level page
-    return html.Div(className='app-body', children=[
-        html.H1("Isoform-level Analysis", style={'textAlign': 'center', 'margin-top': '50px'}),
-        html.P("This page will contain isoform-level visualizations.", style={'textAlign': 'center'})
-    ])
-
-def create_protein_layout():
-    # Placeholder for Protein-level page
-    return html.Div(className='app-body', children=[
-        html.H1("Protein-level Analysis", style={'textAlign': 'center', 'margin-top': '50px'}),
-        html.P("This page will contain protein-level visualizations.", style={'textAlign': 'center'})
-    ])
 
 ###################################################################
 # ISOFORM MASTER TABLE 
@@ -213,8 +177,25 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         html.P('Use the controls in the "Custom" tab to customize the visualizations.')
                     ])
                 ]),
-                dcc.Tab(label='Data', value='tab-2', children=[
+                dcc.Tab(label='Query', value='tab-2', children=[
                     html.Div(className='control-tab', children=[
+                        html.Div(className='app-controls-block', children=[
+                        html.Div(className='app-controls-name', children='Search by Gene'),
+                        dcc.Dropdown(
+                            id='gene-search-dropdown',
+                            options=[
+                                {'label': 'RBFOX2 (RNA Binding Fox-1 Homolog 2)', 'value': 'RBFOX2'},
+                                {'label': 'EGFR (Epidermal growth factor receptor)', 'value': 'EGFR'},
+                                {'label': 'BRCA1 (Breast cancer type 1)', 'value': 'BRCA1'},
+                                {'label': 'TARDBP (TAR DNA Binding Protein)', 'value': 'TARDBP'},
+                                {'label': 'TP53 (Tumor protein p53)', 'value': 'TP53'}
+                            ],
+                            placeholder="Type to search for a gene...",
+                            searchable=True,
+                            clearable=True
+                        ),
+                        html.Div(className='app-controls-desc', children='Select a gene identifier to query or type to search')
+                        ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Data Source'),
                             dcc.Dropdown(
@@ -447,6 +428,51 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
 #######################################################################
 # CALLBACKS
 #######################################################################
+# TEMP MOCK GENE VALS: will add logic to fetch & format these directly from master table(s)!
+mock_gene_options = [
+    {'label': 'BRCA1 - Breast cancer type 1', 'value': 'BRCA1'},
+    {'label': 'BRCA2 - Breast cancer type 2', 'value': 'BRCA2'},
+    {'label': 'TP53 - Tumor protein p53', 'value': 'TP53'},
+    {'label': 'EGFR - Epidermal growth factor receptor', 'value': 'EGFR'},
+    {'label': 'KRAS - KRAS proto-oncogene', 'value': 'KRAS'},
+    {'label': 'PTEN - Phosphatase and tensin homolog', 'value': 'PTEN'},
+    {'label': 'TNF - Tumor necrosis factor', 'value': 'TNF'},
+    {'label': 'APOE - Apolipoprotein E', 'value': 'APOE'},
+    {'label': 'APP - Amyloid beta precursor protein', 'value': 'APP'},
+    {'label': 'RBFOX2 (RNA Binding Fox-1 Homolog 2)', 'value': 'RBFOX2'},
+    {'label': 'TARDBP (TAR DNA Binding Protein)', 'value': 'TARDBP'},
+    {'label': 'FUS (Fused in Sarcoma)', 'value': 'FUS'}
+]
+
+##############################################################################################
+# CALLBACK FOR QUERYING BY GENE IN CONTROL PANNEL 'Query' TAB: if no search is performed, we 
+# show the first five gene names, but otherwise filter by the top ten matches to the current 
+# search string. 
+##############################################################################################
+@app.callback(
+    dash.dependencies.Output('gene-search-dropdown', 'options'),
+    [dash.dependencies.Input('gene-search-dropdown', 'search_value')]
+)
+def update_gene_options(search_value):
+    if not search_value:
+        return mock_gene_options[:5]
+    
+    # Filter options based on search_value (note: case insensitive)
+    filtered = [option for option in mock_gene_options 
+               if search_value.lower() in option['label'].lower()]
+    return filtered[:10]
+
+
+@app.callback(
+    dash.dependencies.Output('gene-search-dropdown', 'value'),
+    [dash.dependencies.Input('gene-search-dropdown', 'options')]
+)
+def set_default_value(available_options):
+    if len(available_options) > 0:
+        return None 
+    raise PreventUpdate
+
+
 @app.callback(
     [
         dash.dependencies.Output('heatmap1', 'figure'),
