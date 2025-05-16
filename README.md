@@ -1,5 +1,7 @@
 # IsoformGazer
-Isoform Gazer is a comprehensive dashboard application for visualizing RNA splicing events across pseudobulked single-cell junction usage and long-read isoform expression data.
+Isoform Gazer is a comprehensive dashboard application for visualizing RNA splicing events across pseudobulked single-cell junction usage and long-read isoform expression data. 
+
+Please note that all data in Isoform Gazer uses GENCODEv46 (GRCh38.p14). 
 
 ## Installation 
 Installation is currently supported for Linux and MacOS. 
@@ -37,3 +39,10 @@ poetry show --help
 
 ### Option 2: Conda (TO DO)
 A bioconda recipe may be created at a later date. We will also add instructions for creating the necessary environment from scratch.
+
+## Usage
+After installing all the required dependencies as shown in the Installation section, you can run IsoformGazer on your local machine by running the following within the ``IsoformGazer`` directory:
+```
+poetry run python src/isoformgazer/app.py
+``` 
+This will launch IsoformGazer on local host. Open the address (e.g. http://127.0.0.1:8050/) in a browser of your choice. 

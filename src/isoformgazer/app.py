@@ -209,7 +209,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                     html.Div(className='control-tab', children=[
                         html.H4('About'),
                         html.P('Isoform Gazers allows for a unified view of RNA splicing across ' \
-                        'both single-cell junction usage and long-read isoform data.'),
+                        'both single-cell junction usage and long-read isoform data in GENCODEv46 (GRCh38.p14).'),
                         html.P('Use the controls in the "Custom" tab to customize the visualizations.')
                     ])
                 ]),
