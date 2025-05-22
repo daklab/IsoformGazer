@@ -32,14 +32,16 @@ def setup_local_database(force_rebuild=False):
     """
     Sets up SQLite database from data files.
     """
-    data_dir = os.path.join(os.getcwd(), "data")
-    os.makedirs(data_dir, exist_ok=True)  # This creates the directory if needed
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(base_dir, "data")
+    os.makedirs(data_dir, exist_ok=True)
     
     db_path = os.path.join(data_dir, "isoformgazer.db")
+    print(f"The database path is {db_path}...")
     
     if Path(db_path).exists() and not force_rebuild:
         print(f"Found existing database at {db_path} to use.")
-        return
+        return db_path
     
     print(f"Creating new database at {db_path}.")
     if Path(db_path).exists():
@@ -48,8 +50,8 @@ def setup_local_database(force_rebuild=False):
     conn = sqlite3.connect(db_path)
     
     print("Loading isoform data...")
-    print(f"Isoform data at {os.path.join(os.getcwd(), "data/mt_isoform_gazers_250514.tsv")}")
-    df_isoform = pd.read_csv(os.path.join(os.getcwd(), "data/mt_isoform_gazers_250514.tsv"), sep='\t')
+    print(f"Isoform data at {os.path.join(data_dir, "mt_isoform_gazers_250514.tsv")}")
+    df_isoform = pd.read_csv(os.path.join(data_dir, "mt_isoform_gazers_250514.tsv"), sep='\t')
     df_isoform.to_sql('isoforms', conn, if_exists='replace', index=False)
     print(f"Loaded {len(df_isoform):,} isoform rows")
     
@@ -57,8 +59,8 @@ def setup_local_database(force_rebuild=False):
     chunk_size = 100000
     first_chunk = True
     row_count = 0
-    print(f"Junction data at {os.path.join(os.getcwd(), 'src/isoformgazer/data/pseudobulk_final_broad_cell_type_20250514_072922.csv')}")
-    for i, chunk in enumerate(pd.read_csv(os.path.join(os.getcwd(), "data/pseudobulk_final_broad_cell_type_20250514_072922.csv"), 
+    print(f"Junction data at {os.path.join(data_dir, 'pseudobulk_final_broad_cell_type_20250514_072922.csv')}")
+    for i, chunk in enumerate(pd.read_csv(os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250514_072922.csv"), 
                                          chunksize=chunk_size)):
         if first_chunk:
             chunk.to_sql('junctions', conn, if_exists='replace', index=False)
@@ -75,11 +77,13 @@ def setup_local_database(force_rebuild=False):
     conn.close()
     print("Database setup complete.")
 
+    return db_path
+
 
 ###################################################################
 # APPLICATION SETUP
 ###################################################################
-setup_local_database()
+db_path = setup_local_database()
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
 # CSS for styling components with responsive design
@@ -116,7 +120,7 @@ header = html.Div(className='app-header', children=[
 ###################################################################
 left_data_table = dash_table.DataTable(
     id='left_data_table',
-    columns=get_isoform_columns(),
+    columns=get_isoform_columns(db_path),
     data=[],
     editable=False,
     filter_action="custom",
@@ -165,7 +169,7 @@ left_data_table = dash_table.DataTable(
 ###################################################################
 right_data_table = dash_table.DataTable(
     id='right_data_table',
-    columns=get_junction_columns(),
+    columns=get_junction_columns(db_path),
     data=[],
     editable=False,
     filter_action="custom",
@@ -488,9 +492,9 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
 )
 def update_gene_options(search_value):
     if not search_value:
-        return get_gene_options(limit=5)
+        return get_gene_options(db_path, limit=5)
     
-    return get_gene_options(search_term=search_value, limit=10)
+    return get_gene_options(db_path, search_term=search_value, limit=10)
 
 
 @app.callback(
@@ -515,8 +519,9 @@ def set_default_value(available_options):
      dash.dependencies.Input('gene-search-dropdown', 'value')]
 )
 def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene):
-    filters = parse_filter_query(filter_query, table_name='isoforms')
+    filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
     data, total_count = query_isoforms(
+        db_path,
         page=page_current if page_current is not None else 0,
         page_size=page_size if page_size is not None else 10,
         sort_by=sort_by,
@@ -537,8 +542,9 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
      dash.dependencies.Input('gene-search-dropdown', 'value')]
 )
 def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene):
-    filters = parse_filter_query(filter_query, table_name='junctions')
+    filters = parse_filter_query(db_path, filter_query, table_name='junctions')
     data, total_count = query_junctions(
+        db_path,
         page=page_current if page_current is not None else 0,
         page_size=page_size if page_size is not None else 10,
         sort_by=sort_by,

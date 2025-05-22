@@ -230,8 +230,8 @@ def generate_mock_data(random_seed=18):
     }
 
 
-def get_isoform_columns():
-    conn = sqlite3.connect('data/isoformgazer.db')
+def get_isoform_columns(db_path):
+    conn = sqlite3.connect(db_path)
     cols = pd.read_sql_query("PRAGMA table_info(isoforms)", conn)
     conn.close()
     
@@ -241,9 +241,9 @@ def get_isoform_columns():
     ]
 
 
-def query_isoforms(page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
+def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
     """Query isoform data with pagination, sorting and filtering"""
-    conn = sqlite3.connect('data/isoformgazer.db')
+    conn = sqlite3.connect(db_path)
     
     # Base query
     query = "SELECT * FROM isoforms"
@@ -304,8 +304,8 @@ def query_isoforms(page=0, page_size=10, sort_by=None, filters=None, gene_filter
     return df.to_dict('records'), total_count
 
 
-def get_junction_columns():
-    conn = sqlite3.connect('data/isoformgazer.db')
+def get_junction_columns(db_path):
+    conn = sqlite3.connect(db_path)
     cols = pd.read_sql_query("PRAGMA table_info(junctions)", conn)
     conn.close()
     
@@ -315,9 +315,9 @@ def get_junction_columns():
     ]
     
 
-def query_junctions(page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
+def query_junctions(db_path, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
     """Query junction data with pagination, sorting and filtering"""
-    conn = sqlite3.connect('data/isoformgazer.db')
+    conn = sqlite3.connect(db_path)
     
     # Base query
     query = "SELECT * FROM junctions"
@@ -379,9 +379,9 @@ def query_junctions(page=0, page_size=10, sort_by=None, filters=None, gene_filte
     return df.to_dict('records'), total_count
 
 
-def get_gene_options(search_term=None, limit=10):
+def get_gene_options(db_path, search_term=None, limit=10):
     """Get gene options for dropdown from database"""
-    conn = sqlite3.connect('data/isoformgazer.db')
+    conn = sqlite3.connect(db_path)
     
     if search_term:
         query = """
@@ -422,9 +422,9 @@ def get_gene_options(search_term=None, limit=10):
     return options
 
 
-def get_column_types(table_name):
+def get_column_types(db_path, table_name):
     """Get data types for columns in a table"""
-    conn = sqlite3.connect('data/isoformgazer.db')
+    conn = sqlite3.connect(db_path)
     
     query = f"PRAGMA table_info({table_name})"
     columns_info = pd.read_sql_query(query, conn)
@@ -438,7 +438,7 @@ def get_column_types(table_name):
     return column_types
 
 
-def parse_filter_query(filter_query, table_name=None):
+def parse_filter_query(db_path, filter_query, table_name=None):
     """Parse filter query with type validation"""
     if not filter_query:
         return []
@@ -446,7 +446,7 @@ def parse_filter_query(filter_query, table_name=None):
     print(f"Received filter query: {filter_query}")
     
     if table_name: 
-        column_types = get_column_types(table_name)
+        column_types = get_column_types(db_path, table_name)
     else: 
         column_types = {}
     
@@ -515,25 +515,3 @@ def parse_filter_query(filter_query, table_name=None):
             print(f"Error parsing filter expression '{expression}': {e}")
     
     return filters
-
-
-def get_isoform_columns():
-    conn = sqlite3.connect('data/isoformgazer.db')
-    cols = pd.read_sql_query("PRAGMA table_info(isoforms)", conn)
-    conn.close()
-    
-    return [
-        {"name": col.replace('_', ' ').title(), "id": col} 
-        for col in cols['name']
-    ]
-
-
-def get_junction_columns():
-    conn = sqlite3.connect('data/isoformgazer.db')
-    cols = pd.read_sql_query("PRAGMA table_info(junctions)", conn)
-    conn.close()
-    
-    return [
-        {"name": col.replace('_', ' ').title(), "id": col} 
-        for col in cols['name']
-    ]
