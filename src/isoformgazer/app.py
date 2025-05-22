@@ -1,11 +1,15 @@
+import os 
+import math
+import sqlite3
+import numpy as np
+import pandas as pd
+from pathlib import Path
 import dash
 from dash import html, dcc, dash_table
 import plotly.graph_objs as go
-import numpy as np
-import pandas as pd
-from dash.dash_table.Format import Format, Scheme
 from dash.exceptions import PreventUpdate
-from utils import generate_mock_data
+
+from data_utils import generate_mock_data, get_isoform_columns, get_junction_columns, parse_filter_query, query_isoforms, query_junctions, get_gene_options
 
 RANDOM_SEED = 18
 np.random.seed(RANDOM_SEED)
@@ -22,8 +26,60 @@ atse_data = mock_data['atse_data']
 atse_fig = mock_data['atse_fig']
 
 ###################################################################
+# SQLLITE DATABASE SETUP
+###################################################################
+def setup_local_database(force_rebuild=False):
+    """
+    Sets up SQLite database from data files.
+    """
+    data_dir = os.path.join(os.getcwd(), "data")
+    os.makedirs(data_dir, exist_ok=True)  # This creates the directory if needed
+    
+    db_path = os.path.join(data_dir, "isoformgazer.db")
+    
+    if Path(db_path).exists() and not force_rebuild:
+        print(f"Found existing database at {db_path} to use.")
+        return
+    
+    print(f"Creating new database at {db_path}.")
+    if Path(db_path).exists():
+        os.remove(db_path)
+    
+    conn = sqlite3.connect(db_path)
+    
+    print("Loading isoform data...")
+    print(f"Isoform data at {os.path.join(os.getcwd(), "data/mt_isoform_gazers_250514.tsv")}")
+    df_isoform = pd.read_csv(os.path.join(os.getcwd(), "data/mt_isoform_gazers_250514.tsv"), sep='\t')
+    df_isoform.to_sql('isoforms', conn, if_exists='replace', index=False)
+    print(f"Loaded {len(df_isoform):,} isoform rows")
+    
+    print("Loading junction data in chunks...")
+    chunk_size = 100000
+    first_chunk = True
+    row_count = 0
+    print(f"Junction data at {os.path.join(os.getcwd(), 'src/isoformgazer/data/pseudobulk_final_broad_cell_type_20250514_072922.csv')}")
+    for i, chunk in enumerate(pd.read_csv(os.path.join(os.getcwd(), "data/pseudobulk_final_broad_cell_type_20250514_072922.csv"), 
+                                         chunksize=chunk_size)):
+        if first_chunk:
+            chunk.to_sql('junctions', conn, if_exists='replace', index=False)
+            first_chunk = False
+        else:
+            chunk.to_sql('junctions', conn, if_exists='append', index=False)
+        
+        row_count += len(chunk)
+        print(f"Processed chunk {i+1}, total rows: {row_count:,}")
+    
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_gene ON junctions(gene_symbol, gene_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_isoforms_gene ON isoforms(gene_name, gene_id)")
+    conn.commit()
+    conn.close()
+    print("Database setup complete.")
+
+
+###################################################################
 # APPLICATION SETUP
 ###################################################################
+setup_local_database()
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
 # CSS for styling components with responsive design
@@ -60,48 +116,48 @@ header = html.Div(className='app-header', children=[
 ###################################################################
 left_data_table = dash_table.DataTable(
     id='left_data_table',
-    columns=[
-        dict(id='Isoform_Id', name='Isoform ID'),
-        dict(id='Number of Effective Isoforms', name='Num Effective Isoforms', type='numeric',
-             format=Format(precision=0, scheme=Scheme.fixed)),
-        dict(id='Nuclear Localization', name='Nuclear Localization'),
-        dict(id='Coordinates', name='Coordinates'),
-        dict(id='Annotation', name='Annotation')
-    ],
-    data=df1.to_dict('records'),
+    columns=get_isoform_columns(),
+    data=[],
     editable=False,
-    filter_action="native",
-    sort_action="native",
+    filter_action="custom",
+    filter_options={'placeholder_text': 'Filter column...'},
+    sort_action="custom",
     sort_mode="multi",
-    column_selectable="single",
-    row_selectable="multi",
-    selected_columns=[],
-    selected_rows=[],
-    page_action="native",
+    page_action="custom",
     page_current=0,
     page_size=10,
+    page_count=0,
+    filter_query='',
+    sort_by=[],
     style_cell={
         'overflow': 'hidden',
         'textOverflow': 'ellipsis',
         'minWidth': '100px', 
-        'width': '120px', 
-        'maxWidth': '120px',
+        'maxWidth': '220px',
         'padding': '5px',
     },
     style_table={'height': '100%', 'overflowY': 'auto'},
     style_header={
         'backgroundColor': 'white',
         'fontWeight': 'bold',
-        'fontsize': 8,
-        'font-family': 'sans-serif'
+        'font-family': 'sans-serif',
+        'whiteSpace': 'normal',
+        'height': 'auto',        
+        'lineHeight': '15px',    
+        'padding': '8px',        
+        'textAlign': 'center'
     },
-    style_data={'fontsize': 6, 'font-family': 'sans-serif'},
+    style_data={'font-family': 'sans-serif'},
     style_data_conditional=[
-        {
-            'if': {'row_index': 'odd'},
-            'backgroundColor': 'rgb(248, 248, 248)'
-        }
+        {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}
     ],
+    style_filter={
+        'backgroundColor': '#f8f9fa',
+        'fontWeight': 'bold',
+        'padding': '8px 0px'
+    },
+    virtualization=True,
+    fixed_rows={'headers': True},
 )
 
 ###################################################################
@@ -109,47 +165,48 @@ left_data_table = dash_table.DataTable(
 ###################################################################
 right_data_table = dash_table.DataTable(
     id='right_data_table',
-    columns=[
-        dict(id='Gene', name='Gene'),
-        dict(id='Splice_Junction_ID', name='Splice Junction ID'),
-        dict(id='ATSE_ID', name='ATSE ID'),
-        dict(id='Strand', name='Strand'),
-        dict(id='Annotation', name='Annotation')
-    ],
-    data=df2.to_dict('records'),
+    columns=get_junction_columns(),
+    data=[],
     editable=False,
-    filter_action="native",
-    sort_action="native",
+    filter_action="custom",
+    filter_options={'placeholder_text': 'Filter column...'},
+    sort_action="custom",
     sort_mode="multi",
-    column_selectable="single",
-    row_selectable="multi",
-    selected_columns=[],
-    selected_rows=[],
-    page_action="native",
+    page_action="custom",
     page_current=0,
     page_size=10,
+    page_count=0,
+    filter_query='',
+    sort_by=[],
     style_cell={
         'overflow': 'hidden',
         'textOverflow': 'ellipsis',
-        'minWidth': '100px', 
-        'width': '120px', 
-        'maxWidth': '120px',
+        'minWidth': '100px',
+        'maxWidth': '220px',
         'padding': '5px',
     },
     style_table={'height': '100%', 'overflowY': 'auto'},
     style_header={
         'backgroundColor': 'white',
         'fontWeight': 'bold',
-        'fontsize': 8,
-        'font-family': 'sans-serif'
+        'font-family': 'sans-serif',
+        'whiteSpace': 'normal',
+        'height': 'auto',        
+        'lineHeight': '15px',    
+        'padding': '8px',        
+        'textAlign': 'center'
     },
-    style_data={'fontsize': 6, 'font-family': 'sans-serif'},
+    style_data={'font-family': 'sans-serif'},
     style_data_conditional=[
-        {
-            'if': {'row_index': 'odd'},
-            'backgroundColor': 'rgb(248, 248, 248)'
-        }
+        {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}
     ],
+    style_filter={
+        'backgroundColor': '#f8f9fa',
+        'fontWeight': 'bold',
+        'padding': '8px 0px'
+    },
+    virtualization=True,
+    fixed_rows={'headers': True},
 )
 
 ###################################################################
@@ -196,34 +253,26 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         ),
                         html.Div(className='app-controls-desc', children='Select a gene identifier to query or type to search')
                         ]),
-                        html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Data Source'),
-                            dcc.Dropdown(
-                                id='data-dropdown',
-                                options=[
-                                    {'label': 'Dataset 1', 'value': 'dataset1'},
-                                    {'label': 'Dataset 2', 'value': 'dataset2'},
-                                ],
-                                value='dataset1'
-                            ),
-                            html.Div(className='app-controls-desc', children='Select a dataset to visualize')
-                        ]),
-                        html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Upload Data'),
-                            dcc.Upload(
-                                id='upload-data',
-                                children=html.Div(['Drag and drop or click to select files']),
-                                style={
-                                    'width': '100%',
-                                    'height': '60px',
-                                    'lineHeight': '60px',
-                                    'borderWidth': '1px',
-                                    'borderStyle': 'dashed',
-                                    'borderRadius': '5px',
-                                    'textAlign': 'center',
-                                    'margin': '10px 0'
-                                }
-                            )
+                        html.Div(className="app-controls-block", children=[
+                            html.Div(className='app-controls-name', children='Query by Value'),
+                            html.P("You can use the filter boxes below each master table column header to search and filter the data:"),
+                            html.Ul([
+                                html.Li([html.Strong("Text columns: "), "Simply type text to find matching rows"]),
+                                html.Li([html.Strong("Numeric columns: "), "Use operators for precise filtering:"]),
+                                html.Ul([
+                                    html.Li("Type a number (e.g., '4') to show only entries with exact matches."),
+                                    html.Li("Use > for greater than (e.g., '>5')."),
+                                    html.Li("Use < for less than (e.g., '<10')."),
+                                    html.Li("Use >= or <= for inclusive ranges.")
+                                ]),
+                                html.Li([html.Strong("Multiple filters: "), "You can apply filters to multiple columns simultaneously."]),
+                                html.Li([html.Strong("Clear filters: "), "Delete your queries in the filter boxes and hit Enter anytime to reset."])
+                            ]),
+                            html.P([
+                                "Select a gene from the dropdown above or directly filter the tables to explore the data.",
+                                html.Br(),
+                                "Results will update automatically as you type."
+                            ], className="app-controls-desc"),
                         ])
                     ])
                 ]),
@@ -428,22 +477,6 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
 #######################################################################
 # CALLBACKS
 #######################################################################
-# TEMP MOCK GENE VALS: will add logic to fetch & format these directly from master table(s)!
-mock_gene_options = [
-    {'label': 'BRCA1 - Breast cancer type 1', 'value': 'BRCA1'},
-    {'label': 'BRCA2 - Breast cancer type 2', 'value': 'BRCA2'},
-    {'label': 'TP53 - Tumor protein p53', 'value': 'TP53'},
-    {'label': 'EGFR - Epidermal growth factor receptor', 'value': 'EGFR'},
-    {'label': 'KRAS - KRAS proto-oncogene', 'value': 'KRAS'},
-    {'label': 'PTEN - Phosphatase and tensin homolog', 'value': 'PTEN'},
-    {'label': 'TNF - Tumor necrosis factor', 'value': 'TNF'},
-    {'label': 'APOE - Apolipoprotein E', 'value': 'APOE'},
-    {'label': 'APP - Amyloid beta precursor protein', 'value': 'APP'},
-    {'label': 'RBFOX2 (RNA Binding Fox-1 Homolog 2)', 'value': 'RBFOX2'},
-    {'label': 'TARDBP (TAR DNA Binding Protein)', 'value': 'TARDBP'},
-    {'label': 'FUS (Fused in Sarcoma)', 'value': 'FUS'}
-]
-
 ##############################################################################################
 # CALLBACK FOR QUERYING BY GENE IN CONTROL PANNEL 'Query' TAB: if no search is performed, we 
 # show the first five gene names, but otherwise filter by the top ten matches to the current 
@@ -455,12 +488,9 @@ mock_gene_options = [
 )
 def update_gene_options(search_value):
     if not search_value:
-        return mock_gene_options[:5]
+        return get_gene_options(limit=5)
     
-    # Filter options based on search_value (note: case insensitive)
-    filtered = [option for option in mock_gene_options 
-               if search_value.lower() in option['label'].lower()]
-    return filtered[:10]
+    return get_gene_options(search_term=search_value, limit=10)
 
 
 @app.callback(
@@ -471,6 +501,52 @@ def set_default_value(available_options):
     if len(available_options) > 0:
         return None 
     raise PreventUpdate
+
+######################################################################
+# SQLLITE MASTER TABLE PROCESSING CALLBACKS
+######################################################################
+@app.callback(
+    [dash.dependencies.Output('left_data_table', 'data'),
+     dash.dependencies.Output('left_data_table', 'page_count')],
+    [dash.dependencies.Input('left_data_table', 'page_current'),
+     dash.dependencies.Input('left_data_table', 'page_size'),
+     dash.dependencies.Input('left_data_table', 'sort_by'),
+     dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')]
+)
+def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene):
+    filters = parse_filter_query(filter_query, table_name='isoforms')
+    data, total_count = query_isoforms(
+        page=page_current if page_current is not None else 0,
+        page_size=page_size if page_size is not None else 10,
+        sort_by=sort_by,
+        filters=filters,
+        gene_filter=selected_gene
+    )
+    page_count = math.ceil(total_count / page_size) if page_size else 1
+    return data, page_count
+
+
+@app.callback(
+    [dash.dependencies.Output('right_data_table', 'data'),
+     dash.dependencies.Output('right_data_table', 'page_count')],
+    [dash.dependencies.Input('right_data_table', 'page_current'),
+     dash.dependencies.Input('right_data_table', 'page_size'),
+     dash.dependencies.Input('right_data_table', 'sort_by'),
+     dash.dependencies.Input('right_data_table', 'filter_query'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')]
+)
+def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene):
+    filters = parse_filter_query(filter_query, table_name='junctions')
+    data, total_count = query_junctions(
+        page=page_current if page_current is not None else 0,
+        page_size=page_size if page_size is not None else 10,
+        sort_by=sort_by,
+        filters=filters,
+        gene_filter=selected_gene
+    )
+    page_count = math.ceil(total_count / page_size) if page_size else 1
+    return data, page_count
 
 
 @app.callback(
