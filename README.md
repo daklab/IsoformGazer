@@ -3,6 +3,9 @@ Isoform Gazer is a comprehensive dashboard application for visualizing RNA splic
 
 Please note that all data in Isoform Gazer uses GENCODEv46 (GRCh38.p14). 
 
+## Data Availability
+To run IsoformGazer locally, all master table data is available through the v0.0.0 prerelease. You can either download the data directly through Github and ensure it is present in the ```src/isoformgazer/data``` directory, or run the provided helper script at ```src/isoformgazer/download_master_table_data.py``` to automatically download both master tables. 
+
 ## Installation 
 Installation is currently supported for Linux and MacOS. 
 
