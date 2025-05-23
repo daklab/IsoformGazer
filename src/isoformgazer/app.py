@@ -9,6 +9,7 @@ import dash
 from dash import html, dcc, dash_table
 import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
+from colorama import Fore, Style, init
 from data_utils import generate_mock_data, get_isoform_columns, get_junction_columns, parse_filter_query, query_isoforms, query_junctions, get_gene_options
 
 RANDOM_SEED = 18
@@ -37,7 +38,8 @@ def check_database_status():
     db_path = os.path.join(data_dir, "isoformgazer.db")
     
     if Path(db_path).exists():
-        print(f"Found existing database at {db_path} to use.")
+        print(f"Found existing master table database at {db_path} to use.")
+        print()
         return True
     
     return False
@@ -388,7 +390,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 options=[
                                     {'label': 'Blue', 'value': 'blue'},
                                     {'label': 'Green', 'value': 'green'},
-                                    {'label': 'Red', 'value': 'red'},
+                                    {'label': 'BLUE', 'value': 'BLUE'},
                                     {'label': 'Purple', 'value': 'purple'},
                                     {'label': 'Orange', 'value': 'orange'},
                                 ],
@@ -682,7 +684,50 @@ def toggle_tables(show_tables):
     return style, style
 
 
+###################################################################
+# INTRO BANNER 
+###################################################################
+def display_ascii_banner():
+    """
+    Displays ASCII art banner for Isoform Gazer!
+    """
+    init(autoreset=True)
+    
+    PURPLE = Fore.MAGENTA
+    GOLD = Fore.YELLOW
+    CYAN = Fore.CYAN
+    WHITE = Fore.WHITE
+    BLUE = Fore.BLUE
+    RESET = Style.RESET_ALL
+    
+    banner = f"""
+    {WHITE}    *       .  +     *           .    +    *        .        *    +         .   {GOLD}*{WHITE}    +       * *       .  +    
+    {WHITE}       .    *         +    .      *         .  +       *      .    {GOLD}*{WHITE}        +         .    *     .    *      
+    {CYAN}  +      *      .        *    +        .       *    +      .      *         {GOLD}*{WHITE}    .       ++      *      .    
+    {WHITE}    .        +    *         .     +  {CYAN}   *{WHITE}     .    *     +   {GOLD}        *{CYAN}      .         * .        +    *    
+    {GOLD} *     .          +    *       .    {CYAN}  *   *{WHITE}    *        .      +    *       {GOLD}*{CYAN}     +      .*     .          +  
+    {WHITE}       +    *        .      *    {CYAN}   *     *{WHITE}   .    *         +        .       {GOLD}*{CYAN}     *       *        .      *
+    {PURPLE}   ██╗███████╗ ██████╗ ███████╗ ██████╗ ██████╗ ███╗   ███╗    {GOLD}  ██████╗  █████╗ ███████╗███████╗██████╗ 
+    {PURPLE}   ██║██╔════╝██╔═══██╗██╔════╝██╔═══██╗██╔══██╗████╗ ████║    {GOLD} ██╔════╝ ██╔══██╗╚══███╔╝██╔════╝██╔══██╗
+    {PURPLE}   ██║███████╗██║   ██║█████╗  ██║   ██║██████╔╝██╔████╔██║    {GOLD} ██║  ███╗███████║  ███╔╝ █████╗  ██████╔╝
+    {PURPLE}   ██║╚════██║██║   ██║██╔══╝  ██║   ██║██╔══██╗██║╚██╔╝██║    {GOLD} ██║   ██║██╔══██║ ███╔╝  ██╔══╝  ██╔══██╗
+    {PURPLE}   ██║███████║╚██████╔╝██║     ╚██████╔╝██║  ██║██║ ╚═╝ ██║    {GOLD} ╚██████╔╝██║  ██║███████╗███████╗██║  ██║
+    {PURPLE}   ╚═╝╚══════╝ ╚═════╝ ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝    {GOLD}  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝
+    {BLUE}                                                                                                                         
+    {WHITE}       *    +         .    *      +         .    *        +     .   {GOLD}*{CYAN}      +         *       *    +         .  
+    {CYAN}  +        .    *     {GOLD}   +    .  {WHITE}    *         +     .        *           .       {GOLD}*{WHITE}    + +        .    *     
+    {WHITE}    .    *    {CYAN}   *{GOLD}    +    .         *      +    .        *    +        .       {GOLD}*{WHITE}     *.    *    {CYAN}  
+    {WHITE} *     +   {CYAN}     *   *{GOLD}    .  {WHITE}    *    +        .       *         +      .    *       {GOLD}*{WHITE}    .*     +   {WHITE}    *  
+    {CYAN}    .    {CYAN}    * *{WHITE}      +        .      *       +     .    *        +     {GOLD}*{WHITE}         .     *    .    {WHITE}   * * *{WHITE} +. 
+    {WHITE}  +    *    {WHITE}     *{WHITE}    .    +       *        .      +     *       .         {GOLD}*{CYAN}    +       *  +    *    {WHITE}     *{WHITE} .
+    {RESET}"""
+    
+    print(banner)
+    
+
 if __name__ == '__main__':
+    display_ascii_banner()
+
     database_exists = check_database_status()
     if not database_exists:
         print("Database initialization completed.")
