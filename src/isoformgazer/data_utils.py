@@ -247,16 +247,16 @@ def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, ge
     """
     conn = sqlite3.connect(db_path)
     
-    # Base query
     query = "SELECT * FROM isoforms"
     where_clauses = []
     params = []
     
-    # Add gene filter if provided for gene-level querying
+    # Filter by gene if provided - should search both gene_name and gene_id
     if gene_filter:
-        where_clauses.append("(gene_name LIKE ? OR gene_id LIKE ?)")
-        params.extend([f"%{gene_filter}%", f"%{gene_filter}%"])
+        where_clauses.append("(gene_name = ? OR gene_id = ?)")
+        params.extend([gene_filter, gene_filter])
     
+    # Apply any/all filtering conditions from user vals 
     if filters:
         for column, operator, value in filters:
             if operator == 'contains':
@@ -281,13 +281,11 @@ def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, ge
                 where_clauses.append(f"{column} >= ?")
                 params.append(value)
     
-    # Add WHERE clauses if needed
+    # Add WHERE if needed
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     
-    print(f"Final SQL query: {query}")
-    print(f"Query parameters with types: {[(p, type(p).__name__) for p in params]}")
-    
+    # Sorting
     if sort_by:
         order_clauses = []
         for col, direction in sort_by:
@@ -295,6 +293,7 @@ def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, ge
         if order_clauses:
             query += " ORDER BY " + ", ".join(order_clauses)
     
+    # Get total count for pagination info
     count_query = f"SELECT COUNT(*) FROM ({query})"
     total_count = pd.read_sql_query(count_query, conn, params=params).iloc[0, 0]
     query += f" LIMIT {page_size} OFFSET {page * page_size}"
@@ -325,12 +324,11 @@ def query_junctions(db_path, page=0, page_size=10, sort_by=None, filters=None, g
     where_clauses = []
     params = []
     
-    # Add gene filter if provided
     if gene_filter:
-        where_clauses.append("(gene_name LIKE ? OR gene_id LIKE ?)")
-        params.extend([f"%{gene_filter}%", f"%{gene_filter}%"])
+        where_clauses.append("(gene_name = ? OR gene_id = ?)")
+        params.extend([gene_filter, gene_filter])
     
-    # Add filter conditions - use the already type-converted values
+    # Apply any/all filtering conditions from user vals 
     if filters:
         for column, operator, value in filters:
             if operator == 'contains':
@@ -355,13 +353,11 @@ def query_junctions(db_path, page=0, page_size=10, sort_by=None, filters=None, g
                 where_clauses.append(f"{column} >= ?")
                 params.append(value)
     
-    # Add WHERE clause if needed
+    # Add WHERE if needed
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     
-    print(f"Final SQL query: {query}")
-    print(f"Query parameters with types: {[(p, type(p).__name__) for p in params]}")
-    
+    # Sorting
     if sort_by:
         order_clauses = []
         for col, direction in sort_by:
@@ -369,14 +365,14 @@ def query_junctions(db_path, page=0, page_size=10, sort_by=None, filters=None, g
         if order_clauses:
             query += " ORDER BY " + ", ".join(order_clauses)
     
+    # Get total count for pagination info
     count_query = f"SELECT COUNT(*) FROM ({query})"
     total_count = pd.read_sql_query(count_query, conn, params=params).iloc[0, 0]
-    
     query += f" LIMIT {page_size} OFFSET {page * page_size}"
     
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
-    
+
     return df.to_dict('records'), total_count
 
 
@@ -386,16 +382,33 @@ def get_gene_options(db_path, search_term=None, limit=10):
     
     if search_term:
         query = """
-        SELECT DISTINCT gene_name, gene_id FROM isoforms 
-        WHERE (gene_name LIKE ? OR gene_id LIKE ?)
+        SELECT DISTINCT 
+            CASE 
+                WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
+                ELSE gene_name 
+            END as gene_name, 
+            gene_id 
+        FROM isoforms 
+        WHERE gene_id IS NOT NULL 
+        AND (
+            (gene_name IS NOT NULL AND gene_name LIKE ?) 
+            OR gene_id LIKE ? 
+            OR (gene_name IS NULL AND 'Unknown' LIKE ?)
+        )
         ORDER BY gene_name
         LIMIT ?
         """
-        df = pd.read_sql_query(query, conn, params=[f"%{search_term}%", f"%{search_term}%", limit])
-
+        df = pd.read_sql_query(query, conn, params=[f"%{search_term}%", f"%{search_term}%", f"%{search_term}%", limit])
     else:
         query = """
-        SELECT DISTINCT gene_name, gene_id FROM isoforms 
+        SELECT DISTINCT 
+            CASE 
+                WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
+                ELSE gene_name 
+            END as gene_name, 
+            gene_id 
+        FROM isoforms 
+        WHERE gene_id IS NOT NULL
         ORDER BY gene_name
         LIMIT ?
         """
@@ -408,16 +421,11 @@ def get_gene_options(db_path, search_term=None, limit=10):
         gene_name = row['gene_name']
         gene_id = row['gene_id']
         
-        if gene_name is None or pd.isna(gene_name):
-            # If gene_name is None, use the gene_id as the value
-            options.append({
-                'label': f"Unknown ({gene_id})", 
-                'value': gene_id  
-            })
-        else:
+        # Skip any entries that are still somehow None/null?
+        if gene_name and gene_id and not pd.isna(gene_name) and not pd.isna(gene_id):
             options.append({
                 'label': f"{gene_name} ({gene_id})",
-                'value': gene_name
+                'value': gene_name  # Use the processed gene_name (including 'Unknown' for no name genes)
             })
     
     return options
@@ -443,8 +451,6 @@ def parse_filter_query(db_path, filter_query, table_name=None):
     """Parse filter query with type validation"""
     if not filter_query:
         return []
-    
-    print(f"Received filter query: {filter_query}")
     
     if table_name: 
         column_types = get_column_types(db_path, table_name)
@@ -510,7 +516,6 @@ def parse_filter_query(db_path, filter_query, table_name=None):
                     continue
             
             filters.append((col, operator, val))
-            print(f"Parsed filter: {col} {operator} {val} ({type(val).__name__})")
             
         except Exception as e:
             print(f"Error parsing filter expression '{expression}': {e}")

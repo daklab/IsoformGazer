@@ -123,11 +123,13 @@ def setup_local_database(force_rebuild=False):
             })
     
     print(f"✓ Processed all {row_count:,} rows from junction master table!")
+    # rename 'gene_symbol' to 'gene_name' for more consistency in junctions table (match isoforms table)
+    conn.execute("ALTER TABLE junctions RENAME COLUMN gene_symbol TO gene_name")
     print()
     
     print("Creating database indices...")
     with tqdm(desc="Creating junction-level index", total=2, unit="index") as idx_pbar:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_gene ON junctions(gene_symbol, gene_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_gene ON junctions(gene_name, gene_id)")
         idx_pbar.update(1)
         idx_pbar.set_description("Creating isoform-level index")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_isoforms_gene ON isoforms(gene_name, gene_id)")
@@ -319,6 +321,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         ),
                         html.Div(className='app-controls-desc', children='Select a gene identifier to query or type to search')
                         ]),
+                        html.Div(id='gene-filter-status'),
                         html.Div(className="app-controls-block", children=[
                             html.Div(className='app-controls-name', children='Query by Value'),
                             html.P("You can use the filter boxes below each master table column header to search and filter the data:"),
@@ -549,24 +552,48 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
 # search string. 
 ##############################################################################################
 @app.callback(
-    dash.dependencies.Output('gene-search-dropdown', 'options'),
-    [dash.dependencies.Input('gene-search-dropdown', 'search_value')]
+    [dash.dependencies.Output('gene-search-dropdown', 'options'),
+     dash.dependencies.Output('gene-search-dropdown', 'value')],
+    [dash.dependencies.Input('gene-search-dropdown', 'search_value')],
+    [dash.dependencies.State('gene-search-dropdown', 'value')]
 )
-def update_gene_options(search_value):
-    if not search_value:
-        return get_gene_options(db_path, limit=5)
+def update_gene_options(search_value, current_value):
+    """Update gene options while preserving current selection"""
     
-    return get_gene_options(db_path, search_term=search_value, limit=10)
+    if not search_value:
+        options = get_gene_options(db_path, limit=5)
+    else:
+        options = get_gene_options(db_path, search_term=search_value, limit=10)
+    
+    # Preserve current selection if it exists in the new options
+    option_values = [opt['value'] for opt in options]
+    
+    if current_value and current_value in option_values:
+        return options, current_value
+    elif current_value and current_value not in option_values:
+        if current_value:
+            current_options = get_gene_options(db_path, search_term=current_value, limit=1)
+            if current_options:
+                options = current_options + [opt for opt in options if opt['value'] != current_value]
+        return options, current_value
+    else:
+        return options, None
 
 
 @app.callback(
-    dash.dependencies.Output('gene-search-dropdown', 'value'),
-    [dash.dependencies.Input('gene-search-dropdown', 'options')]
+    dash.dependencies.Output('gene-filter-status', 'children'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value')]
 )
-def set_default_value(available_options):
-    if len(available_options) > 0:
-        return None 
-    raise PreventUpdate
+def update_gene_filter_status(selected_gene):
+    """Show current gene filter status"""
+    if selected_gene:
+        return html.Div([
+            html.Strong("Currently showing results for gene: "),
+            html.Span(selected_gene, style={'color': '#0C4142', 'fontWeight': 'bold'})
+        ], style={'padding': '10px', 'backgroundColor': '#e6f3ff', 'borderRadius': '4px', 'margin': '10px 0'})
+    else:
+        return html.Div()
+    
 
 ######################################################################
 # SQLLITE MASTER TABLE PROCESSING CALLBACKS
@@ -723,7 +750,7 @@ def display_ascii_banner():
     {RESET}"""
     
     print(banner)
-    
+
 
 if __name__ == '__main__':
     display_ascii_banner()
@@ -731,5 +758,5 @@ if __name__ == '__main__':
     database_exists = check_database_status()
     if not database_exists:
         print("Database initialization completed.")
-        
+
     app.run(debug=True, port=8050, use_reloader=False)
