@@ -1,5 +1,6 @@
 import os 
 import math
+from tqdm import tqdm
 import sqlite3
 import numpy as np
 import pandas as pd
@@ -8,7 +9,6 @@ import dash
 from dash import html, dcc, dash_table
 import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
-
 from data_utils import generate_mock_data, get_isoform_columns, get_junction_columns, parse_filter_query, query_isoforms, query_junctions, get_gene_options
 
 RANDOM_SEED = 18
@@ -28,6 +28,21 @@ atse_fig = mock_data['atse_fig']
 ###################################################################
 # SQLLITE DATABASE SETUP
 ###################################################################
+def check_database_status():
+    """
+    Checks and reports database status once at app startup. 
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(base_dir, "data")
+    db_path = os.path.join(data_dir, "isoformgazer.db")
+    
+    if Path(db_path).exists():
+        print(f"Found existing database at {db_path} to use.")
+        return True
+    
+    return False
+
+
 def setup_local_database(force_rebuild=False):
     """
     Sets up SQLite database from data files.
@@ -37,45 +52,90 @@ def setup_local_database(force_rebuild=False):
     os.makedirs(data_dir, exist_ok=True)
     
     db_path = os.path.join(data_dir, "isoformgazer.db")
-    print(f"The database path is {db_path}...")
     
     if Path(db_path).exists() and not force_rebuild:
-        print(f"Found existing database at {db_path} to use.")
         return db_path
     
+    print()
     print(f"Creating new database at {db_path}.")
+    print()
+
     if Path(db_path).exists():
         os.remove(db_path)
     
     conn = sqlite3.connect(db_path)
+
+    ########################################################
+    # Load isoform master table data
+    ########################################################
+    isoform_file = os.path.join(data_dir, 
+                                "mt_isoform_gazers_250514.tsv")
     
-    print("Loading isoform data...")
-    print(f"Isoform data at {os.path.join(data_dir, "mt_isoform_gazers_250514.tsv")}")
-    df_isoform = pd.read_csv(os.path.join(data_dir, "mt_isoform_gazers_250514.tsv"), sep='\t')
-    df_isoform.to_sql('isoforms', conn, if_exists='replace', index=False)
-    print(f"Loaded {len(df_isoform):,} isoform rows")
+    with tqdm(desc="Loading isoform master table data", unit=" rows") as pbar:
+        df_isoform = pd.read_csv(isoform_file, sep='\t')
+        pbar.update(len(df_isoform))
     
-    print("Loading junction data in chunks...")
+    with tqdm(desc="Writing isoform master table data to local database", unit="rows", total=len(df_isoform)) as pbar:
+        df_isoform.to_sql('isoforms', conn, if_exists='replace', index=False)
+        pbar.update(len(df_isoform))
+    
+    print(f"✓ Processed all {len(df_isoform):,} rows from isoform master table!")
+    print()
+
+    ########################################################
+    # Load junction master table data
+    ########################################################
+    junction_file = os.path.join(data_dir, 
+                                 "pseudobulk_final_broad_cell_type_20250514_072922.csv")
+    
+    # Need to count total lines (minus header) to estimate progress
+    with open(junction_file, 'r') as f:
+        total_lines = sum(1 for _ in f) - 1 
+    
     chunk_size = 100000
+    estimated_chunks = (total_lines // chunk_size) + 1
+    
+    print(f"Loading {total_lines:,} rows of junction data in groupings of {chunk_size:,} rows...")
     first_chunk = True
     row_count = 0
-    print(f"Junction data at {os.path.join(data_dir, 'pseudobulk_final_broad_cell_type_20250514_072922.csv')}")
-    for i, chunk in enumerate(pd.read_csv(os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250514_072922.csv"), 
-                                         chunksize=chunk_size)):
-        if first_chunk:
-            chunk.to_sql('junctions', conn, if_exists='replace', index=False)
-            first_chunk = False
-        else:
-            chunk.to_sql('junctions', conn, if_exists='append', index=False)
-        
-        row_count += len(chunk)
-        print(f"Processed chunk {i+1}, total rows: {row_count:,}")
     
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_gene ON junctions(gene_symbol, gene_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_isoforms_gene ON isoforms(gene_name, gene_id)")
+    with tqdm(desc="Writing junction master table data to local database", 
+              unit="chunk", 
+              total=estimated_chunks) as chunk_pbar:
+            
+        for i, chunk in enumerate(pd.read_csv(junction_file, 
+                                              chunksize=chunk_size,
+                                              low_memory=False)):
+            if first_chunk:
+                chunk.to_sql('junctions', conn, if_exists='replace', index=False)
+                first_chunk = False
+            else:
+                chunk.to_sql('junctions', conn, if_exists='append', index=False)
+            
+            row_count += len(chunk)
+            chunk_pbar.update(1)
+            
+            chunk_pbar.set_postfix({
+                'rows': f"{row_count:,}",
+                'chunk': f"{i+1}/{estimated_chunks}"
+            })
+    
+    print(f"✓ Processed all {row_count:,} rows from junction master table!")
+    print()
+    
+    print("Creating database indices...")
+    with tqdm(desc="Creating junction-level index", total=2, unit="index") as idx_pbar:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_gene ON junctions(gene_symbol, gene_id)")
+        idx_pbar.update(1)
+        idx_pbar.set_description("Creating isoform-level index")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_isoforms_gene ON isoforms(gene_name, gene_id)")
+        idx_pbar.update(1)
+    
     conn.commit()
     conn.close()
-    print("Database setup complete.")
+    
+    print("✓ Database setup complete!")
+    print() 
 
     return db_path
 
@@ -623,4 +683,8 @@ def toggle_tables(show_tables):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8050)
+    database_exists = check_database_status()
+    if not database_exists:
+        print("Database initialization completed.")
+        
+    app.run(debug=True, port=8050, use_reloader=False)

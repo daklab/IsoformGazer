@@ -242,7 +242,9 @@ def get_isoform_columns(db_path):
 
 
 def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
-    """Query isoform data with pagination, sorting and filtering"""
+    """
+    Query isoform data with pagination, sorting, and filtering.
+    """
     conn = sqlite3.connect(db_path)
     
     # Base query
@@ -250,12 +252,11 @@ def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, ge
     where_clauses = []
     params = []
     
-    # Add gene filter if provided
+    # Add gene filter if provided for gene-level querying
     if gene_filter:
         where_clauses.append("(gene_name LIKE ? OR gene_id LIKE ?)")
         params.extend([f"%{gene_filter}%", f"%{gene_filter}%"])
     
-    # Add filter conditions - use the already type-converted values
     if filters:
         for column, operator, value in filters:
             if operator == 'contains':
@@ -280,7 +281,7 @@ def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, ge
                 where_clauses.append(f"{column} >= ?")
                 params.append(value)
     
-    # Add WHERE clause if needed
+    # Add WHERE clauses if needed
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     
