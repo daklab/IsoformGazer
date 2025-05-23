@@ -100,6 +100,19 @@ def setup_local_database(force_rebuild=False):
     print(f"Loading {total_lines:,} rows of junction data in groupings of {chunk_size:,} rows...")
     first_chunk = True
     row_count = 0
+
+    column_order = [
+        'gene_symbol',
+        'gene_id',
+        'event_id', 
+        'junction_id',
+        'junction_id_index',
+        'atse_count',
+        'junction_count',
+        'cell_type',
+        'n_cells',
+        'psi'
+    ]
     
     with tqdm(desc="Writing junction master table data to local database", 
               unit="chunk", 
@@ -108,6 +121,13 @@ def setup_local_database(force_rebuild=False):
         for i, chunk in enumerate(pd.read_csv(junction_file, 
                                               chunksize=chunk_size,
                                               low_memory=False)):
+            available_columns = [col for col in column_order if col in chunk.columns]
+            remaining_columns = [col for col in chunk.columns if col not in column_order]
+            
+            final_column_order = available_columns + remaining_columns
+            chunk = chunk[final_column_order]
+
+
             if first_chunk:
                 chunk.to_sql('junctions', conn, if_exists='replace', index=False)
                 first_chunk = False
@@ -578,22 +598,6 @@ def update_gene_options(search_value, current_value):
         return options, current_value
     else:
         return options, None
-
-
-@app.callback(
-    dash.dependencies.Output('gene-filter-status', 'children'),
-    [dash.dependencies.Input('gene-search-dropdown', 'value')]
-)
-def update_gene_filter_status(selected_gene):
-    """Show current gene filter status"""
-    if selected_gene:
-        return html.Div([
-            html.Strong("Currently showing results for gene: "),
-            html.Span(selected_gene, style={'color': '#0C4142', 'fontWeight': 'bold'})
-        ], style={'padding': '10px', 'backgroundColor': '#e6f3ff', 'borderRadius': '4px', 'margin': '10px 0'})
-    else:
-        return html.Div()
-    
 
 ######################################################################
 # SQLLITE MASTER TABLE PROCESSING CALLBACKS
