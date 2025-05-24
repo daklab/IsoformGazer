@@ -230,24 +230,16 @@ def generate_mock_data(random_seed=18):
     }
 
 
-def get_isoform_columns(db_path):
-    conn = sqlite3.connect(db_path)
-    cols = pd.read_sql_query("PRAGMA table_info(isoforms)", conn)
-    conn.close()
-    
-    return [
-        {"name": col.replace('_', ' ').title(), "id": col} 
-        for col in cols['name']
-    ]
-
-
-def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
+def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
     """
     Query isoform data with pagination, sorting, and filtering.
     """
     conn = sqlite3.connect(db_path)
-    
-    query = "SELECT * FROM isoforms"
+
+    if table_name == 'isoforms': 
+        query = "SELECT * FROM isoforms"
+    elif table_name == 'junctions': 
+        query = "SELECT * FROM junctions"
     where_clauses = []
     params = []
     
@@ -304,78 +296,6 @@ def query_isoforms(db_path, page=0, page_size=10, sort_by=None, filters=None, ge
     return df.to_dict('records'), total_count
 
 
-def get_junction_columns(db_path):
-    conn = sqlite3.connect(db_path)
-    cols = pd.read_sql_query("PRAGMA table_info(junctions)", conn)
-    conn.close()
-    
-    return [
-        {"name": col.replace('_', ' ').title(), "id": col} 
-        for col in cols['name']
-    ]
-    
-
-def query_junctions(db_path, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
-    """Query junction data with pagination, sorting and filtering"""
-    conn = sqlite3.connect(db_path)
-    
-    # Base query
-    query = "SELECT * FROM junctions"
-    where_clauses = []
-    params = []
-    
-    if gene_filter:
-        where_clauses.append("(gene_name = ? OR gene_id = ?)")
-        params.extend([gene_filter, gene_filter])
-    
-    # Apply any/all filtering conditions from user vals 
-    if filters:
-        for column, operator, value in filters:
-            if operator == 'contains':
-                where_clauses.append(f"LOWER({column}) LIKE LOWER(?)")
-                params.append(f"%{value}%")
-            elif operator == 'eq':
-                where_clauses.append(f"{column} = ?")
-                params.append(value)
-            elif operator == 'ne':
-                where_clauses.append(f"{column} != ?")
-                params.append(value)
-            elif operator == 'lt':
-                where_clauses.append(f"{column} < ?")
-                params.append(value)
-            elif operator == 'gt':
-                where_clauses.append(f"{column} > ?")
-                params.append(value)
-            elif operator == 'le':
-                where_clauses.append(f"{column} <= ?")
-                params.append(value)
-            elif operator == 'ge':
-                where_clauses.append(f"{column} >= ?")
-                params.append(value)
-    
-    # Add WHERE if needed
-    if where_clauses:
-        query += " WHERE " + " AND ".join(where_clauses)
-    
-    # Sorting
-    if sort_by:
-        order_clauses = []
-        for col, direction in sort_by:
-            order_clauses.append(f"{col} {'ASC' if direction == 'asc' else 'DESC'}")
-        if order_clauses:
-            query += " ORDER BY " + ", ".join(order_clauses)
-    
-    # Get total count for pagination info
-    count_query = f"SELECT COUNT(*) FROM ({query})"
-    total_count = pd.read_sql_query(count_query, conn, params=params).iloc[0, 0]
-    query += f" LIMIT {page_size} OFFSET {page * page_size}"
-    
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-
-    return df.to_dict('records'), total_count
-
-
 def get_gene_options(db_path, search_term=None, limit=10):
     """Get gene options for dropdown from database"""
     conn = sqlite3.connect(db_path)
@@ -429,6 +349,17 @@ def get_gene_options(db_path, search_term=None, limit=10):
             })
     
     return options
+
+
+def get_master_table_columns(db_path, table_name):
+    conn = sqlite3.connect(db_path)
+    cols = pd.read_sql_query(f"PRAGMA table_info({table_name})", conn)
+    conn.close()
+    
+    return [
+        {"name": col.replace('_', ' ').title(), "id": col} 
+        for col in cols['name']
+    ]
 
 
 def get_column_types(db_path, table_name):

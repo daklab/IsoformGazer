@@ -10,7 +10,7 @@ from dash import html, dcc, dash_table
 import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
-from data_utils import generate_mock_data, get_isoform_columns, get_junction_columns, parse_filter_query, query_isoforms, query_junctions, get_gene_options
+from data_utils import generate_mock_data, get_master_table_columns, parse_filter_query, query_master_table, get_gene_options
 
 RANDOM_SEED = 18
 np.random.seed(RANDOM_SEED)
@@ -204,7 +204,7 @@ header = html.Div(className='app-header', children=[
 ###################################################################
 left_data_table = dash_table.DataTable(
     id='left_data_table',
-    columns=get_isoform_columns(db_path),
+    columns=get_master_table_columns(db_path, table_name='isoforms'),
     data=[],
     editable=False,
     filter_action="custom",
@@ -253,7 +253,7 @@ left_data_table = dash_table.DataTable(
 ###################################################################
 right_data_table = dash_table.DataTable(
     id='right_data_table',
-    columns=get_junction_columns(db_path),
+    columns=get_master_table_columns(db_path, table_name='junctions'),
     data=[],
     editable=False,
     filter_action="custom",
@@ -346,7 +346,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             html.Div(className='app-controls-name', children='Query by Value'),
                             html.P("You can use the filter boxes below each master table column header to search and filter the data:"),
                             html.Ul([
-                                html.Li([html.Strong("Text columns: "), "Simply type text to find matching rows"]),
+                                html.Li([html.Strong("Text columns: "), "Simply type text to find rows with exact matches."]),
                                 html.Li([html.Strong("Numeric columns: "), "Use operators for precise filtering:"]),
                                 html.Ul([
                                     html.Li("Type a number (e.g., '4') to show only entries with exact matches."),
@@ -613,8 +613,9 @@ def update_gene_options(search_value, current_value):
 )
 def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene):
     filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
-    data, total_count = query_isoforms(
+    data, total_count = query_master_table(
         db_path,
+        table_name='isoforms',
         page=page_current if page_current is not None else 0,
         page_size=page_size if page_size is not None else 10,
         sort_by=sort_by,
@@ -636,8 +637,9 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
 )
 def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene):
     filters = parse_filter_query(db_path, filter_query, table_name='junctions')
-    data, total_count = query_junctions(
+    data, total_count = query_master_table(
         db_path,
+        table_name="junctions",
         page=page_current if page_current is not None else 0,
         page_size=page_size if page_size is not None else 10,
         sort_by=sort_by,
@@ -738,13 +740,12 @@ def display_ascii_banner():
     {WHITE}    .        +    *         .     +  {CYAN}   *{WHITE}     .    *     +   {GOLD}        *{CYAN}      .         * .        +    *    
     {GOLD} *     .          +    *       .    {CYAN}  *   *{WHITE}    *        .      +    *       {GOLD}*{CYAN}     +      .*     .          +  
     {WHITE}       +    *        .      *    {CYAN}   *     *{WHITE}   .    *         +        .       {GOLD}*{CYAN}     *       *        .      *
-    {PURPLE}   ██╗███████╗ ██████╗ ███████╗ ██████╗ ██████╗ ███╗   ███╗    {GOLD}  ██████╗  █████╗ ███████╗███████╗██████╗ 
-    {PURPLE}   ██║██╔════╝██╔═══██╗██╔════╝██╔═══██╗██╔══██╗████╗ ████║    {GOLD} ██╔════╝ ██╔══██╗╚══███╔╝██╔════╝██╔══██╗
-    {PURPLE}   ██║███████╗██║   ██║█████╗  ██║   ██║██████╔╝██╔████╔██║    {GOLD} ██║  ███╗███████║  ███╔╝ █████╗  ██████╔╝
-    {PURPLE}   ██║╚════██║██║   ██║██╔══╝  ██║   ██║██╔══██╗██║╚██╔╝██║    {GOLD} ██║   ██║██╔══██║ ███╔╝  ██╔══╝  ██╔══██╗
-    {PURPLE}   ██║███████║╚██████╔╝██║     ╚██████╔╝██║  ██║██║ ╚═╝ ██║    {GOLD} ╚██████╔╝██║  ██║███████╗███████╗██║  ██║
-    {PURPLE}   ╚═╝╚══════╝ ╚═════╝ ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝    {GOLD}  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝
-    {BLUE}                                                                                                                         
+    {PURPLE}   ██╗███████╗ ██████╗ ███████╗ ██████╗ ██████╗ ███╗   ███╗  -*{GOLD}  ██████╗  █████╗ ███████╗███████╗██████╗ 
+    {PURPLE} * ██║██╔════╝██╔═══██╗██╔════╝██╔═══██╗██╔══██╗████╗ ████║    {GOLD} ██╔════╝ ██╔══██╗╚══███╔╝██╔════╝██╔══██╗*+
+    {PURPLE}-  ██║███████╗██║   ██║█████╗  ██║   ██║██████╔╝██╔████╔██║ *  {GOLD} ██║  ███╗███████║  ███╔╝ █████╗  ██████╔╝  .
+    {PURPLE}  .██║╚════██║██║   ██║██╔══╝  ██║   ██║██╔══██╗██║╚██╔╝██║ ** {GOLD} ██║   ██║██╔══██║ ███╔╝  ██╔══╝  ██╔══██╗
+    {PURPLE} * ██║███████║╚██████╔╝██║ *   ╚██████╔╝██║  ██║██║ ╚═╝ ██║  * {GOLD} ╚██████╔╝██║  ██║███████╗███████╗██║  ██║.    *-
+    {PURPLE}   ╚═╝╚══════╝ ╚═════╝ ╚═╝     -╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝+   {GOLD}  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝                                                                                                
     {WHITE}       *    +         .    *      +         .    *        +     .   {GOLD}*{CYAN}      +         *       *    +         .  
     {CYAN}  +        .    *     {GOLD}   +    .  {WHITE}    *         +     .        *           .       {GOLD}*{WHITE}    + +        .    *     
     {WHITE}    .    *    {CYAN}   *{GOLD}    +    .         *      +    .        *    +        .       {GOLD}*{WHITE}     *.    *    {CYAN}  
