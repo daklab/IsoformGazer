@@ -163,7 +163,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
     clustergram.update_layout(
         title={
-            'text': f"ATSE-level Splicing Analysis: {gene_name} ({psi_matrix.shape[1]} junctions)",
+            'text': f"Splicing PSI Clustermap for {gene_name} ({psi_matrix.shape[1]} junctions)",
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 14 if hide_junction_labels else 16}  
