@@ -2,8 +2,11 @@ import os
 import math
 from tqdm import tqdm
 import sqlite3
+import scipy
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 from pathlib import Path
 import dash
 from dash import html, dcc, dash_table
@@ -11,6 +14,7 @@ import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
 from data_utils import generate_mock_data, get_master_table_columns, parse_filter_query, query_master_table, get_gene_options
+from junction_utils import create_summary_clustergram, create_gene_clustergram, create_empty_clustergram_message
 
 RANDOM_SEED = 18
 np.random.seed(RANDOM_SEED)
@@ -651,11 +655,49 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
 
 
 @app.callback(
-    [
-        dash.dependencies.Output('heatmap1', 'figure'),
-        dash.dependencies.Output('heatmap2', 'figure')
-    ],
-    [dash.dependencies.Input('colorscale-dropdown', 'value')]
+    dash.dependencies.Output('heatmap2', 'figure'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('colorscale-dropdown', 'value'),
+     dash.dependencies.Input('show-table-radio', 'value')]
+)
+def update_junction_clustergram(selected_gene, colorscale, show_tables):
+    """Update junction visualization based on gene selection"""
+    if show_tables == 'show':
+        clustermap_height = 300
+    else:
+        clustermap_height = 650 
+    
+    if selected_gene:
+        try:
+            fig = create_gene_clustergram(db_path, selected_gene, height=clustermap_height, colorscale=colorscale, show_tables=show_tables)
+            return fig
+        except Exception as e:
+            print(f"Error creating gene-specific clustermap: {e}")
+            return create_empty_clustergram_message(f"Error loading data for {selected_gene}")
+    else:
+        try:
+            fig = create_summary_clustergram(db_path, height=clustermap_height, colorscale=colorscale, show_tables=show_tables)
+            return fig
+        except Exception as e:
+            print(f"Error creating summary clustermap: {e}")
+            return {
+                'data': [go.Heatmap(z=data2, colorscale=colorscale)],
+                'layout': go.Layout(
+                    margin=dict(l=40, 
+                                r=40, 
+                                t=40, 
+                                b=40),
+                    title={'text': 'Junction Usage by Cell Type (Mock Data)', 
+                           'font': {'size': 14}},
+                    autosize=True,
+                    height=clustermap_height
+                )
+            }
+        
+
+@app.callback(
+    dash.dependencies.Output('heatmap1', 'figure'),
+    dash.dependencies.Input('colorscale-dropdown', 'value')
 )
 def update_colorscale(colorscale):
     heatmap1_fig = {
@@ -667,16 +709,7 @@ def update_colorscale(colorscale):
         )
     }
     
-    heatmap2_fig = {
-        'data': [go.Heatmap(z=data2, colorscale=colorscale)],
-        'layout': go.Layout(
-            margin=dict(l=40, r=40, t=40, b=40),
-            title={'text': 'Junction Usage by Cell Type', 'font': {'size': 14}},
-            autosize=True
-        )
-    }
-    
-    return heatmap1_fig, heatmap2_fig
+    return heatmap1_fig
 
 
 @app.callback(
@@ -704,17 +737,29 @@ def update_barplots(height, color):
 @app.callback(
     [
         dash.dependencies.Output('table1-container', 'style'),
-        dash.dependencies.Output('table2-container', 'style')
+        dash.dependencies.Output('table2-container', 'style'),
+        dash.dependencies.Output('heatmap1', 'style'),
+        dash.dependencies.Output('heatmap2', 'style')
     ],
     [dash.dependencies.Input('show-table-radio', 'value')]
 )
 def toggle_tables(show_tables):
     if show_tables == 'show':
-        style = {'display': 'block', 'height': '35%', 'min-height': '0', 'overflow': 'auto'}
+        table_style = {
+            'display': 'block', 
+            'height': '40vh',  
+            'min-height': '250px', 
+            'overflow': 'auto',
+            'flex-shrink': 0
+        }
+        heatmap1_style = {'height': '30vh', 'width': '100%'} 
+        heatmap2_style = {'height': '35vh', 'width': '100%'} 
     else:
-        style = {'display': 'none', 'height': '0'}
+        table_style = {'display': 'none', 'height': '0'}
+        heatmap1_style = {'height': '45vh', 'width': '100%'}  
+        heatmap2_style = {'height': '60vh', 'width': '100%'}
     
-    return style, style
+    return table_style, table_style, heatmap1_style, heatmap2_style
 
 
 ###################################################################
