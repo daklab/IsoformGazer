@@ -19,7 +19,9 @@ dependencies = [
     "seaborn (>=0.13.2,<0.14.0)",
     "matplotlib (>=3.10.3,<4.0.0)",
     "scipy (>=1.15.3,<2.0.0)",
-    "dash-bio (>=1.0.2,<2.0.0)"
+    "dash-bio (>=1.0.2,<2.0.0)",
+    "gffutils (>=0.13,<0.14)",
+    "dash-daq (>=0.6.0,<0.7.0)"
 ]
 
 [tool.poetry]

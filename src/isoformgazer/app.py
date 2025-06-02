@@ -10,11 +10,18 @@ matplotlib.use('Agg')
 from pathlib import Path
 import dash
 from dash import html, dcc, dash_table
+import dash_daq as daq
 import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
 from data_utils import generate_mock_data, get_master_table_columns, parse_filter_query, query_master_table, get_gene_options
-from junction_utils import create_summary_clustergram, create_gene_clustergram, create_empty_clustergram_message
+from junction_utils import create_summary_clustergram, create_gene_clustergram
+# from junction_utils import load_atse_data, create_fast_atse_visualization, get_gene_id_from_junction_db, create_empty_atse_message
+from isoform_utils import (
+    load_psl_data, load_tpm_data, process_transcript_structure,
+    create_transcript_structure_plot, create_isoform_expression_heatmap,
+    create_empty_clustergram_message
+)
 
 RANDOM_SEED = 18
 np.random.seed(RANDOM_SEED)
@@ -167,6 +174,94 @@ def setup_local_database(force_rebuild=False):
 
     return db_path
 
+
+###################################################################
+# ISOFORM DATA SETUP
+###################################################################
+def setup_isoform_data():
+    """
+    Load both TPM and ratio isoform data
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    psl_file = os.path.join(base_dir, "data", "all_samples_sp_collapse_all_chr_no_treatment_full.psl")
+    psl_data = pd.DataFrame()
+    if os.path.exists(psl_file):
+        psl_data = load_psl_data(psl_file)
+        print(f"Loaded PSL data with {len(psl_data)} records")
+    else:
+        print(f"PSL file not found at {psl_file}")
+    
+    tpm_file = os.path.join(base_dir, "data", "all_tpm.tsv")
+    tpm_data = pd.DataFrame()
+    if os.path.exists(tpm_file):
+        tpm_data = load_tpm_data(tpm_file)
+        print(f"Loaded TPM data with shape {tpm_data.shape}")
+    else:
+        print(f"TPM file not found at {tpm_file}")
+    
+    ratio_file = os.path.join(base_dir, "data", "all_quant_ratio.tsv")
+    ratio_data = pd.DataFrame()
+    if os.path.exists(ratio_file):
+        ratio_data = load_tpm_data(ratio_file)
+        print(f"Loaded ratio data with shape {ratio_data.shape}")
+    else:
+        print(f"Ratio file not found at {ratio_file}")
+    
+    return psl_data, tpm_data, ratio_data
+
+psl_data, tpm_data, ratio_data = setup_isoform_data()
+
+###################################################################
+# ATSE DATA SETUP
+###################################################################
+#def setup_atse_data():
+#    """Load ATSE data with better debugging"""
+#    base_dir = os.path.dirname(os.path.abspath(__file__))
+#    atse_file = os.path.join(base_dir, "data", "TMS_atse_file_unanno_also_2025-05-11_06-23-05.tsv")
+    
+#    print(f"Looking for ATSE file at: {atse_file}")
+#    print(f"File exists: {os.path.exists(atse_file)}")
+    
+#    if os.path.exists(atse_file):
+#        try:
+            # FIX: Specify dtype for gene_name to ensure it's read as string
+#            atse_df = pd.read_csv(atse_file, sep='\t', dtype={'gene_name': str})
+#            print(f"Loaded ATSE data with {len(atse_df)} records")
+            
+            # Ensure gene_name column is string type
+#            atse_df['gene_name'] = atse_df['gene_name'].astype(str)
+            
+            # Debug: Check data types
+#            print(f"gene_name column dtype: {atse_df['gene_name'].dtype}")
+            
+            # Debug: Check what gene names we have
+#            unique_genes = atse_df['gene_name'].unique()
+#            print(f"Number of unique genes in ATSE data: {len(unique_genes)}")
+#            print(f"First 10 genes: {list(unique_genes[:10])}")
+            
+            # Check for common test genes
+#            test_genes = ['RBFOX2', 'A1BG', 'TSPAN6']
+#            for gene in test_genes:
+#                count = len(atse_df[atse_df['gene_name'] == gene])
+#                print(f"Gene '{gene}' has {count} ATSE records")
+            
+#            return atse_df
+#        except Exception as e:
+#            print(f"Error loading ATSE file: {e}")
+#            return pd.DataFrame()
+#    else:
+        # List files in the data directory to help debug
+#        data_dir = os.path.join(base_dir, "data")
+#        if os.path.exists(data_dir):
+#            files = os.listdir(data_dir)
+#            print(f"Files in data directory: {files}")
+#        else:
+#            print(f"Data directory doesn't exist: {data_dir}")
+#        return pd.DataFrame()
+
+
+#atse_data = setup_atse_data()
 
 ###################################################################
 # APPLICATION SETUP
@@ -445,6 +540,20 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         #####################################
                         html.H3('Heatmap', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
+                            html.Div([
+                                html.Div('Isoform Heatmap Unit', className='app-controls-name', 
+                                        style={'display': 'inline-block', 'marginRight': '15px'}),
+                                daq.ToggleSwitch(
+                                    id='isoform-data-type-switch',
+                                    value=False,  # False = TPM, True = Ratio
+                                    label={'label': 'TPM / Ratio', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='right',
+                                    style={'display': 'inline-block'}
+                                )
+                            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+                            html.Div(className='app-controls-desc', children='Toggle whether isoform heatmap shows TPM values or ratio values across all tissues')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Colorscale'),
                             dcc.Dropdown(
                                 id='colorscale-dropdown',
@@ -457,20 +566,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 value='RdBu_r'
                             ),
                             html.Div(className='app-controls-desc', children='Choose the color theme of the heatmaps')
-                        ]),
-                        html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Heatmap Height'),
-                            dcc.Slider(
-                                id='heatmap-height-slider',
-                                className='control-slider',
-                                min=200,
-                                max=500,
-                                step=50,
-                                value=300,
-                                marks={str(i): str(i) for i in range(200, 501, 100)}
-                            ),
-                            html.Div(className='app-controls-desc', children='Adjust the height of the heatmap')
-                        ]),
+                        ])
                     ])
                 ])
             ])
@@ -514,7 +610,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                         autosize=True
                                     )
                                 },
-                                config={'responsive': True},
+                                config={'responsive': True, 'displayModeBar': True},
                                 style={'height': '100%', 'width': '100%'}
                             )
                         ]),
@@ -695,43 +791,21 @@ def update_junction_clustergram(selected_gene, colorscale, show_tables):
             }
         
 
-@app.callback(
-    dash.dependencies.Output('heatmap1', 'figure'),
-    dash.dependencies.Input('colorscale-dropdown', 'value')
-)
-def update_colorscale(colorscale):
-    heatmap1_fig = {
-        'data': [go.Heatmap(z=data1, colorscale=colorscale)],
-        'layout': go.Layout(
-            margin=dict(l=40, r=40, t=40, b=40),
-            title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}},
-            autosize=True
-        )
-    }
+#@app.callback(
+#    dash.dependencies.Output('heatmap1', 'figure'),
+#    dash.dependencies.Input('colorscale-dropdown', 'value')
+#)
+#def update_colorscale(colorscale):
+#    heatmap1_fig = {
+#        'data': [go.Heatmap(z=data1, colorscale=colorscale)],
+#        'layout': go.Layout(
+#            margin=dict(l=40, r=40, t=40, b=40),
+#            title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}},
+#            autosize=True
+#        )
+#    }
     
-    return heatmap1_fig
-
-
-@app.callback(
-    dash.dependencies.Output('barplot1', 'figure'),
-    [
-        dash.dependencies.Input('bar-height-slider', 'value'),
-        dash.dependencies.Input('bar-color-dropdown', 'value')
-    ]
-)
-def update_barplots(height, color):
-    barplot1_fig = {
-        'data': [go.Bar(x=list(range(10)), y=data1.sum(axis=1), marker_color=color)],
-        'layout': go.Layout(
-            margin=dict(l=40, r=40, t=20, b=20),
-            title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}},
-            xaxis={'title': {'text': 'Tissue', 'font': {'size': 12}}, 'title_standoff': 40, 'ticksuffix': ' '},
-            yaxis={'title': {'text': 'Count', 'font': {'size': 12}}},
-            autosize=True
-        )
-    }
-    
-    return barplot1_fig
+#    return heatmap1_fig
 
 
 @app.callback(
@@ -761,6 +835,174 @@ def toggle_tables(show_tables):
     
     return table_style, table_style, heatmap1_style, heatmap2_style
 
+
+@app.callback(
+    dash.dependencies.Output('heatmap1', 'figure'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('colorscale-dropdown', 'value'),
+     dash.dependencies.Input('isoform-data-type-switch', 'value'),
+     dash.dependencies.Input('show-table-radio', 'value')]
+)
+def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_tables):
+    """Update isoform expression heatmap with forced resize handling"""
+    
+    # Select data source based on toggle switch
+    if use_ratio_data: 
+        current_data = ratio_data 
+        data_type = "Ratio"
+    else: 
+        current_data = tpm_data 
+        data_type = "TPM"
+
+    if show_tables == 'show':
+        heatmap_height = 350
+    else:
+        heatmap_height = 700 
+    
+    if not selected_gene or current_data.empty:
+        return {
+            'data': [go.Heatmap(z=data1, colorscale=colorscale)],
+            'layout': go.Layout(
+                margin=dict(l=40, r=40, t=40, b=40),
+                title={'text': f'Isoform Expression by Tissue ({data_type})', 'font': {'size': 14}},
+                autosize=True,
+                height=heatmap_height,
+                paper_bgcolor='white',
+                plot_bgcolor='white'
+            )
+        }
+    
+    try:
+        fig = create_isoform_expression_heatmap(
+            tpm_data=current_data,
+            gene_name=selected_gene,
+            height=heatmap_height,
+            colorscale=colorscale,
+            data_type=data_type,
+            show_tables=show_tables
+        )
+        
+        fig.update_layout(
+            autosize=True,
+            height=heatmap_height
+        )
+        
+        return fig
+    except Exception as e:
+        print(f"Error creating isoform heatmap: {e}")
+        return create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
+
+
+@app.callback(
+    dash.dependencies.Output('heatmap1', 'className'),
+    [dash.dependencies.Input('show-table-radio', 'value')]
+)
+def update_heatmap_container_class(show_tables):
+    """Add CSS class to manage container behavior"""
+    if show_tables == 'show':
+        return 'with-tables'
+    else:
+        return ''
+
+
+app.clientside_callback(
+    """
+    function(show_tables) {
+        setTimeout(function() {
+            var graphs = document.querySelectorAll('.js-plotly-plot');
+            graphs.forEach(function(graph) {
+                if (graph && graph.layout) {
+                    Plotly.Plots.resize(graph);
+                }
+            });
+        }, 100);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    dash.dependencies.Output('heatmap1', 'style'),
+    [dash.dependencies.Input('show-table-radio', 'value')]
+)
+
+
+@app.callback(
+    dash.dependencies.Output('barplot1', 'figure'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('bar-height-slider', 'value'),
+     dash.dependencies.Input('bar-color-dropdown', 'value')]
+)
+def update_transcript_structure(selected_gene, height_setting, color):
+    """Update transcript structure plot based on gene selection"""
+    
+    if not selected_gene or psl_data.empty:
+        # Return mock barplot if no gene selected or no data
+        return {
+            'data': [go.Bar(x=list(range(10)), y=data1.sum(axis=1), marker_color=color)],
+            'layout': go.Layout(
+                margin=dict(l=40, r=40, t=20, b=20),
+                title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}},
+                xaxis={'title': {'text': 'Tissue', 'font': {'size': 12}}, 'title_standoff': 40, 'ticksuffix': ' '},
+                yaxis={'title': {'text': 'Count', 'font': {'size': 12}}},
+                autosize=True
+            )
+        }
+    
+    try:
+        transcript_data = process_transcript_structure(psl_data, selected_gene, db_path)
+        
+        fig = create_transcript_structure_plot(
+            transcript_data=transcript_data,
+            gene_name=selected_gene,
+            height=height_setting * 2  
+        )
+        return fig
+    except Exception as e:
+        print(f"Error creating transcript structure: {e}")
+        return create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
+
+
+#@app.callback(
+#    dash.dependencies.Output('atse-map', 'figure'),
+#    [dash.dependencies.Input('gene-search-dropdown', 'value')]
+#)
+#def update_atse_visualization(selected_gene):
+#    """Update ATSE splice junction visualization based on gene selection"""
+#    
+#    print(f"ATSE callback called with gene: {selected_gene}")
+#    print(f"ATSE data empty: {atse_data.empty}")
+#    print(f"ATSE data shape: {atse_data.shape if not atse_data.empty else 'N/A'}")
+    
+#    if not selected_gene:
+#        return create_empty_atse_message("Select a gene to view ATSE splice junctions")
+    
+#    if atse_data.empty:
+#        return create_empty_atse_message("ATSE data not loaded - check file path")
+    
+    # Get gene_id for the selected gene_name
+#    gene_id = get_gene_id_from_junction_db(db_path, selected_gene)
+    
+#    if gene_id is None:
+#        return create_empty_atse_message(f"No gene_id found for gene: {selected_gene}")
+    
+    # Check if gene_id exists in ATSE data?
+#    gene_count = len(atse_data[atse_data['gene_id'] == gene_id])
+#    print(f"Found {gene_count} ATSE records for gene_id '{gene_id}' (gene_name: '{selected_gene}')")
+    
+#    if gene_count == 0:
+#        return create_empty_atse_message(f"No ATSE data found for gene_id: {gene_id} (gene: {selected_gene})")
+    
+#    try:
+#        fig = create_fast_atse_visualization(
+#            db_path=db_path,
+#            atse_df=atse_data,
+#            gene_name=selected_gene,
+#            height=400
+#        )
+#        return fig
+#    except Exception as e:
+#        print(f"Error creating ATSE visualization: {e}")
+#        import traceback
+#        traceback.print_exc()
+#        return create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
 
 ###################################################################
 # INTRO BANNER 
