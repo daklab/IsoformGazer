@@ -289,11 +289,11 @@ app.index_string = '''
 '''
 
 ###################################################################
-# APPLICATION TITLE (ISOFORM GAZERS)
+# APPLICATION TITLE (ISOFORM GAZER)
 ###################################################################
 header = html.Div(className='app-header', children=[
     html.Div('daklab ---', style={'fontWeight': 'bold'}),
-    html.Div('Isoform Gazers', className='app-header--title')
+    html.Div('Isoform Gazer', className='app-header--title')
 ])
 
 ###################################################################
@@ -469,21 +469,21 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         #####################################
                         html.H3('General', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Overview'),
+                            html.Div(className='app-controls-name', children='Plots to Show'),
                             dcc.Dropdown(
                                 id='overview-dropdown',
                                 className='app-controls-block-dropdown',
                                 options=[
-                                    {'label': 'Heatmap', 'value': 'heatmap'},
-                                    {'label': 'Barplot', 'value': 'barplot'},
-                                    {'label': 'Both', 'value': 'both'},
+                                    {'label': 'Event-level', 'value': 'event-level'},
+                                    {'label': 'Heatmaps', 'value': 'heatmap'},
+                                    {'label': 'Both', 'value': 'both'}
                                 ],
                                 value='both'
                             ),
                             html.Div(className='app-controls-desc', children='Select which visualizations to show')
                         ]),
                         html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Display Data Table'),
+                            html.Div(className='app-controls-name', children='Display Master Tables'),
                             dcc.RadioItems(
                                 id='show-table-radio',
                                 className='alignment-radio',
@@ -501,25 +501,9 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         #####################################
                         # Barplot Section
                         #####################################
-                        html.H3('Barplot', className='alignment-settings-section'),
+                        html.H3('Isoform Transcripts Plot', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Bar Color'),
-                            dcc.Dropdown(
-                                id='bar-color-dropdown',
-                                className='app-controls-block-dropdown',
-                                options=[
-                                    {'label': 'Blue', 'value': 'blue'},
-                                    {'label': 'Green', 'value': 'green'},
-                                    {'label': 'BLUE', 'value': 'BLUE'},
-                                    {'label': 'Purple', 'value': 'purple'},
-                                    {'label': 'Orange', 'value': 'orange'},
-                                ],
-                                value='blue'
-                            ),
-                            html.Div(className='app-controls-desc', children='Select the color for the barplots')
-                        ]),
-                        html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Bar Height'),
+                            html.Div(className='app-controls-name', children='Plot Height'),
                             dcc.Slider(
                                 id='bar-height-slider',
                                 className='control-slider',
@@ -529,7 +513,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 value=150,
                                 marks={str(i): str(i) for i in range(100, 301, 50)}
                             ),
-                            html.Div(className='app-controls-desc', children='Adjust the height of the barplots')
+                            html.Div(className='app-controls-desc', children='Adjust the height of the isoform-level event visualization')
                         ]),
                         html.Hr(),
 
@@ -550,6 +534,34 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 )
                             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
                             html.Div(className='app-controls-desc', children='Toggle whether isoform heatmap shows TPM values or ratio values across all tissues')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div([
+                                html.Div('Average by Tissue', className='app-controls-name', 
+                                        style={'display': 'inline-block', 'marginRight': '15px'}),
+                                daq.ToggleSwitch(
+                                    id='collapse-tissue-toggle',
+                                    value=True,  # Default to average by tissue (a lot cleaner looking for most genes)
+                                    label={'label': 'Show All / Collapse', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='right',
+                                    style={'display': 'inline-block'}
+                                )
+                            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+                            html.Div(className='app-controls-desc', children='Toggle whether heatmap shows average values across experiments grouped by tissue')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div([
+                                html.Div('Show Tissue Labels', className='app-controls-name', 
+                                        style={'display': 'inline-block', 'marginRight': '15px'}),
+                                daq.ToggleSwitch(
+                                    id='show-labels-toggle',
+                                    value=True,
+                                    label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='right',
+                                    style={'display': 'inline-block'}
+                                )
+                            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+                            html.Div(className='app-controls-desc', children='Toggle tissue name visibility on isoform heatmap when master tables are hidden')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Colorscale'),
@@ -748,6 +760,9 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
     return data, page_count
 
 
+######################################################################
+# HEATMAP PROCESSING CALLBACKS
+######################################################################
 @app.callback(
     dash.dependencies.Output('heatmap2', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
@@ -788,7 +803,6 @@ def update_junction_clustergram(selected_gene, colorscale, show_tables):
                 )
             }
         
-
 #@app.callback(
 #    dash.dependencies.Output('heatmap1', 'figure'),
 #    dash.dependencies.Input('colorscale-dropdown', 'value')
@@ -804,7 +818,6 @@ def update_junction_clustergram(selected_gene, colorscale, show_tables):
 #    }
     
 #    return heatmap1_fig
-
 
 @app.callback(
     [
@@ -839,12 +852,12 @@ def toggle_tables(show_tables):
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('isoform-data-type-switch', 'value'),
-     dash.dependencies.Input('show-table-radio', 'value')]
+     dash.dependencies.Input('show-table-radio', 'value'),
+     dash.dependencies.Input('show-labels-toggle', 'value'),
+     dash.dependencies.Input('collapse-tissue-toggle', 'value')]
 )
-def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_tables):
-    """Update isoform expression heatmap with forced resize handling"""
-    
-    # Select data source based on toggle switch
+def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_tables, show_labels, collapse_tissues):
+    """Update isoform expression heatmap with tissue collapse functionality"""
     if use_ratio_data: 
         current_data = ratio_data 
         data_type = "Ratio"
@@ -877,7 +890,9 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
             height=heatmap_height,
             colorscale=colorscale,
             data_type=data_type,
-            show_tables=show_tables
+            show_tables=show_tables,
+            show_labels=show_labels,
+            collapse_tissues=collapse_tissues 
         )
         
         fig.update_layout(
@@ -917,24 +932,27 @@ app.clientside_callback(
         return window.dash_clientside.no_update;
     }
     """,
-    dash.dependencies.Output('heatmap1', 'style'),
-    [dash.dependencies.Input('show-table-radio', 'value')]
+    dash.dependencies.Output('heatmap1', 'style', allow_duplicate=True),
+    [dash.dependencies.Input('show-table-radio', 'value')],
+    prevent_initial_call=True 
 )
 
 
+######################################################################
+# EVENT-LEVEL VISUALIZATIONS CALLBACKS
+######################################################################
 @app.callback(
     dash.dependencies.Output('barplot1', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('bar-height-slider', 'value'),
-     dash.dependencies.Input('bar-color-dropdown', 'value')]
+     dash.dependencies.Input('bar-height-slider', 'value')]
 )
-def update_transcript_structure(selected_gene, height_setting, color):
+def update_transcript_structure(selected_gene, height_setting):
     """Update transcript structure plot based on gene selection"""
     
     if not selected_gene or psl_data.empty:
         # Return mock barplot if no gene selected or no data
         return {
-            'data': [go.Bar(x=list(range(10)), y=data1.sum(axis=1), marker_color=color)],
+            'data': [go.Bar(x=list(range(10)), y=data1.sum(axis=1), marker_color='blue')],
             'layout': go.Layout(
                 margin=dict(l=40, r=40, t=20, b=20),
                 title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}},
@@ -1048,5 +1066,5 @@ if __name__ == '__main__':
         print("Database initialization completed.")
 
     display_ascii_banner()
-    
+
     app.run(debug=True, port=8050, use_reloader=False)

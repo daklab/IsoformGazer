@@ -114,7 +114,7 @@ def load_tpm_data(tpm_file_path: str) -> pd.DataFrame:
         required_cols = ['transcript', 'gene', 'gene_name']
         missing_cols = [col for col in required_cols if col not in tpm_df.columns]
         if missing_cols:
-            print(f"Warning: Missing required columns: {missing_cols}")
+            print(f"Warning: Missing required columns of {missing_cols}")
         
         # Show sample of gene_name column
         if 'gene_name' in tpm_df.columns:
@@ -226,16 +226,17 @@ def create_transcript_structure_plot(transcript_data: pd.DataFrame, gene_name: s
     return fig
 
 
-def create_isoform_expression_heatmap(
-    tpm_data: pd.DataFrame, 
-    gene_name: str, 
-    height: int = 600,
-    colorscale: str = 'Viridis',
-    data_type: str = 'TPM',
-    show_tables: str = 'show'
-) -> go.Figure:
-    """Create fully responsive isoform expression heatmap with fixed tissue naming"""
-    
+def create_isoform_expression_heatmap(tpm_data: pd.DataFrame, 
+                                      gene_name: str, 
+                                      height: int = 600,
+                                      colorscale: str = 'Viridis',
+                                      data_type: str = 'TPM',
+                                      show_tables: str = 'show',
+                                      show_labels: bool = False,
+                                      collapse_tissues: bool = True) -> go.Figure:
+    """
+    Creates fully responsive isoform expression heatmap 
+    """
     if tpm_data.empty:
         return create_empty_isoform_message(f"No data for gene: {gene_name}")
     
@@ -244,7 +245,6 @@ def create_isoform_expression_heatmap(
             return create_empty_isoform_message("Data missing 'gene_name' column.")
         
         gene_tpm = tpm_data[tpm_data['gene_name'] == gene_name].copy()
-        print(f"Found {len(gene_tpm)} isoforms for gene '{gene_name}'")
         
     except Exception as e:
         print(f"Error filtering data: {e}")
@@ -259,44 +259,41 @@ def create_isoform_expression_heatmap(
     
     heatmap_data = gene_tpm[tissue_cols].values.T
     transcript_names = gene_tpm['transcript'].tolist() if 'transcript' in gene_tpm.columns else gene_tpm.index.tolist()
-    
-    tissue_names = []
-    tissue_display_names = []
-    tissue_categories = []
-    
-    for col in tissue_cols:
-        tissue_names.append(col)
-        
-        if '.' in col:
-            tissue_ensembl_id = col.split('.')[0]
-            tissue_name = '.'.join(col.split('.')[1:])
-            display_name = f"{tissue_name} ({tissue_ensembl_id})"
-        
-        display_name = display_name.replace('_', ' ')
-        tissue_display_names.append(display_name)
 
-        tissue_category = map_tissue_to_category(tissue_name)
-        tissue_categories.append(tissue_category)
-
-    #print(f"Created {len(tissue_display_names)} unique tissue display names")
+    if collapse_tissues:
+        heatmap_data, tissue_display_names, tissue_categories = collapse_tissues_by_average(gene_tpm, tissue_cols)
+    else:
+        heatmap_data = gene_tpm[tissue_cols].values.T
+        tissue_display_names, tissue_categories = process_individual_tissues(tissue_cols)
     
     num_tissues = len(tissue_display_names)
     
+    # Dynamic margin calculation...
     if show_tables == 'show':
         calculated_height = min(height, 350)
-        left_margin = 100
+        if show_labels:
+            left_margin = 100
+        else:
+            left_margin = 40
         right_margin = 60
         top_margin = 60
-        bottom_margin = 60
+        # Calculate bottom margin for transcript names (always needed for x-axis)
+        max_transcript_length = max([len(str(name)) for name in transcript_names]) if transcript_names else 10
+        bottom_margin = 40
+        
     else:
         calculated_height = max(height, 600)
-        
-        max_tissue_name_length = max([len(name) for name in tissue_display_names]) if tissue_display_names else 10
-        left_margin = max(200, min(350, max_tissue_name_length * 8))
+        if show_labels:
+            max_tissue_name_length = max([len(name) for name in tissue_display_names]) if tissue_display_names else 10
+            left_margin = max(200, min(350, max_tissue_name_length * 8))
+        else:
+            left_margin = 40  
         right_margin = 100
         top_margin = 80
-        bottom_margin = 120
-    
+        # Calculate bottom margin for transcript names (always needed for x-axis)
+        max_transcript_length = max([len(str(name)) for name in transcript_names]) if transcript_names else 10
+        bottom_margin = max(120, min(200, max_transcript_length * 8))
+
     tissue_colors = get_tissue_colors()
     
     if show_tables == 'show':
@@ -307,6 +304,7 @@ def create_isoform_expression_heatmap(
             shared_yaxes=True
         )
         
+        # Add tissue color annotation
         tissue_color_values = []
         for category in tissue_categories:
             color = tissue_colors.get(category, '#CCCCCC')
@@ -343,7 +341,6 @@ def create_isoform_expression_heatmap(
         fig.update_yaxes(showticklabels=False, row=1, col=2)
         
     else:
-        # When tables hidden: single heatmap with full labels
         fig = go.Figure()
         
         fig.add_trace(
@@ -357,14 +354,18 @@ def create_isoform_expression_heatmap(
             )
         )
         
-        fig.update_yaxes(
-            showticklabels=True,
-            tickmode='array',
-            tickvals=list(range(len(tissue_display_names))),
-            ticktext=tissue_display_names,
-            tickfont=dict(size=9),
-            automargin=True
-        )
+        # Show/hide labels based on show_labels toggle
+        if show_labels: 
+            fig.update_yaxes(
+                showticklabels=True,
+                tickmode='array',
+                tickvals=list(range(len(tissue_display_names))),
+                ticktext=tissue_display_names,
+                tickfont=dict(size=9),
+                automargin=True
+            )
+        else: 
+            fig.update_yaxes(showticklabels=False)
         
         fig.update_xaxes(
             showticklabels=True,
@@ -372,12 +373,17 @@ def create_isoform_expression_heatmap(
             tickfont=dict(size=9),
             automargin=True
         )
+
+    if collapse_tissues: 
+        heatmap_resolution_level = "averaged by tissue"
+    else: 
+        heatmap_resolution_level = "across all samples and tissues"
     
     fig.update_layout(
         height=calculated_height,
         margin=dict(l=left_margin, r=right_margin, t=top_margin, b=bottom_margin),
         title={
-            'text': f'Isoform Expression for {gene_name} ({len(transcript_names)} isoforms)',
+            'text': f'Isoform Expression for {gene_name} {heatmap_resolution_level} ({len(transcript_names)} isoforms)',
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 16},
@@ -391,6 +397,68 @@ def create_isoform_expression_heatmap(
     )
     
     return fig
+
+
+def collapse_tissues_by_average(gene_tpm: pd.DataFrame, 
+                                tissue_cols: List[str]) -> Tuple[np.ndarray, List[str], List[str]]:
+    """Collapse multiple experiments per tissue by averaging values"""
+    tissue_mapping = {}
+    for col in tissue_cols:
+        if '.' in col:
+            clean_tissue_name = '.'.join(col.split('.')[1:]).replace('_', ' ')
+        else:
+            clean_tissue_name = col.replace('_', ' ')
+        tissue_mapping[col] = clean_tissue_name
+    
+    # Group columns by tissue name
+    tissue_groups = {}
+    for col, tissue_name in tissue_mapping.items():
+        if tissue_name not in tissue_groups:
+            tissue_groups[tissue_name] = []
+        tissue_groups[tissue_name].append(col)
+    
+    print(f"Collapsing {len(tissue_cols)} experiments into {len(tissue_groups)} tissues")
+    averaged_data = []
+    tissue_display_names = []
+    tissue_categories = []
+    
+    for tissue_name, columns in tissue_groups.items():
+        tissue_data = gene_tpm[columns].values
+        
+        averaged_values = np.mean(tissue_data, axis=1)
+        averaged_data.append(averaged_values)
+        
+        tissue_display_names.append(tissue_name)
+        tissue_category = map_tissue_to_category(tissue_name)
+        tissue_categories.append(tissue_category)
+    
+    heatmap_data = np.array(averaged_data)
+    
+    return heatmap_data, tissue_display_names, tissue_categories
+
+
+def process_individual_tissues(tissue_cols: List[str]) -> Tuple[List[str], List[str]]:
+    """Process individual tissue experiments (current behavior)"""
+    
+    tissue_display_names = []
+    tissue_categories = []
+    
+    for col in tissue_cols:
+        if '.' in col:
+            tissue_ensembl_id = col.split('.')[0]
+            tissue_name = '.'.join(col.split('.')[1:])
+            display_name = f"{tissue_name} ({tissue_ensembl_id})"
+        else:
+            display_name = col
+        
+        display_name = display_name.replace('_', ' ')
+        tissue_display_names.append(display_name)
+
+        base_tissue_name = tissue_name if '.' in col else col
+        tissue_category = map_tissue_to_category(base_tissue_name)
+        tissue_categories.append(tissue_category)
+    
+    return tissue_display_names, tissue_categories
 
 
 def map_tissue_to_category(tissue_name: str) -> str:

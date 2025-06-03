@@ -223,3 +223,9 @@ html, body {
 .plotly-graph-div {
     overflow: visible !important;
 }
+.app-controls-block .daq-ToggleSwitch {
+    margin-bottom: 15px;
+}
+.app-controls-block .daq-ToggleSwitch:last-child {
+    margin-bottom: 0;
+}
