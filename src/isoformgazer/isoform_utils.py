@@ -29,9 +29,9 @@ def load_psl_data(psl_file_path: str) -> pd.DataFrame:
         
         # Calculate transcript length
         psl_df['transcript_length'] = psl_df['tEnd'] - psl_df['tStart']
-        
-        print(f"Loaded PSL data with {len(psl_df)} records")
+
         return psl_df
+    
     except Exception as e:
         print(f"Error loading PSL file: {e}")
         return pd.DataFrame()
@@ -48,7 +48,6 @@ def get_gene_id_for_gene_name(db_path: str, gene_name: str) -> str:
         gene_id = result.iloc[0]['gene_id']
         # Remove version number from gene_id (e.g., ENSG00000100320.16 -> ENSG00000100320)
         gene_id_clean = gene_id.split('.')[0]
-        print(f"Found gene_id '{gene_id_clean}' for gene_name '{gene_name}'")
         return gene_id_clean
     else:
         print(f"No gene_id found for gene_name '{gene_name}'")
@@ -72,7 +71,7 @@ def process_transcript_structure(psl_df: pd.DataFrame, gene_name: str, db_path: 
         print(f"No PSL data found for gene_id: {gene_id}")
         return pd.DataFrame()
     
-    print(f"Found {len(gene_psl)} PSL records for gene {gene_name} (gene_id: {gene_id})")
+    #print(f"Found {len(gene_psl)} PSL records for gene {gene_name} (gene_id: {gene_id})")
     
     # Process block information
     transcript_data = []
@@ -111,9 +110,6 @@ def load_tpm_data(tpm_file_path: str) -> pd.DataFrame:
         # Load the TPM file
         tpm_df = pd.read_csv(tpm_file_path, sep='\t')
         
-        print(f"Loaded TPM data with shape {tpm_df.shape}")
-        print(f"Columns in TPM data: {list(tpm_df.columns)}")
-        
         # Check if required columns exist
         required_cols = ['transcript', 'gene', 'gene_name']
         missing_cols = [col for col in required_cols if col not in tpm_df.columns]
@@ -123,8 +119,8 @@ def load_tpm_data(tpm_file_path: str) -> pd.DataFrame:
         # Show sample of gene_name column
         if 'gene_name' in tpm_df.columns:
             unique_genes = tpm_df['gene_name'].dropna().unique()
-            print(f"Number of unique genes in TPM data: {len(unique_genes)}")
-            print(f"First 10 genes: {list(unique_genes[:10])}")
+            #print(f"Number of unique genes in TPM data: {len(unique_genes)}")
+            #print(f"First 10 genes: {list(unique_genes[:10])}")
         
         return tpm_df
     except Exception as e:
@@ -259,7 +255,7 @@ def create_isoform_expression_heatmap(
     
     metadata_cols = ['transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
     tissue_cols = [col for col in gene_tpm.columns if col not in metadata_cols]
-    print(f"Found {len(tissue_cols)} tissue columns")
+    #print(f"Found {len(tissue_cols)} tissue columns")
     
     heatmap_data = gene_tpm[tissue_cols].values.T
     transcript_names = gene_tpm['transcript'].tolist() if 'transcript' in gene_tpm.columns else gene_tpm.index.tolist()
@@ -282,7 +278,7 @@ def create_isoform_expression_heatmap(
         tissue_category = map_tissue_to_category(tissue_name)
         tissue_categories.append(tissue_category)
 
-    print(f"Created {len(tissue_display_names)} unique tissue display names")
+    #print(f"Created {len(tissue_display_names)} unique tissue display names")
     
     num_tissues = len(tissue_display_names)
     

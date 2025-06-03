@@ -20,7 +20,7 @@ from junction_utils import create_summary_clustergram, create_gene_clustergram
 from isoform_utils import (
     load_psl_data, load_tpm_data, process_transcript_structure,
     create_transcript_structure_plot, create_isoform_expression_heatmap,
-    create_empty_clustergram_message
+    create_empty_isoform_message
 )
 
 RANDOM_SEED = 18
@@ -182,13 +182,13 @@ def setup_isoform_data():
     """
     Load both TPM and ratio isoform data
     """
+    print("Preparing PSL data...")
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
     psl_file = os.path.join(base_dir, "data", "all_samples_sp_collapse_all_chr_no_treatment_full.psl")
     psl_data = pd.DataFrame()
     if os.path.exists(psl_file):
         psl_data = load_psl_data(psl_file)
-        print(f"Loaded PSL data with {len(psl_data)} records")
     else:
         print(f"PSL file not found at {psl_file}")
     
@@ -196,7 +196,6 @@ def setup_isoform_data():
     tpm_data = pd.DataFrame()
     if os.path.exists(tpm_file):
         tpm_data = load_tpm_data(tpm_file)
-        print(f"Loaded TPM data with shape {tpm_data.shape}")
     else:
         print(f"TPM file not found at {tpm_file}")
     
@@ -204,7 +203,6 @@ def setup_isoform_data():
     ratio_data = pd.DataFrame()
     if os.path.exists(ratio_file):
         ratio_data = load_tpm_data(ratio_file)
-        print(f"Loaded ratio data with shape {ratio_data.shape}")
     else:
         print(f"Ratio file not found at {ratio_file}")
     
@@ -769,7 +767,7 @@ def update_junction_clustergram(selected_gene, colorscale, show_tables):
             return fig
         except Exception as e:
             print(f"Error creating gene-specific clustermap: {e}")
-            return create_empty_clustergram_message(f"Error loading data for {selected_gene}")
+            return create_empty_isoform_message(f"Error loading data for {selected_gene}")
     else:
         try:
             fig = create_summary_clustergram(db_path, height=clustermap_height, colorscale=colorscale, show_tables=show_tables)
@@ -1045,10 +1043,10 @@ def display_ascii_banner():
 
 
 if __name__ == '__main__':
-    display_ascii_banner()
-
     database_exists = check_database_status()
     if not database_exists:
         print("Database initialization completed.")
 
+    display_ascii_banner()
+    
     app.run(debug=True, port=8050, use_reloader=False)
