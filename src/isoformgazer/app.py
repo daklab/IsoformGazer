@@ -15,8 +15,11 @@ import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
 from data_utils import generate_mock_data, get_master_table_columns, parse_filter_query, query_master_table, get_gene_options
-from junction_utils import create_summary_clustergram, create_gene_clustergram
-# from junction_utils import load_atse_data, create_fast_atse_visualization, get_gene_id_from_junction_db, create_empty_atse_message
+from junction_utils import (
+    create_summary_clustergram, create_gene_clustergram,
+    load_atse_data, process_gene_atse_data, create_junction_exon_visualization,
+    create_empty_atse_message, create_empty_clustergram_message
+)
 from isoform_utils import (
     load_psl_data, load_tpm_data, process_transcript_structure,
     create_transcript_structure_plot, create_isoform_expression_heatmap,
@@ -213,53 +216,21 @@ psl_data, tpm_data, ratio_data = setup_isoform_data()
 ###################################################################
 # ATSE DATA SETUP
 ###################################################################
-#def setup_atse_data():
-#    """Load ATSE data with better debugging"""
-#    base_dir = os.path.dirname(os.path.abspath(__file__))
-#    atse_file = os.path.join(base_dir, "data", "TMS_atse_file_unanno_also_2025-05-11_06-23-05.tsv")
+def setup_atse_data():
+    """Load ATSE data for junction visualization"""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    atse_file = os.path.join(base_dir, "data", "TMS_atse_file_unanno_also_2025-05-11_06-23-05.tsv")
     
-#    print(f"Looking for ATSE file at: {atse_file}")
-#    print(f"File exists: {os.path.exists(atse_file)}")
-    
-#    if os.path.exists(atse_file):
-#        try:
-            # FIX: Specify dtype for gene_name to ensure it's read as string
-#            atse_df = pd.read_csv(atse_file, sep='\t', dtype={'gene_name': str})
-#            print(f"Loaded ATSE data with {len(atse_df)} records")
-            
-            # Ensure gene_name column is string type
-#            atse_df['gene_name'] = atse_df['gene_name'].astype(str)
-            
-            # Debug: Check data types
-#            print(f"gene_name column dtype: {atse_df['gene_name'].dtype}")
-            
-            # Debug: Check what gene names we have
-#            unique_genes = atse_df['gene_name'].unique()
-#            print(f"Number of unique genes in ATSE data: {len(unique_genes)}")
-#            print(f"First 10 genes: {list(unique_genes[:10])}")
-            
-            # Check for common test genes
-#            test_genes = ['RBFOX2', 'A1BG', 'TSPAN6']
-#            for gene in test_genes:
-#                count = len(atse_df[atse_df['gene_name'] == gene])
-#                print(f"Gene '{gene}' has {count} ATSE records")
-            
-#            return atse_df
-#        except Exception as e:
-#            print(f"Error loading ATSE file: {e}")
-#            return pd.DataFrame()
-#    else:
-        # List files in the data directory to help debug
-#        data_dir = os.path.join(base_dir, "data")
-#        if os.path.exists(data_dir):
-#            files = os.listdir(data_dir)
-#            print(f"Files in data directory: {files}")
-#        else:
-#            print(f"Data directory doesn't exist: {data_dir}")
-#        return pd.DataFrame()
+    print("Loading ATSE data for junction visualization...")
+    if os.path.exists(atse_file):
+        atse_df = load_atse_data(atse_file)
+        print(f"✓ Loaded ATSE data with {len(atse_df)} records")
+        return atse_df
+    else:
+        print(f"ATSE file not found at {atse_file}")
+        return pd.DataFrame()
 
-
-#atse_data = setup_atse_data()
+atse_data = setup_atse_data()
 
 ###################################################################
 # APPLICATION SETUP
@@ -416,6 +387,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         html.H4('About'),
                         html.P('Isoform Gazers allows for a unified view of RNA splicing across ' \
                         'both single-cell junction usage and long-read isoform data in GENCODEv46 (GRCh38.p14).'),
+                        html.P('Use the controls in the "Query" tab to dynamically query the master table data and generate visualizations.'),
                         html.P('Use the controls in the "Custom" tab to customize the visualizations.')
                     ])
                 ]),
@@ -457,7 +429,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             html.P([
                                 "Select a gene from the dropdown above or directly filter the tables to explore the data.",
                                 html.Br(),
-                                "Results will update automatically as you type."
+                                "Visualizations will update automatically."
                             ], className="app-controls-desc"),
                         ])
                     ])
@@ -499,7 +471,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         html.Hr(),
 
                         #####################################
-                        # Barplot Section
+                        # Isoform-level Event Plot Section
                         #####################################
                         html.H3('Isoform Transcripts Plot', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
@@ -518,7 +490,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         html.Hr(),
 
                         #####################################
-                        # Heatmap Section
+                        # Isoform-level Heatmap Section
                         #####################################
                         html.H3('Heatmap', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
@@ -542,7 +514,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 daq.ToggleSwitch(
                                     id='collapse-tissue-toggle',
                                     value=True,  # Default to average by tissue (a lot cleaner looking for most genes)
-                                    label={'label': 'Show All / Collapse', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    label={'label': 'Show All / Average', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='right',
                                     style={'display': 'inline-block'}
                                 )
@@ -638,7 +610,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         html.Div(className='atse-container', children=[
                             dcc.Graph(
                                 id='atse-map',
-                                figure=atse_fig,
+                                figure=create_empty_atse_message("Select a gene to view splice junctions and exons"),
                                 config={
                                     'responsive': True, 
                                     'displayModeBar': True,
@@ -646,7 +618,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 },
                                 style={'height': '100%', 'width': '100%'}
                             )
-                        ], style={'height': '25%', 'min-height': '0', 'margin-bottom': '15px'}),
+                        ], style={'height': '25%', 'min-height': '200px', 'margin-bottom': '15px'}),
                         html.Div(className='heatmap-container', children=[
                             dcc.Graph(
                                 id='heatmap2',
@@ -673,11 +645,49 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
     ])
 ])
 
+app.layout.children.extend([
+    dcc.Store(id='filtered-isoform-store', data=[]),
+    dcc.Store(id='filtered-junction-store', data=[])
+])
+
 #######################################################################
 # CALLBACKS
 #######################################################################
+#######################################################################
+# MASTER TABLE VISUALIZATION FILTERING CALLBACKS
+#######################################################################
+@app.callback(
+    [dash.dependencies.Output('filtered-isoform-store', 'data'),
+     dash.dependencies.Output('filtered-junction-store', 'data')],
+    [dash.dependencies.Input('isoform-master-table', 'derived_virtual_data'),
+     dash.dependencies.Input('junction-master-table', 'derived_virtual_data')],
+    [dash.dependencies.State('isoform-master-table', 'data'),
+     dash.dependencies.State('junction-master-table', 'data')]
+)
+def update_filtered_data_stores(isoform_filtered_data, junction_filtered_data, 
+                               isoform_full_data, junction_full_data):
+    """Store filtered transcript and junction IDs from master tables"""
+    isoform_all_ids = [row.get('transcript', '') for row in isoform_full_data]
+    junction_all_ids = [row.get('junction_id', '') for row in junction_full_data]
+    
+    # Extract filtered transcript IDs from isoform table
+    filtered_transcript_ids = []
+    if isoform_filtered_data:
+        filtered_transcript_ids = [row.get('transcript', '') 
+                                  for row in isoform_filtered_data 
+                                  if row.get('transcript') in isoform_all_ids]
+    
+    # Extract filtered junction IDs from junction table  
+    filtered_junction_ids = []
+    if junction_filtered_data:
+        filtered_junction_ids = [row.get('junction_id', '') 
+                                for row in junction_filtered_data 
+                                if row.get('junction_id') in junction_all_ids]
+    
+    return filtered_transcript_ids, filtered_junction_ids
+
 ##############################################################################################
-# CALLBACK FOR QUERYING BY GENE IN CONTROL PANNEL 'Query' TAB: if no search is performed, we 
+# CALLBACK FOR QUERYING BY GENE IN CONTROL PANEL ('Query' tab): if no search is performed, we 
 # show the first five gene names, but otherwise filter by the top ten matches to the current 
 # search string. 
 ##############################################################################################
@@ -767,57 +777,38 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
     dash.dependencies.Output('heatmap2', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
-     dash.dependencies.Input('show-table-radio', 'value')]
+     dash.dependencies.Input('show-table-radio', 'value'),
+     dash.dependencies.Input('filtered-junction-store', 'data')]
 )
-def update_junction_clustergram(selected_gene, colorscale, show_tables):
+def update_junction_clustergram(selected_gene, colorscale, show_tables, filtered_junction_ids):
     """Update junction visualization based on gene selection"""
     if show_tables == 'show':
-        clustermap_height = 300
+        heatmap_height = 450
     else:
-        clustermap_height = 650 
+        heatmap_height = 650
     
-    if selected_gene:
+    if not selected_gene:
         try:
-            fig = create_gene_clustergram(db_path, selected_gene, height=clustermap_height, colorscale=colorscale, show_tables=show_tables)
+            fig = create_summary_clustergram(db_path, height=heatmap_height, colorscale=colorscale, show_tables=show_tables)
             return fig
         except Exception as e:
-            print(f"Error creating gene-specific clustermap: {e}")
-            return create_empty_isoform_message(f"Error loading data for {selected_gene}")
-    else:
-        try:
-            fig = create_summary_clustergram(db_path, height=clustermap_height, colorscale=colorscale, show_tables=show_tables)
-            return fig
-        except Exception as e:
-            print(f"Error creating summary clustermap: {e}")
-            return {
-                'data': [go.Heatmap(z=data2, colorscale=colorscale)],
-                'layout': go.Layout(
-                    margin=dict(l=40, 
-                                r=40, 
-                                t=40, 
-                                b=40),
-                    title={'text': 'Junction Usage by Cell Type (Mock Data)', 
-                           'font': {'size': 14}},
-                    autosize=True,
-                    height=clustermap_height
-                )
-            }
-        
-#@app.callback(
-#    dash.dependencies.Output('heatmap1', 'figure'),
-#    dash.dependencies.Input('colorscale-dropdown', 'value')
-#)
-#def update_colorscale(colorscale):
-#    heatmap1_fig = {
-#        'data': [go.Heatmap(z=data1, colorscale=colorscale)],
-#        'layout': go.Layout(
-#            margin=dict(l=40, r=40, t=40, b=40),
-#            title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}},
-#            autosize=True
-#        )
-#    }
+            print(f"Error creating summary clustergram: {e}")
+            return create_empty_clustergram_message("Error loading summary data")
     
-#    return heatmap1_fig
+    try:
+        fig = create_gene_clustergram(
+            db_path, 
+            selected_gene, 
+            height=heatmap_height, 
+            colorscale=colorscale, 
+            show_tables=show_tables,
+            filtered_junction_ids=filtered_junction_ids
+        )
+        return fig
+    except Exception as e:
+        print(f"Error creating gene clustergram: {e}")
+        return create_empty_clustergram_message(f"Error loading data for {selected_gene}")
+    
 
 @app.callback(
     [
@@ -847,6 +838,20 @@ def toggle_tables(show_tables):
     return table_style, table_style, heatmap1_style, heatmap2_style
 
 
+# Add this callback to manage container classes
+@app.callback(
+    [dash.dependencies.Output('left-panel-graph-wrapper', 'className'),
+     dash.dependencies.Output('right-panel-graph-wrapper', 'className')],
+    [dash.dependencies.Input('show-table-radio', 'value')]
+)
+def update_container_classes(show_tables):
+    """Update container classes based on table visibility"""
+    if show_tables == 'show':
+        return 'graph-wrapper', 'graph-wrapper'
+    else:
+        return 'graph-wrapper tables-hidden', 'graph-wrapper tables-hidden'
+
+
 @app.callback(
     dash.dependencies.Output('heatmap1', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
@@ -854,10 +859,12 @@ def toggle_tables(show_tables):
      dash.dependencies.Input('isoform-data-type-switch', 'value'),
      dash.dependencies.Input('show-table-radio', 'value'),
      dash.dependencies.Input('show-labels-toggle', 'value'),
-     dash.dependencies.Input('collapse-tissue-toggle', 'value')]
+     dash.dependencies.Input('collapse-tissue-toggle', 'value'),
+     dash.dependencies.Input('filtered-isoform-store', 'data')]
 )
-def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_tables, show_labels, collapse_tissues):
-    """Update isoform expression heatmap with tissue collapse functionality"""
+def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_tables, 
+                          show_labels, collapse_tissues, filtered_transcript_ids):
+    """Update isoform expression heatmap with filtered data"""
     if use_ratio_data: 
         current_data = ratio_data 
         data_type = "Ratio"
@@ -866,38 +873,37 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
         data_type = "TPM"
 
     if show_tables == 'show':
-        heatmap_height = 350
+        heatmap_height = 450
     else:
-        heatmap_height = 700 
+        heatmap_height = 650
     
     if not selected_gene or current_data.empty:
         return {
             'data': [go.Heatmap(z=data1, colorscale=colorscale)],
             'layout': go.Layout(
-                margin=dict(l=40, r=40, t=40, b=40),
+                margin=dict(l=40, r=40, t=40, b=120),
                 title={'text': f'Isoform Expression by Tissue ({data_type})', 'font': {'size': 14}},
-                autosize=True,
-                height=heatmap_height,
-                paper_bgcolor='white',
-                plot_bgcolor='white'
+                autosize=False,
+                height=heatmap_height
             )
         }
     
     try:
+        # FILTER the data based on master table filtering
+        filtered_data = current_data.copy()
+        if filtered_transcript_ids:
+            filtered_data = filtered_data[filtered_data['transcript'].isin(filtered_transcript_ids)]
+            print(f"Filtered isoform data to {len(filtered_data)} transcripts based on table filtering")
+        
         fig = create_isoform_expression_heatmap(
-            tpm_data=current_data,
+            tpm_data=filtered_data, 
             gene_name=selected_gene,
             height=heatmap_height,
             colorscale=colorscale,
             data_type=data_type,
             show_tables=show_tables,
             show_labels=show_labels,
-            collapse_tissues=collapse_tissues 
-        )
-        
-        fig.update_layout(
-            autosize=True,
-            height=heatmap_height
+            collapse_tissues=collapse_tissues
         )
         
         return fig
@@ -944,36 +950,79 @@ app.clientside_callback(
 @app.callback(
     dash.dependencies.Output('barplot1', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('bar-height-slider', 'value')]
+     dash.dependencies.Input('bar-height-slider', 'value'),
+     dash.dependencies.Input('filtered-isoform-store', 'data')]
 )
-def update_transcript_structure(selected_gene, height_setting):
+def update_transcript_structure(selected_gene, plot_height, filtered_transcript_ids):
     """Update transcript structure plot based on gene selection"""
-    
-    if not selected_gene or psl_data.empty:
-        # Return mock barplot if no gene selected or no data
-        return {
-            'data': [go.Bar(x=list(range(10)), y=data1.sum(axis=1), marker_color='blue')],
-            'layout': go.Layout(
-                margin=dict(l=40, r=40, t=20, b=20),
-                title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}},
-                xaxis={'title': {'text': 'Tissue', 'font': {'size': 12}}, 'title_standoff': 40, 'ticksuffix': ' '},
-                yaxis={'title': {'text': 'Count', 'font': {'size': 12}}},
-                autosize=True
-            )
-        }
+    if not selected_gene:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="Select a gene to view transcript structure",
+            xref="paper", yref="paper", x=0.5, y=0.5,
+            xanchor='center', yanchor='middle', showarrow=False,
+            font=dict(size=16, color="gray")
+        )
+        fig.update_layout(
+            xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+            yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+            plot_bgcolor='white', height=plot_height,
+            margin=dict(l=50, r=50, t=50, b=50)
+        )
+        return fig
     
     try:
         transcript_data = process_transcript_structure(psl_data, selected_gene, db_path)
         
-        fig = create_transcript_structure_plot(
-            transcript_data=transcript_data,
-            gene_name=selected_gene,
-            height=height_setting * 2  
-        )
+        # FILTER transcript data based on master table filtering
+        if filtered_transcript_ids and not transcript_data.empty:
+            transcript_data = transcript_data[transcript_data['trans_id'].isin(filtered_transcript_ids)]
+            print(f"Filtered transcript data to {len(transcript_data)} records based on table filtering")
+        
+        fig = create_transcript_structure_plot(transcript_data, selected_gene, height=plot_height)
         return fig
     except Exception as e:
-        print(f"Error creating transcript structure: {e}")
+        print(f"Error creating transcript plot: {e}")
         return create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
+    
+
+@app.callback(
+    dash.dependencies.Output('atse-map', 'figure'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('filtered-junction-store', 'data')]
+)
+def update_atse_visualization(selected_gene, filtered_junction_ids):
+    """Update ATSE splice junction visualization with filtered data"""
+    
+    if not selected_gene:
+        return create_empty_atse_message("Select a gene to view splice junctions and exons")
+    
+    if atse_data.empty:
+        return create_empty_atse_message("ATSE data not loaded - check file path")
+    
+    try:
+        gene_data = process_gene_atse_data(atse_data, selected_gene, db_path)
+        
+        if filtered_junction_ids and 'junctions' in gene_data:
+            original_junctions = gene_data['junctions']
+            filtered_junctions = []
+            
+            for junction in original_junctions:
+                junction_id = f"chr{gene_data.get('chromosome', '').replace('chr', '')}_{junction['start']}_{junction['end']}_{gene_data.get('strand', '+')}"
+                if junction_id in filtered_junction_ids:
+                    filtered_junctions.append(junction)
+            
+            gene_data['junctions'] = filtered_junctions
+            print(f"Filtered ATSE junctions to {len(filtered_junctions)} based on table filtering")
+        
+        fig = create_junction_exon_visualization(gene_data, height=300)
+        
+        return fig
+    except Exception as e:
+        print(f"Error creating ATSE visualization: {e}")
+        import traceback
+        traceback.print_exc()
+        return create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
 
 
 #@app.callback(

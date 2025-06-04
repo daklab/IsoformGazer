@@ -14,7 +14,7 @@ import os
 def load_psl_data(psl_file_path: str) -> pd.DataFrame:
     """Load and process PSL file for transcript structure"""
     try:
-        # PSL files have specific column structure
+        # PSL file format: https://useast.ensembl.org/info/website/upload/psl.html
         psl_columns = [
             'matches', 'misMatches', 'repMatches', 'nCount', 'qNumInsert', 'qBaseInsert',
             'tNumInsert', 'tBaseInsert', 'strand', 'qName', 'qSize', 'qStart', 'qEnd',
@@ -107,10 +107,7 @@ def process_transcript_structure(psl_df: pd.DataFrame, gene_name: str, db_path: 
 def load_tpm_data(tpm_file_path: str) -> pd.DataFrame:
     """Load TPM data for isoform expression heatmap"""
     try:
-        # Load the TPM file
         tpm_df = pd.read_csv(tpm_file_path, sep='\t')
-        
-        # Check if required columns exist
         required_cols = ['transcript', 'gene', 'gene_name']
         missing_cols = [col for col in required_cols if col not in tpm_df.columns]
         if missing_cols:
@@ -119,10 +116,9 @@ def load_tpm_data(tpm_file_path: str) -> pd.DataFrame:
         # Show sample of gene_name column
         if 'gene_name' in tpm_df.columns:
             unique_genes = tpm_df['gene_name'].dropna().unique()
-            #print(f"Number of unique genes in TPM data: {len(unique_genes)}")
-            #print(f"First 10 genes: {list(unique_genes[:10])}")
         
         return tpm_df
+    
     except Exception as e:
         print(f"Error loading TPM file: {e}")
         return pd.DataFrame()
@@ -226,6 +222,31 @@ def create_transcript_structure_plot(transcript_data: pd.DataFrame, gene_name: s
     return fig
 
 
+def calculate_optimal_height(transcript_names, num_rows, show_tables, base_height):
+        """Calculate height that prevents cutoff"""
+        min_cell_height = 20
+        optimal_cell_height = max(min_cell_height, 600 / max(num_rows, 1))
+        data_height = num_rows * optimal_cell_height
+        
+        # Calculate margin requirements
+        if transcript_names: 
+            max_transcript_length = max([len(str(name)) for name in transcript_names])
+        else: 
+            max_transcript_length = 10
+
+        bottom_margin_needed = max(100, min(180, max_transcript_length * 7))
+        
+        total_needed = data_height + bottom_margin_needed + 80  # top margin + title
+        
+        # Adjust based on whether master tables visible or not
+        if show_tables == 'show':
+            max_allowed = min(base_height, 450)
+        else:
+            max_allowed = min(base_height, 650)
+        
+        return min(total_needed, max_allowed)
+
+
 def create_isoform_expression_heatmap(tpm_data: pd.DataFrame, 
                                       gene_name: str, 
                                       height: int = 600,
@@ -234,9 +255,8 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                                       show_tables: str = 'show',
                                       show_labels: bool = False,
                                       collapse_tissues: bool = True) -> go.Figure:
-    """
-    Creates fully responsive isoform expression heatmap 
-    """
+    """Creates isoform expression heatmap with proper height to prevent cutoff"""
+    
     if tpm_data.empty:
         return create_empty_isoform_message(f"No data for gene: {gene_name}")
     
@@ -255,9 +275,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
     
     metadata_cols = ['transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
     tissue_cols = [col for col in gene_tpm.columns if col not in metadata_cols]
-    #print(f"Found {len(tissue_cols)} tissue columns")
     
-    heatmap_data = gene_tpm[tissue_cols].values.T
     transcript_names = gene_tpm['transcript'].tolist() if 'transcript' in gene_tpm.columns else gene_tpm.index.tolist()
 
     if collapse_tissues:
@@ -267,33 +285,22 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
         tissue_display_names, tissue_categories = process_individual_tissues(tissue_cols)
     
     num_tissues = len(tissue_display_names)
+    num_transcripts = len(transcript_names)
     
-    # Dynamic margin calculation...
-    if show_tables == 'show':
-        calculated_height = min(height, 350)
-        if show_labels:
-            left_margin = 100
-        else:
-            left_margin = 40
-        right_margin = 60
-        top_margin = 60
-        # Calculate bottom margin for transcript names (always needed for x-axis)
-        max_transcript_length = max([len(str(name)) for name in transcript_names]) if transcript_names else 10
-        bottom_margin = 40
-        
+    calculated_height = calculate_optimal_height(transcript_names, num_tissues, show_tables, height)
+    
+    if show_labels and show_tables != 'show':
+        max_tissue_name_length = max([len(name) for name in tissue_display_names]) if tissue_display_names else 10
+        left_margin = max(200, min(350, max_tissue_name_length * 8))
     else:
-        calculated_height = max(height, 600)
-        if show_labels:
-            max_tissue_name_length = max([len(name) for name in tissue_display_names]) if tissue_display_names else 10
-            left_margin = max(200, min(350, max_tissue_name_length * 8))
-        else:
-            left_margin = 40  
-        right_margin = 100
-        top_margin = 80
-        # Calculate bottom margin for transcript names (always needed for x-axis)
-        max_transcript_length = max([len(str(name)) for name in transcript_names]) if transcript_names else 10
-        bottom_margin = max(120, min(200, max_transcript_length * 8))
-
+        left_margin = 40
+    
+    max_transcript_length = max([len(str(name)) for name in transcript_names]) if transcript_names else 10
+    bottom_margin = max(100, min(180, max_transcript_length * 7))
+    
+    right_margin = 100
+    top_margin = 60
+    
     tissue_colors = get_tissue_colors()
     
     if show_tables == 'show':
@@ -304,7 +311,6 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             shared_yaxes=True
         )
         
-        # Add tissue color annotation
         tissue_color_values = []
         for category in tissue_categories:
             color = tissue_colors.get(category, '#CCCCCC')
@@ -354,7 +360,6 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             )
         )
         
-        # Show/hide labels based on show_labels toggle
         if show_labels: 
             fig.update_yaxes(
                 showticklabels=True,
@@ -370,10 +375,13 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
         fig.update_xaxes(
             showticklabels=True,
             tickangle=45,
-            tickfont=dict(size=9),
-            automargin=True
+            tickfont=dict(size=8),
+            automargin=True,
+            tickmode='array',
+            tickvals=list(range(len(transcript_names))),
+            ticktext=transcript_names
         )
-
+    
     if collapse_tissues: 
         heatmap_resolution_level = "averaged by tissue"
     else: 
@@ -386,14 +394,14 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             'text': f'Isoform Expression for {gene_name} {heatmap_resolution_level} ({len(transcript_names)} isoforms)',
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 16},
-            'pad': {'b': 10}
+            'font': {'size': 14},
+            'pad': {'b': 8}
         },
         font=dict(size=9),
         showlegend=False,
         plot_bgcolor='white',
         paper_bgcolor='white',
-        autosize=True
+        autosize=False
     )
     
     return fig
@@ -417,7 +425,6 @@ def collapse_tissues_by_average(gene_tpm: pd.DataFrame,
             tissue_groups[tissue_name] = []
         tissue_groups[tissue_name].append(col)
     
-    #print(f"Collapsing {len(tissue_cols)} experiments into {len(tissue_groups)} tissues")
     averaged_data = []
     tissue_display_names = []
     tissue_categories = []

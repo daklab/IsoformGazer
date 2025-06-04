@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
+from isoform_utils import load_psl_data, process_transcript_structure
 
 ###################################################################
 # VISUALIZATION METHODS
@@ -96,31 +98,45 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     return clustergram
 
 
-def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show'):
+def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None):
     """Create ATSE-level clustergram for a specific gene with all junctions"""
     conn = sqlite3.connect(db_path)
-    
     query = """
     SELECT cell_type, junction_id, psi, event_id, gene_name
     FROM junctions 
     WHERE gene_name = ? AND psi IS NOT NULL
     """
+    # Add filtering if IDs are provided
+    if filtered_junction_ids:
+        placeholders = ','.join(['?'] * len(filtered_junction_ids))
+        query += f" AND junction_id IN ({placeholders})"
+        params = [gene_name] + filtered_junction_ids
+    else:
+        params = [gene_name]
     
-    gene_vals = pd.read_sql_query(query, conn, params=[gene_name])
+    gene_vals = pd.read_sql_query(query, conn, params=params)
     conn.close()
     
     if len(gene_vals) == 0:
         return create_empty_clustergram_message(f"No junction data found for gene: {gene_name}")
-    psi_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
     
+    # FILTER based on master table selection
+    if filtered_junction_ids:
+        gene_vals = gene_vals[gene_vals['junction_id'].isin(filtered_junction_ids)]
+        print(f"Filtered junction data to {len(gene_vals)} records based on table filtering")
+        
+        if gene_vals.empty:
+            return create_empty_clustergram_message(f"No junction data remaining after filtering for gene: {gene_name}")
+    
+    psi_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
     psi_matrix = psi_matrix.fillna(0)
+
     orig_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
     psi_matrix = psi_matrix[valid_columns]
     
     if psi_matrix.empty:
         return create_empty_clustergram_message(f"No PSI data available for gene: {gene_name}")
-    
     #print(f"Showing {psi_matrix.shape[1]} junctions for gene {gene_name}")
     
     junction_labels = [column for column in psi_matrix.columns]
@@ -263,4 +279,381 @@ def apply_colorscale_to_clustergram(fig, colorscale):
 
     except Exception as e:
         print(f"Warning: Could not apply colorscale: {e}")
+    return fig
+
+
+def load_atse_data(atse_file_path: str) -> pd.DataFrame:
+    """Load ATSE data for junction visualization"""
+    try:
+        atse_df = pd.read_csv(atse_file_path, sep='\t')
+        print(f"Loaded ATSE data with {len(atse_df)} records")
+        return atse_df
+    except Exception as e:
+        print(f"Error loading ATSE file: {e}")
+        return pd.DataFrame()
+
+
+def get_gene_id_from_atse(db_path: str, gene_name: str) -> str:
+    """Get gene_id for a given gene_name from the database"""
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = ? LIMIT 1"
+    result = pd.read_sql_query(query, conn, params=[gene_name])
+    conn.close()
+    
+    if len(result) > 0:
+        # Remove version number
+        return result.iloc[0]['gene_id'].split('.')[0]
+    return None
+
+
+def process_gene_atse_data(atse_df: pd.DataFrame, gene_name: str, db_path: str) -> dict:
+    """Process ATSE data for a specific gene to extract junction and transcript information"""
+    # Get gene_id from db
+    gene_id_with_version = None
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = ? LIMIT 1"
+    result = pd.read_sql_query(query, conn, params=[gene_name])
+    conn.close()
+    
+    if len(result) > 0:
+        gene_id_with_version = result.iloc[0]['gene_id']
+        gene_id_base = gene_id_with_version.split('.')[0]
+    else:
+        return {'error': f"No gene_id found for {gene_name}"}
+    
+    gene_atse = atse_df[atse_df['gene_id'].str.contains(gene_id_base, na=False)].copy()
+    
+    if gene_atse.empty:
+        return {'error': f"No ATSE data found for gene {gene_name}"}
+    
+    gene_info = gene_atse.iloc[0]
+    strand = gene_info.get('strand', '+')
+    chromosome = gene_info.get('chromosome', gene_info.get('chrom', 'chr1'))
+    
+    junctions = []
+    transcripts_set = set()
+    
+    for _, row in gene_atse.iterrows():
+        junction_coords = []
+        
+        if 'start' in row and 'end' in row and pd.notna(row['start']) and pd.notna(row['end']):
+            try:
+                start = int(row['start'])
+                end = int(row['end'])
+                junction_coords.append((start, end))
+            except (ValueError, TypeError) as error:
+                print(f"Error: {error}")
+        
+        if not junction_coords and 'junction_id' in row and pd.notna(row['junction_id']):
+            junction_id = str(row['junction_id'])
+            if '_' in junction_id:
+                parts = junction_id.split('_')
+                if len(parts) >= 3:
+                    try:
+                        start = int(parts[1])
+                        end = int(parts[2])
+                        junction_coords.append((start, end))
+                    except (ValueError, IndexError) as error:
+                        print(f"Error: {error}")
+        
+        transcript_columns = ['transcripts', 'perfect_match_3_prime', 'perfect_match_5_prime', 
+                             'both_ends_transcripts', 'only_5_prime_transcripts', 'only_3_prime_transcripts']
+        
+        for col in transcript_columns:
+            if col in row and pd.notna(row[col]):
+                transcripts_str = str(row[col])
+                for separator in [',', ';', '|']:
+                    if separator in transcripts_str:
+                        for transcript in transcripts_str.split(separator):
+                            transcript = transcript.strip()
+                            if transcript and transcript not in ['nan', 'None', '']:
+                                transcripts_set.add(transcript)
+                        break
+                else:
+                    transcript = transcripts_str.strip()
+                    if transcript and transcript not in ['nan', 'None', '']:
+                        transcripts_set.add(transcript)
+        
+        for start, end in junction_coords:
+            junctions.append({
+                'start': start,
+                'end': end,
+                'event_id': row.get('event_id', ''),
+                'event_type': row.get('event_type', 'unknown'),
+                'transcripts': list(transcripts_set)
+            })
+    
+    if not junctions:
+        if len(gene_atse) > 0:
+            first_row = gene_atse.iloc[0]
+        
+        # Try using atse_start/atse_end as fallback
+        for _, row in gene_atse.iterrows():
+            if 'atse_start' in row and 'atse_end' in row and pd.notna(row['atse_start']) and pd.notna(row['atse_end']):
+                try:
+                    start = int(row['atse_start'])
+                    end = int(row['atse_end'])
+                    junctions.append({
+                        'start': start,
+                        'end': end,
+                        'event_id': row.get('event_id', ''),
+                        'event_type': row.get('event_type', 'unknown'),
+                        'transcripts': list(transcripts_set)
+                    })
+                except (ValueError, TypeError):
+                    continue
+    
+    # Remove duplicates and sort junctions
+    unique_junctions = []
+    seen = set()
+    for j in junctions:
+        key = (j['start'], j['end'])
+        if key not in seen:
+            seen.add(key)
+            unique_junctions.append(j)
+    
+    unique_junctions.sort(key=lambda x: x['start'])
+    
+    return {
+        'gene_name': gene_name,
+        'gene_id': gene_id_with_version,
+        'strand': strand,
+        'chromosome': chromosome,
+        'junctions': unique_junctions,
+        'transcripts': sorted(list(transcripts_set))
+    }
+
+
+def create_junction_exon_visualization(gene_data: dict, 
+                                       height: int = 300) -> go.Figure:
+    """Create junction and exon visualization identical to transcript structure plot + junctions"""
+    
+    if 'error' in gene_data:
+        return create_empty_atse_message(gene_data['error'])
+    
+    junctions = gene_data['junctions']
+    gene_name = gene_data['gene_name']
+    gene_id = gene_data['gene_id']
+    strand = gene_data['strand']
+    
+    # Get PSL data for transcript structure (same as isoform panel)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    psl_file = os.path.join(base_dir, "data", "all_samples_sp_collapse_all_chr_no_treatment_full.psl")
+    
+    if os.path.exists(psl_file):
+        psl_data = load_psl_data(psl_file)
+    else:
+        psl_data = pd.DataFrame()
+    
+    db_path = os.path.join(base_dir, "data", "isoformgazer.db")
+    transcript_data = process_transcript_structure(psl_data, gene_name, db_path)
+    
+    if transcript_data.empty and not junctions:
+        return create_empty_atse_message(f"No transcript or junction data found for {gene_name}")
+    
+    fig = go.Figure()
+    exon_color = '#2E86C1'  
+    intron_color = '#85929E' 
+    junction_color = '#85929E' 
+    
+    if not transcript_data.empty:
+        transcript_summary = transcript_data.groupby('trans_id').agg({
+            'transcript_length': 'first',
+            'transcript_start': 'min',
+            'transcript_end': 'max'
+        }).sort_values('transcript_length', ascending=False).reset_index()
+        
+        transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
+        plot_data = transcript_data.merge(transcript_summary[['trans_id', 'trans_order']], on='trans_id')
+        
+        min_start = plot_data['transcript_start'].min()
+        max_end = plot_data['transcript_end'].max()
+        y_max = len(transcript_summary) + 1
+        
+        for _, transcript in transcript_summary.iterrows():
+            trans_id = transcript['trans_id']
+            trans_order = transcript['trans_order']
+            
+            trans_exons = plot_data[plot_data['trans_id'] == trans_id].sort_values('exon_start')
+            
+            fig.add_trace(go.Scatter(
+                x=[transcript['transcript_start'], transcript['transcript_end']],
+                y=[trans_order, trans_order],
+                mode='lines',
+                line=dict(color=intron_color, width=2),
+                showlegend=False,
+                hovertemplate=f"Transcript: {trans_id}<br>Length: {transcript['transcript_length']:,} bp<extra></extra>"
+            ))
+            
+            for _, exon in trans_exons.iterrows():
+                fig.add_shape(
+                    type="rect",
+                    x0=exon['exon_start'], y0=trans_order - 0.3,
+                    x1=exon['exon_end'], y1=trans_order + 0.3,
+                    fillcolor=exon_color,
+                    line=dict(color=exon_color, width=1),
+                    opacity=0.8
+                )
+                
+                fig.add_trace(go.Scatter(
+                    x=[(exon['exon_start'] + exon['exon_end']) / 2],
+                    y=[trans_order],
+                    mode='markers',
+                    marker=dict(size=1, opacity=0),
+                    showlegend=False,
+                    hovertemplate=f"Exon {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Position: {exon['exon_start']:,}-{exon['exon_end']:,}<extra></extra>"
+                ))
+        
+        for _, transcript in transcript_summary.iterrows():
+            fig.add_annotation(
+                x=max_end + (max_end - min_start) * 0.02,
+                y=transcript['trans_order'],
+                text=transcript['trans_id'],
+                showarrow=False,
+                xanchor='left',
+                yanchor='middle',
+                font=dict(size=10)
+            )
+        
+        # Set junction start position above transcripts
+        junction_y_start = y_max + 0.5
+        
+    else:
+        if junctions:
+            all_coords = []
+            for j in junctions:
+                all_coords.extend([j['start'], j['end']])
+            min_start = min(all_coords) - 1000
+            max_end = max(all_coords) + 1000
+        else:
+            min_start, max_end = 0, 100000
+        
+        y_max = 1
+        junction_y_start = 1.5
+    
+    if junctions:
+        for i, junction in enumerate(junctions):
+            start = junction['start']
+            end = junction['end']
+            junction_y_pos = junction_y_start + (i * 1.0)
+            
+            fig.add_shape(
+                type="rect",
+                x0=start, y0=junction_y_pos - 0.15,
+                x1=end, y1=junction_y_pos + 0.15,
+                fillcolor=junction_color,
+                line=dict(color=junction_color, width=1),
+                opacity=0.8
+            )
+            
+            junction_id = f"chr{gene_data.get('chromosome', '').replace('chr', '')}_{start}_{end}_{strand}"
+            
+            fig.add_annotation(
+                x=max_end + (max_end - min_start) * 0.02,
+                y=junction_y_pos,
+                text=junction_id,
+                showarrow=False,
+                xanchor='left',
+                yanchor='middle',
+                font=dict(size=10, color='black')
+            )
+            
+            fig.add_trace(go.Scatter(
+                x=[(start + end) / 2],
+                y=[junction_y_pos],
+                mode='markers',
+                marker=dict(size=10, opacity=0),
+                showlegend=False,
+                hovertemplate=f'Junction: {start:,}-{end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}<extra></extra>'
+            ))
+    
+    total_y_range = junction_y_start + len(junctions) * 1.0 + 0.5 if junctions else y_max
+    
+    fig.update_layout(
+        title={
+            'text': f"Splice Junctions and Exons for Gene {gene_name}<br>(ID: {gene_id}, Strand: {strand})",
+            'x': 0.5,
+            'xanchor': 'center',
+            'font': {'size': 14}
+        },
+        xaxis=dict(
+            title="Genomic Position",
+            range=[min_start - 1000, max_end + 1000],  
+            showgrid=False, 
+            tickformat=',',
+            rangeslider=dict(visible=True, range=[min_start, max_end])  
+        ),
+        yaxis=dict(
+            showticklabels=False,
+            showgrid=False,
+            zeroline=False,
+            range=[0, total_y_range]  
+        ),
+        height=max(height, int(total_y_range * 40 + 150)), 
+        margin=dict(l=100, r=150, t=80, b=50),  
+        hovermode='closest',
+        plot_bgcolor='white'
+    )
+    
+    return fig
+
+
+def create_exon_regions_from_junctions(junctions: list, region_start: int, region_end: int) -> list:
+    """Create exon regions based on junction coordinates"""
+    if not junctions:
+        return [(region_start + 500, region_end - 500)]
+    
+    splice_sites = set()
+    for junction in junctions:
+        splice_sites.add(junction['start'])
+        splice_sites.add(junction['end'])
+    
+    sorted_sites = sorted(splice_sites)
+    exon_regions = []
+    
+    # First exon (from region start to first splice site)
+    if sorted_sites:
+        first_exon_end = sorted_sites[0] - 50
+        if first_exon_end > region_start:
+            exon_regions.append((region_start + 200, first_exon_end))
+    
+    # Internal exons (between splice sites)
+    for i in range(len(sorted_sites) - 1):
+        exon_start = sorted_sites[i] + 50
+        exon_end = sorted_sites[i + 1] - 50
+        if exon_end > exon_start:
+            exon_regions.append((exon_start, exon_end))
+    
+    # Last exon (from last splice site to region end)
+    if sorted_sites:
+        last_exon_start = sorted_sites[-1] + 50
+        if last_exon_start < region_end:
+            exon_regions.append((last_exon_start, region_end - 200))
+    
+    if not exon_regions:
+        exon_regions = [(region_start + 200, region_end - 200)]
+    
+    return exon_regions
+
+
+def create_empty_atse_message(message: str) -> go.Figure:
+    """Create empty figure with message for ATSE plots"""
+    fig = go.Figure()
+    
+    fig.add_annotation(
+        text=message,
+        xref="paper", yref="paper",
+        x=0.5, y=0.5, xanchor='center', yanchor='middle',
+        showarrow=False,
+        font=dict(size=14, color="gray")
+    )
+    
+    fig.update_layout(
+        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        plot_bgcolor='white',
+        height=300,
+        margin=dict(l=50, r=50, t=50, b=50)
+    )
+    
     return fig
