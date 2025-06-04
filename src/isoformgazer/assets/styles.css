@@ -8,6 +8,33 @@ html, body {
     background-color: #f6f6f6;
 }
 
+.panel h2 {
+    font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #0C4142; /* matches your main header background */
+    letter-spacing: 0.5px;
+    margin-top: 0;
+    margin-bottom: 18px;
+    padding-top: 10px;
+    padding-bottom: 0px;
+    #border-bottom: 2px solid #0C4142; /* subtle underline for separation */
+    background: linear-gradient(90deg, #0C4142 0%, #0a7f8c 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    text-align: center;
+    box-shadow: none;
+}
+
+@media (max-width: 768px) {
+    .panel h2 {
+        font-size: 1.1rem;
+        padding-bottom: 4px;
+        margin-bottom: 10px;
+    }
+}
+
 #react-entry-point {
     height: 100%;
     width: 100%;
