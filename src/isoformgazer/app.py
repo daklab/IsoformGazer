@@ -981,7 +981,7 @@ def update_transcript_structure(selected_gene, plot_height, filtered_transcript_
             transcript_data = transcript_data[transcript_data['trans_id'].isin(filtered_transcript_ids)]
             print(f"Filtered transcript data to {len(transcript_data)} records based on table filtering")
         
-        fig = create_transcript_structure_plot(transcript_data, selected_gene, height=plot_height)
+        fig = create_transcript_structure_plot(db_path, transcript_data, selected_gene, height=plot_height)
         return fig
     except Exception as e:
         print(f"Error creating transcript plot: {e}")

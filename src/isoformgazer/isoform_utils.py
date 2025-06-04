@@ -124,9 +124,31 @@ def load_tpm_data(tpm_file_path: str) -> pd.DataFrame:
         return pd.DataFrame()
     
 
-def create_transcript_structure_plot(transcript_data: pd.DataFrame, gene_name: str, height: int = 400) -> go.Figure:
+def create_transcript_structure_plot(db_path: str, transcript_data: pd.DataFrame, gene_name: str, height: int = 400) -> go.Figure:
     """Create transcript structure plot similar to the R version"""
+    orf_perplexity = "Unknown"
+    conn = sqlite3.connect(db_path)
     
+    orf_column = 'ORF_perplexity'
+    query = f"SELECT {orf_column} FROM isoforms WHERE gene_name = ? LIMIT 1"
+    result = pd.read_sql_query(query, conn, params=[gene_name])
+    
+    if not result.empty:
+        orf_value = result.iloc[0][orf_column]
+        if pd.isna(orf_value) or orf_value is None:
+            orf_perplexity = "None"
+        else:
+            orf_perplexity = f"{orf_value:.3f}"
+    else:
+        orf_perplexity = "No data available"
+    conn.close()
+
+    strand = "" 
+    if not transcript_data.empty:
+        unique_strands = transcript_data['strand'].unique()
+        if len(unique_strands) > 0:
+            strand = unique_strands[0]
+
     if transcript_data.empty:
         return create_empty_isoform_message(f"No transcript data for gene: {gene_name}")
     
@@ -182,9 +204,11 @@ def create_transcript_structure_plot(transcript_data: pd.DataFrame, gene_name: s
                 hovertemplate=f"Exon {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Position: {exon['exon_start']:,}-{exon['exon_end']:,}<extra></extra>"
             ))
     
+    title_text = f"{gene_name} Transcript Summary<br>(ORF Perplexity: {orf_perplexity}, Strand: {strand})"
+    
     fig.update_layout(
         title={
-            'text': f"{gene_name} Transcript Summary",
+            'text': title_text,
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 14}
@@ -203,7 +227,7 @@ def create_transcript_structure_plot(transcript_data: pd.DataFrame, gene_name: s
             range=[0, y_max]
         ),
         height=height,
-        margin=dict(l=100, r=150, t=50, b=50),
+        margin=dict(l=100, r=150, t=80, b=50),
         hovermode='closest',
         plot_bgcolor='white'
     )
