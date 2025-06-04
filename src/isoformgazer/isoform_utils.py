@@ -417,7 +417,7 @@ def collapse_tissues_by_average(gene_tpm: pd.DataFrame,
             tissue_groups[tissue_name] = []
         tissue_groups[tissue_name].append(col)
     
-    print(f"Collapsing {len(tissue_cols)} experiments into {len(tissue_groups)} tissues")
+    #print(f"Collapsing {len(tissue_cols)} experiments into {len(tissue_groups)} tissues")
     averaged_data = []
     tissue_display_names = []
     tissue_categories = []
