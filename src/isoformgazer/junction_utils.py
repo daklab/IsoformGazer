@@ -1,4 +1,5 @@
 import sqlite3
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -17,8 +18,6 @@ from dash import dcc
 def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show'):
     """Create summary-level clustergram across all cell types and top junctions"""
     conn = sqlite3.connect(db_path)
-    
-    # Get a representative sample of junction data across all cell types
     query = """
     SELECT cell_type, junction_id, AVG(psi) as avg_psi, COUNT(*) as n_observations
     FROM junctions 
@@ -28,7 +27,6 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     ORDER BY n_observations DESC
     LIMIT 2000
     """
-    
     df = pd.read_sql_query(query, conn)
     conn.close()
     
@@ -48,6 +46,9 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     
     if psi_matrix_filtered.empty:
         return create_empty_clustergram_message("No variable junction data available")
+    
+    # Clamp vals so always in 0-1 range
+    psi_matrix_filtered = psi_matrix_filtered.clip(lower=0, upper=1)
     
     left_margin = max(150, int(height * 0.25))
     hide_junction_labels = (show_tables == 'show')
@@ -70,7 +71,8 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             'bg': '#506784'
         },
         line_width=2,
-        display_ratio=[0.2, 0.1] 
+        display_ratio=[0.2, 0.1],
+        standardize='none'
     )
     
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
@@ -109,19 +111,17 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     
     if len(gene_vals) == 0:
         return create_empty_clustergram_message(f"No junction data found for gene: {gene_name}")
-    
     psi_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
-    psi_matrix = psi_matrix.fillna(0)
     
+    psi_matrix = psi_matrix.fillna(0)
     orig_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
     psi_matrix = psi_matrix[valid_columns]
-    psi_matrix = psi_matrix.loc[(psi_matrix != 0).any(axis=1), :]
     
     if psi_matrix.empty:
         return create_empty_clustergram_message(f"No PSI data available for gene: {gene_name}")
     
-    print(f"Showing {psi_matrix.shape[1]} junctions for gene {gene_name}")
+    #print(f"Showing {psi_matrix.shape[1]} junctions for gene {gene_name}")
     
     junction_labels = [column for column in psi_matrix.columns]
     
@@ -138,32 +138,78 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     
     width = min(1000, max(800, len(junction_labels) * 12, int(height * 1.2)))
     
-    # Create clustergram
-    clustergram = dash_bio.Clustergram(
-        data=psi_matrix.values,
-        column_labels=junction_labels,
-        row_labels=list(psi_matrix.index),
-        height=actual_clustergram_height, 
-        width=width,
-        color_threshold={
-            'row': 0.7,
-            'col': 0.7
-        },
-        # Hide junction labels when master tables are showing: can look at junction name by hovering with cursor
-        hidden_labels='col' if hide_junction_labels else None,
-        cluster='all',
-        color_list={
-            'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
-            'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
-            'bg': '#506784'
-        },
-        line_width=2,
-        display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05] 
-    )
+    psi_matrix_processed = psi_matrix.copy()
+    psi_matrix_processed = psi_matrix_processed.replace([np.inf, -np.inf], 0)
+    psi_matrix_processed = psi_matrix_processed.astype(float)
+    psi_matrix_processed = psi_matrix_processed.clip(lower=0, upper=1)
+    psi_matrix_processed = psi_matrix_processed.fillna(0)
+    
+    try:
+        clustergram = dash_bio.Clustergram(
+            data=psi_matrix_processed.values,
+            column_labels=junction_labels,
+            row_labels=list(psi_matrix_processed.index),
+            height=actual_clustergram_height, 
+            width=width,
+            color_threshold={
+                'row': 0.7,
+                'col': 0.7
+            },
+            hidden_labels='col' if hide_junction_labels else None,
+            cluster='all',
+            color_list={
+                'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
+                'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
+                'bg': '#506784'
+            },
+            line_width=2,
+            display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05],
+            standardize='none'
+        )
+        
+    except Exception as e:
+        print(f"Warning: standardize='none' failed, trying without standardize parameter: {e}")
+        try:
+            clustergram = dash_bio.Clustergram(
+                data=psi_matrix_processed.values,
+                column_labels=junction_labels,
+                row_labels=list(psi_matrix_processed.index),
+                height=actual_clustergram_height, 
+                width=width,
+                color_threshold={
+                    'row': 0.7,
+                    'col': 0.7
+                },
+                hidden_labels='col' if hide_junction_labels else None,
+                cluster='all',
+                color_list={
+                    'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
+                    'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
+                    'bg': '#506784'
+                },
+                line_width=2,
+                display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05]
+            )
+            
+        except Exception as e2:
+            print(f"Error creating clustergram: {e2}")
+            return create_empty_clustergram_message(f"Error creating visualization for {gene_name}")
+    
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
+    
+    try:
+        if len(clustergram.data) > 0:
+            heatmap_trace = clustergram.data[-1]
+            heatmap_trace.zmin = 0  
+            heatmap_trace.zmax = 1  
+            heatmap_trace.colorscale = colorscale
+            heatmap_trace.showscale = True
+    except Exception as e:
+        print(f"Warning: Could not set color range: {e}")
+    
     clustergram.update_layout(
         title={
-            'text': f"Splicing PSI Clustermap for {gene_name} ({psi_matrix.shape[1]} junctions)",
+            'text': f"Splicing PSI Clustermap for {gene_name} ({psi_matrix_processed.shape[1]} junctions)",
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 14 if hide_junction_labels else 16}  
@@ -184,7 +230,6 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     )
     
     return clustergram
-
 
 
 def create_empty_clustergram_message(message):
