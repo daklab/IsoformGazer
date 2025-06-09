@@ -23,7 +23,7 @@ from junction_utils import (
 from isoform_utils import (
     load_psl_data, load_tpm_data, process_transcript_structure,
     create_transcript_structure_plot, create_isoform_expression_heatmap,
-    create_empty_isoform_message
+    create_isoform_expression_clustergram, create_empty_isoform_message
 )
 
 RANDOM_SEED = 18
@@ -245,7 +245,7 @@ app.index_string = '''
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>IsoformGazers</title>
+        <title>Isoform Gazer</title>
         {%css%}
     </head>
     <body>
@@ -854,6 +854,57 @@ def update_container_classes(show_tables):
         return 'graph-wrapper tables-hidden', 'graph-wrapper tables-hidden'
 
 
+app.clientside_callback(
+    """
+    function(n_clicks, show_tables) {
+        setTimeout(function() {
+            // Force resize of all Plotly graphs
+            var graphs = document.querySelectorAll('.js-plotly-plot');
+            graphs.forEach(function(graph) {
+                if (graph && graph.layout) {
+                    // Force Plotly to recalculate size
+                    Plotly.relayout(graph, {autosize: true});
+                    Plotly.Plots.resize(graph);
+                }
+            });
+        }, 200);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    dash.dependencies.Output('heatmap1', 'className', allow_duplicate=True),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('show-table-radio', 'value')],
+    prevent_initial_call=True
+)
+
+app.clientside_callback(
+    """
+    function(show_tables) {
+        setTimeout(function() {
+            // Use the correct Plotly method for resizing
+            if (window.Plotly) {
+                var graphs = document.querySelectorAll('.js-plotly-plot');
+                graphs.forEach(function(graph) {
+                    if (graph && graph.data) {
+                        try {
+                            // Use Plotly.relayout instead of Plots.resize
+                            window.Plotly.relayout(graph, {autosize: true});
+                        } catch (e) {
+                            console.log('Plotly relayout error:', e);
+                        }
+                    }
+                });
+            }
+        }, 200);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    dash.dependencies.Output('gene-search-dropdown', 'style', allow_duplicate=True),
+    [dash.dependencies.Input('show-table-radio', 'value')],
+    prevent_initial_call=True
+)
+
+
 @app.callback(
     dash.dependencies.Output('heatmap1', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
@@ -866,7 +917,7 @@ def update_container_classes(show_tables):
 )
 def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_tables, 
                           show_labels, collapse_tissues, filtered_transcript_ids):
-    """Update isoform expression heatmap with filtered data"""
+    """Update isoform clustergram with junction clustergram heights"""
     if use_ratio_data: 
         current_data = ratio_data 
         data_type = "Ratio"
@@ -883,34 +934,34 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
         return {
             'data': [go.Heatmap(z=data1, colorscale=colorscale)],
             'layout': go.Layout(
-                margin=dict(l=40, r=40, t=40, b=120),
+                margin=dict(l=40, r=40, t=40, b=40),
                 title={'text': f'Isoform Expression by Tissue ({data_type})', 'font': {'size': 14}},
-                autosize=False,
+                autosize=True,
                 height=heatmap_height
             )
         }
     
     try:
-        # FILTER the data based on master table filtering
         filtered_data = current_data.copy()
         if filtered_transcript_ids:
             filtered_data = filtered_data[filtered_data['transcript'].isin(filtered_transcript_ids)]
-            print(f"Filtered isoform data to {len(filtered_data)} transcripts based on table filtering")
         
-        fig = create_isoform_expression_heatmap(
-            tpm_data=filtered_data, 
+        fig = create_isoform_expression_clustergram(
+            tpm_data=filtered_data,
             gene_name=selected_gene,
-            height=heatmap_height,
+            height=heatmap_height,  
             colorscale=colorscale,
             data_type=data_type,
             show_tables=show_tables,
             show_labels=show_labels,
             collapse_tissues=collapse_tissues
         )
+        fig.update_layout(autosize=True)
         
         return fig
+    
     except Exception as e:
-        print(f"Error creating isoform heatmap: {e}")
+        print(f"Error creating isoform clustergram: {e}")
         return create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
 
 
@@ -924,26 +975,6 @@ def update_heatmap_container_class(show_tables):
         return 'with-tables'
     else:
         return ''
-
-
-app.clientside_callback(
-    """
-    function(show_tables) {
-        setTimeout(function() {
-            var graphs = document.querySelectorAll('.js-plotly-plot');
-            graphs.forEach(function(graph) {
-                if (graph && graph.layout) {
-                    Plotly.Plots.resize(graph);
-                }
-            });
-        }, 100);
-        return window.dash_clientside.no_update;
-    }
-    """,
-    dash.dependencies.Output('heatmap1', 'style', allow_duplicate=True),
-    [dash.dependencies.Input('show-table-radio', 'value')],
-    prevent_initial_call=True 
-)
 
 
 ######################################################################
