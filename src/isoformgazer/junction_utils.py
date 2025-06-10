@@ -12,7 +12,7 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
-from isoform_utils import load_psl_data, process_transcript_structure
+from isoform_utils import load_psl_data, get_gene_id_for_gene_name
 
 ###################################################################
 # VISUALIZATION METHODS
@@ -123,7 +123,6 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     # FILTER based on master table selection
     if filtered_junction_ids:
         gene_vals = gene_vals[gene_vals['junction_id'].isin(filtered_junction_ids)]
-        print(f"Filtered junction data to {len(gene_vals)} records based on table filtering")
         
         if gene_vals.empty:
             return create_empty_clustergram_message(f"No junction data remaining after filtering for gene: {gene_name}")
@@ -422,6 +421,58 @@ def process_gene_atse_data(atse_df: pd.DataFrame, gene_name: str, db_path: str) 
         'junctions': unique_junctions,
         'transcripts': sorted(list(transcripts_set))
     }
+
+
+def process_transcript_structure(psl_df: pd.DataFrame, 
+                                 gene_name: str, 
+                                 db_path: str) -> pd.DataFrame:
+    """Process PSL data to get transcript structure for a specific gene"""
+    
+    # Get gene_id for the gene_name from the database
+    gene_id = get_gene_id_for_gene_name(db_path, gene_name)
+    
+    if gene_id is None:
+        print(f"Cannot process transcript structure: no gene_id found for {gene_name}")
+        return pd.DataFrame()
+    
+    # Filter PSL data for specific gene
+    gene_psl = psl_df[psl_df['gene_id'].str.contains(gene_id, na=False)]
+    
+    if gene_psl.empty:
+        print(f"No PSL data found for gene_id: {gene_id}")
+        return pd.DataFrame()
+    
+    #print(f"Found {len(gene_psl)} PSL records for gene {gene_name} (gene_id: {gene_id})")
+    
+    # Process block information
+    transcript_data = []
+    
+    for _, row in gene_psl.iterrows():
+        # Parse block sizes and starts
+        try:
+            block_sizes = [int(x) for x in row['blockSizes'].strip(',').split(',') if x]
+            block_starts = [int(x) for x in row['tStarts'].strip(',').split(',') if x]
+            
+            # Create exon coordinates
+            for i, (size, start) in enumerate(zip(block_sizes, block_starts)):
+                transcript_data.append({
+                    'trans_id': row['trans_id'],
+                    'gene_id': row['gene_id'],
+                    'chr': row['tName'],
+                    'strand': row['strand'],
+                    'transcript_start': row['tStart'],
+                    'transcript_end': row['tEnd'],
+                    'transcript_length': row['transcript_length'],
+                    'exon_number': i + 1,
+                    'exon_start': start,
+                    'exon_end': start + size,
+                    'exon_size': size
+                })
+        except Exception as e:
+            print(f"Error processing transcript {row['trans_id']}: {e}")
+            continue
+    
+    return pd.DataFrame(transcript_data)
 
 
 def create_junction_exon_visualization(gene_data: dict, 

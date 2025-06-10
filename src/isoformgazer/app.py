@@ -1,5 +1,6 @@
 import os 
 import math
+import traceback
 from tqdm import tqdm
 import sqlite3
 import scipy
@@ -21,9 +22,9 @@ from junction_utils import (
     create_empty_atse_message, create_empty_clustergram_message
 )
 from isoform_utils import (
-    load_psl_data, load_tpm_data, process_transcript_structure,
-    create_transcript_structure_plot, create_isoform_expression_heatmap,
-    create_isoform_expression_clustergram, create_empty_isoform_message
+    load_expression_data, process_transcript_structure,
+    create_transcript_structure_plot, create_isoform_expression_clustergram, 
+    create_empty_isoform_message
 )
 
 RANDOM_SEED = 18
@@ -84,11 +85,12 @@ def setup_local_database(force_rebuild=False):
     ########################################################
     # Load isoform master table data
     ########################################################
-    isoform_file = os.path.join(data_dir, 
-                                "mt_isoform_gazers_250514.tsv")
+    isoform_file = os.path.join(data_dir, "mt_isoform_gazers_250514.tsv")
     
     with tqdm(desc="Loading isoform master table data", unit=" rows") as pbar:
         df_isoform = pd.read_csv(isoform_file, sep='\t')
+        df_isoform['id'] = df_isoform.index # IMPORTANT: we need this to match PSL file 1-based indexing!
+        df_isoform['gene_id'] = df_isoform['gene_id'].str.split('.').str[0]
         pbar.update(len(df_isoform))
     
     with tqdm(desc="Writing isoform master table data to local database", unit="rows", total=len(df_isoform)) as pbar:
@@ -99,10 +101,93 @@ def setup_local_database(force_rebuild=False):
     print()
 
     ########################################################
+    # Load isoform PSL data
+    ########################################################
+    print("Processing PSL data...")
+    psl_file = os.path.join(data_dir, "all_samples_sp_collapse_all_chr_no_treatment_full.psl")
+    psl_columns = [
+        'matches', 'misMatches', 'repMatches', 'nCount', 'qNumInsert', 'qBaseInsert',
+        'tNumInsert', 'tBaseInsert', 'strand', 'qName', 'qSize', 'qStart', 'qEnd',
+        'tName', 'tSize', 'tStart', 'tEnd', 'blockCount', 'blockSizes', 'qStarts', 'tStarts'
+    ]
+
+    # Get total PSL rows for progress tracking
+    total_psl_rows = sum(1 for _ in open(psl_file, 'r')) 
+    chunk_size = 100000
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS psl_data (
+            id INTEGER PRIMARY KEY,
+            matches INTEGER,
+            misMatches INTEGER,
+            repMatches INTEGER,
+            nCount INTEGER,
+            qNumInsert INTEGER,
+            qBaseInsert INTEGER,
+            tNumInsert INTEGER,
+            tBaseInsert INTEGER,
+            strand TEXT,
+            qName TEXT,
+            qSize INTEGER,
+            qStart INTEGER,
+            qEnd INTEGER,
+            tName TEXT,
+            tSize INTEGER,
+            tStart INTEGER,
+            tEnd INTEGER,
+            blockCount INTEGER,
+            blockSizes TEXT,
+            qStarts TEXT,
+            tStarts TEXT,
+            gene_id TEXT,       
+            trans_id TEXT,
+            transcript_length INTEGER
+        )
+    """)
+
+    with tqdm(total=total_psl_rows, desc="Loading PSL data", unit="rows") as pbar:
+        psl_chunks = pd.read_csv(psl_file, sep='\t', names=psl_columns, chunksize=chunk_size)
+        
+        for chunk_idx, chunk in enumerate(psl_chunks):
+            start_idx = (chunk_idx * chunk_size) + 1
+            chunk['id'] = range(start_idx, start_idx + len(chunk))
+            
+            # Extract transcript/gene IDs from qName
+            #split_qname = chunk['qName'].str.split('_')
+            #chunk['trans_id'] = split_qname.str[0]
+            #chunk['gene_id'] = split_qname.str[1].split('.').str[0]
+            split_result = chunk['qName'].str.split(r'[:_]', n=1, expand=True)  # Split on : or _
+            chunk['trans_id'] = split_result[0].str.split('.').str[0]
+            chunk['gene_id'] = split_result[1].str.split('.').str[0]
+            chunk['transcript_length'] = chunk['tEnd'] - chunk['tStart']
+            
+            if 'index' in chunk.columns:
+                chunk.drop(columns=['index'], inplace=True)
+                
+            chunk.to_sql('psl_data', conn, if_exists='append', index=False)
+            pbar.update(len(chunk))
+
+    print("Processing isoform TPM data...")
+    tpm_file = os.path.join(data_dir, "all_tpm.tsv")
+    tpm_df = pd.read_csv(tpm_file, sep='\t')
+    tpm_df['id'] = tpm_df.index
+    tpm_df.to_sql('tpm_data', conn, if_exists='replace')
+
+    print("Processing isoform ratio data...")
+    ratio_file = os.path.join(data_dir, "all_quant_ratio.tsv")
+    ratio_df = pd.read_csv(ratio_file, sep='\t')
+    ratio_df['id'] = ratio_df.index
+    ratio_df.to_sql('ratio_data', conn, if_exists='replace')
+
+    print("Creating isoform indexes...")
+    conn.execute("CREATE INDEX idx_psl_gene ON psl_data(id)")
+    conn.execute("CREATE INDEX idx_iso_gene ON isoforms(gene_name, id)")
+    conn.commit()
+
+    ########################################################
     # Load junction master table data
     ########################################################
-    junction_file = os.path.join(data_dir, 
-                                 "pseudobulk_final_broad_cell_type_20250514_072922.csv")
+    junction_file = os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250514_072922.csv")
     
     # Need to count total lines (minus header) to estimate progress
     with open(junction_file, 'r') as f:
@@ -178,40 +263,26 @@ def setup_local_database(force_rebuild=False):
     return db_path
 
 
-###################################################################
-# ISOFORM DATA SETUP
-###################################################################
-def setup_isoform_data():
-    """
-    Load both TPM and ratio isoform data
-    """
-    print("Preparing PSL data...")
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+def verify_database_schema(db_path):
+    """Verify database schema has required columns"""
+    conn = sqlite3.connect(db_path)
     
-    psl_file = os.path.join(base_dir, "data", "all_samples_sp_collapse_all_chr_no_treatment_full.psl")
-    psl_data = pd.DataFrame()
-    if os.path.exists(psl_file):
-        psl_data = load_psl_data(psl_file)
-    else:
-        print(f"PSL file not found at {psl_file}")
+    # Check isoforms table
+    iso_schema = pd.read_sql("PRAGMA table_info(isoforms)", conn)
+    print("Isoforms table columns:", iso_schema['name'].tolist())
     
-    tpm_file = os.path.join(base_dir, "data", "all_tpm.tsv")
-    tpm_data = pd.DataFrame()
-    if os.path.exists(tpm_file):
-        tpm_data = load_tpm_data(tpm_file)
-    else:
-        print(f"TPM file not found at {tpm_file}")
+    # Check psl_data table
+    psl_schema = pd.read_sql("PRAGMA table_info(psl_data)", conn)
+    print("PSL data table columns:", psl_schema['name'].tolist())
     
-    ratio_file = os.path.join(base_dir, "data", "all_quant_ratio.tsv")
-    ratio_data = pd.DataFrame()
-    if os.path.exists(ratio_file):
-        ratio_data = load_tpm_data(ratio_file)
-    else:
-        print(f"Ratio file not found at {ratio_file}")
+    # Verify id columns exist
+    if 'id' not in iso_schema['name'].values:
+        print("ERROR: Missing 'id' column in isoforms table")
+    if 'id' not in psl_schema['name'].values:
+        print("ERROR: Missing 'id' column in psl_data table")
     
-    return psl_data, tpm_data, ratio_data
+    conn.close()
 
-psl_data, tpm_data, ratio_data = setup_isoform_data()
 
 ###################################################################
 # ATSE DATA SETUP
@@ -273,6 +344,7 @@ header = html.Div(className='app-header', children=[
 left_data_table = dash_table.DataTable(
     id='left_data_table',
     columns=get_master_table_columns(db_path, table_name='isoforms'),
+    hidden_columns=['id'],
     data=[],
     editable=False,
     filter_action="custom",
@@ -322,6 +394,7 @@ left_data_table = dash_table.DataTable(
 right_data_table = dash_table.DataTable(
     id='right_data_table',
     columns=get_master_table_columns(db_path, table_name='junctions'),
+    hidden_columns=['id'],
     data=[],
     editable=False,
     filter_action="custom",
@@ -661,32 +734,32 @@ app.layout.children.extend([
 @app.callback(
     [dash.dependencies.Output('filtered-isoform-store', 'data'),
      dash.dependencies.Output('filtered-junction-store', 'data')],
-    [dash.dependencies.Input('isoform-master-table', 'derived_virtual_data'),
-     dash.dependencies.Input('junction-master-table', 'derived_virtual_data')],
-    [dash.dependencies.State('isoform-master-table', 'data'),
-     dash.dependencies.State('junction-master-table', 'data')]
+    [dash.dependencies.Input('left_data_table', 'derived_virtual_data'),
+     dash.dependencies.Input('right_data_table', 'derived_virtual_data')],
+    [dash.dependencies.State('left_data_table', 'data'),
+     dash.dependencies.State('right_data_table', 'data')]
 )
 def update_filtered_data_stores(isoform_filtered_data, junction_filtered_data, 
                                isoform_full_data, junction_full_data):
     """Store filtered transcript and junction IDs from master tables"""
-    isoform_all_ids = [row.get('transcript', '') for row in isoform_full_data]
-    junction_all_ids = [row.get('junction_id', '') for row in junction_full_data]
+    # Extract IDs using new 'id' column
+    isoform_all_ids = [row.get('id', '') for row in isoform_full_data]
+    junction_all_ids = [row.get('id', '') for row in junction_full_data]
     
-    # Extract filtered transcript IDs from isoform table
     filtered_transcript_ids = []
     if isoform_filtered_data:
-        filtered_transcript_ids = [row.get('transcript', '') 
+        filtered_transcript_ids = [row.get('id', '') 
                                   for row in isoform_filtered_data 
-                                  if row.get('transcript') in isoform_all_ids]
+                                  if row.get('id') in isoform_all_ids]
     
-    # Extract filtered junction IDs from junction table  
     filtered_junction_ids = []
     if junction_filtered_data:
-        filtered_junction_ids = [row.get('junction_id', '') 
+        filtered_junction_ids = [row.get('id', '') 
                                 for row in junction_filtered_data 
-                                if row.get('junction_id') in junction_all_ids]
+                                if row.get('id') in junction_all_ids]
     
     return filtered_transcript_ids, filtered_junction_ids
+
 
 ##############################################################################################
 # CALLBACK FOR QUERYING BY GENE IN CONTROL PANEL ('Query' tab): if no search is performed, we 
@@ -919,17 +992,21 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
                           show_labels, collapse_tissues, filtered_transcript_ids):
     """Update isoform clustergram with junction clustergram heights"""
     if use_ratio_data: 
-        current_data = ratio_data 
+        current_data = load_expression_data(db_path=db_path, 
+                                            gene_name=selected_gene, 
+                                            data_type='ratio')
         data_type = "Ratio"
     else: 
-        current_data = tpm_data 
+        current_data = load_expression_data(db_path=db_path, 
+                                            gene_name=selected_gene, 
+                                            data_type='tpm')
         data_type = "TPM"
 
     if show_tables == 'show':
         heatmap_height = 450
     else:
         heatmap_height = 650
-    
+
     if not selected_gene or current_data.empty:
         return {
             'data': [go.Heatmap(z=data1, colorscale=colorscale)],
@@ -943,8 +1020,10 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
     
     try:
         filtered_data = current_data.copy()
-        if filtered_transcript_ids:
-            filtered_data = filtered_data[filtered_data['transcript'].isin(filtered_transcript_ids)]
+        filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
+        filtered_data = current_data[current_data['id'].isin(filtered_ids)] if filtered_ids else current_data
+        #if filtered_transcript_ids:
+        #    filtered_data = filtered_data[filtered_data['transcript'].isin(filtered_transcript_ids)]
         
         fig = create_isoform_expression_clustergram(
             tpm_data=filtered_data,
@@ -957,7 +1036,7 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
             collapse_tissues=collapse_tissues
         )
         fig.update_layout(autosize=True)
-        
+
         return fig
     
     except Exception as e:
@@ -986,7 +1065,7 @@ def update_heatmap_container_class(show_tables):
      dash.dependencies.Input('bar-height-slider', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data')]
 )
-def update_transcript_structure(selected_gene, plot_height, filtered_transcript_ids):
+def update_transcript_structure(selected_gene, plot_height, filtered_ids):
     """Update transcript structure plot based on gene selection"""
     if not selected_gene:
         fig = go.Figure()
@@ -1003,17 +1082,19 @@ def update_transcript_structure(selected_gene, plot_height, filtered_transcript_
             margin=dict(l=50, r=50, t=50, b=50)
         )
         return fig
-    
+
     try:
-        transcript_data = process_transcript_structure(psl_data, selected_gene, db_path)
-        
-        # FILTER transcript data based on master table filtering
-        if filtered_transcript_ids and not transcript_data.empty:
-            transcript_data = transcript_data[transcript_data['trans_id'].isin(filtered_transcript_ids)]
-            print(f"Filtered transcript data to {len(transcript_data)} records based on table filtering")
+        filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+
+        # Filter transcript data based on master table querying by user
+        if filtered_ids and not transcript_data.empty:
+            transcript_data = transcript_data[transcript_data['id'].isin(filtered_ids)]
         
         fig = create_transcript_structure_plot(db_path, transcript_data, selected_gene, height=plot_height)
+        
         return fig
+    
     except Exception as e:
         print(f"Error creating transcript plot: {e}")
         return create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
@@ -1046,61 +1127,17 @@ def update_atse_visualization(selected_gene, filtered_junction_ids):
                     filtered_junctions.append(junction)
             
             gene_data['junctions'] = filtered_junctions
-            print(f"Filtered ATSE junctions to {len(filtered_junctions)} based on table filtering")
         
         fig = create_junction_exon_visualization(gene_data, height=300)
         
         return fig
+    
     except Exception as e:
         print(f"Error creating ATSE visualization: {e}")
-        import traceback
         traceback.print_exc()
+
         return create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
 
-
-#@app.callback(
-#    dash.dependencies.Output('atse-map', 'figure'),
-#    [dash.dependencies.Input('gene-search-dropdown', 'value')]
-#)
-#def update_atse_visualization(selected_gene):
-#    """Update ATSE splice junction visualization based on gene selection"""
-#    
-#    print(f"ATSE callback called with gene: {selected_gene}")
-#    print(f"ATSE data empty: {atse_data.empty}")
-#    print(f"ATSE data shape: {atse_data.shape if not atse_data.empty else 'N/A'}")
-    
-#    if not selected_gene:
-#        return create_empty_atse_message("Select a gene to view ATSE splice junctions")
-    
-#    if atse_data.empty:
-#        return create_empty_atse_message("ATSE data not loaded - check file path")
-    
-    # Get gene_id for the selected gene_name
-#    gene_id = get_gene_id_from_junction_db(db_path, selected_gene)
-    
-#    if gene_id is None:
-#        return create_empty_atse_message(f"No gene_id found for gene: {selected_gene}")
-    
-    # Check if gene_id exists in ATSE data?
-#    gene_count = len(atse_data[atse_data['gene_id'] == gene_id])
-#    print(f"Found {gene_count} ATSE records for gene_id '{gene_id}' (gene_name: '{selected_gene}')")
-    
-#    if gene_count == 0:
-#        return create_empty_atse_message(f"No ATSE data found for gene_id: {gene_id} (gene: {selected_gene})")
-    
-#    try:
-#        fig = create_fast_atse_visualization(
-#            db_path=db_path,
-#            atse_df=atse_data,
-#            gene_name=selected_gene,
-#            height=400
-#        )
-#        return fig
-#    except Exception as e:
-#        print(f"Error creating ATSE visualization: {e}")
-#        import traceback
-#        traceback.print_exc()
-#        return create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
 
 ###################################################################
 # INTRO BANNER 
@@ -1146,6 +1183,7 @@ if __name__ == '__main__':
     database_exists = check_database_status()
     if not database_exists:
         print("Database initialization completed.")
+        #verify_database_schema(db_path)
 
     display_ascii_banner()
 

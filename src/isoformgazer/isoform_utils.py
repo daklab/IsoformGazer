@@ -50,35 +50,84 @@ def get_gene_id_for_gene_name(db_path: str, gene_name: str) -> str:
         # Remove version number from gene_id (e.g., ENSG00000100320.16 -> ENSG00000100320)
         gene_id_clean = gene_id.split('.')[0]
         return gene_id_clean
+    
     else:
-        print(f"No gene_id found for gene_name '{gene_name}'")
         return None
+
+
+def prepare_gene_psl_data(psl_df: pd.DataFrame):
+    """Preprocesses result of process_transcript_structure() PSL data query to have expected structure 
+    for use with data visualization methods downstream."""
+    try: 
+        psl_columns = [
+                'matches', 'misMatches', 'repMatches', 'nCount', 'qNumInsert', 'qBaseInsert',
+                'tNumInsert', 'tBaseInsert', 'strand', 'qName', 'qSize', 'qStart', 'qEnd',
+                'tName', 'tSize', 'tStart', 'tEnd', 'blockCount', 'blockSizes', 'qStarts', 'tStarts'
+        ]
+
+        psl_df['gene_id'] = psl_df['qName'].str.split('_').str[1]
+        psl_df['trans_id'] = psl_df['qName'].str.split('_').str[0]
+
+        psl_df['transcript_length'] = psl_df['tEnd'] - psl_df['tStart']
+
+        return psl_df
+    
+    except Exception as e:
+        print(f"Error preprocessing PSL file data: {e}")
+        return pd.DataFrame()
     
 
-def process_transcript_structure(psl_df: pd.DataFrame, gene_name: str, db_path: str) -> pd.DataFrame:
-    """Process PSL data to get transcript structure for a specific gene"""
-    
-    # Get gene_id for the gene_name from the database
+def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: list) -> pd.DataFrame:
+    """Obtains gene_id based on queried gene name and queries the isoform and PSL data tables 
+    to fetch the needed data for generating isoform-level visualizations"""
     gene_id = get_gene_id_for_gene_name(db_path, gene_name)
     
-    if gene_id is None:
-        print(f"Cannot process transcript structure: no gene_id found for {gene_name}")
+    conn = sqlite3.connect(db_path)
+
+    isoform_query = """
+    SELECT id 
+    FROM isoforms 
+    WHERE gene_id LIKE ?
+    """
+    isoform_ids = pd.read_sql_query(isoform_query, conn, params=[gene_id])['id'].tolist()
+    if not isoform_ids:
         return pd.DataFrame()
     
-    # Filter PSL data for specific gene
-    gene_psl = psl_df[psl_df['gene_id'].str.contains(gene_id, na=False)]
+    if filtered_ids: 
+        isoform_ids = [id for id in isoform_ids if id in filtered_ids]
     
-    if gene_psl.empty:
-        print(f"No PSL data found for gene_id: {gene_id}")
+    # Master table filtering clauses if provided
+    placeholders = ','.join(['?'] * len(isoform_ids))
+    base_query = f"""
+    SELECT 
+        psl.id,
+        psl.trans_id,
+        psl.gene_id,
+        psl.tName,
+        psl.strand,
+        psl.tStart,
+        psl.tEnd,
+        (psl.tEnd - psl.tStart) AS transcript_length,
+        psl.blockSizes,
+        psl.tStarts
+    FROM psl_data psl
+    WHERE psl.id IN ({placeholders})
+    """
+    
+    try:
+        gene_psl = pd.read_sql_query(base_query, conn, params=isoform_ids)
+
+    except Exception as e:
+        print(f"Database error: {e}")
+        print(f"Query: {base_query}")
+        print(f"Params: {isoform_ids}")
         return pd.DataFrame()
     
-    #print(f"Found {len(gene_psl)} PSL records for gene {gene_name} (gene_id: {gene_id})")
+    finally: 
+        conn.close()
     
-    # Process block information
     transcript_data = []
-    
     for _, row in gene_psl.iterrows():
-        # Parse block sizes and starts
         try:
             block_sizes = [int(x) for x in row['blockSizes'].strip(',').split(',') if x]
             block_starts = [int(x) for x in row['tStarts'].strip(',').split(',') if x]
@@ -86,6 +135,7 @@ def process_transcript_structure(psl_df: pd.DataFrame, gene_name: str, db_path: 
             # Create exon coordinates
             for i, (size, start) in enumerate(zip(block_sizes, block_starts)):
                 transcript_data.append({
+                    'id': row['id'],
                     'trans_id': row['trans_id'],
                     'gene_id': row['gene_id'],
                     'chr': row['tName'],
@@ -99,34 +149,59 @@ def process_transcript_structure(psl_df: pd.DataFrame, gene_name: str, db_path: 
                     'exon_size': size
                 })
         except Exception as e:
-            print(f"Error processing transcript {row['trans_id']}: {e}")
+            print(f"Error processing transcript {row['trans_id']} with index {row['id']}: {e}")
             continue
     
     return pd.DataFrame(transcript_data)
 
 
-def load_tpm_data(tpm_file_path: str) -> pd.DataFrame:
-    """Load TPM data for isoform expression heatmap"""
-    try:
-        tpm_df = pd.read_csv(tpm_file_path, sep='\t')
-        required_cols = ['transcript', 'gene', 'gene_name']
-        missing_cols = [col for col in required_cols if col not in tpm_df.columns]
-        if missing_cols:
-            print(f"Warning: Missing required columns of {missing_cols}")
-        
-        # Show sample of gene_name column
-        if 'gene_name' in tpm_df.columns:
-            unique_genes = tpm_df['gene_name'].dropna().unique()
-        
-        return tpm_df
-    
-    except Exception as e:
-        print(f"Error loading TPM file: {e}")
+def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -> pd.DataFrame:
+    """Load expression data from SQLite database"""
+    conn = sqlite3.connect(db_path)
+    gene_id = get_gene_id_for_gene_name(db_path, gene_name)
+    if not gene_id:
         return pd.DataFrame()
     
+    if data_type.lower() == 'tpm': 
+        table_name = 'tpm_data'
+    else: 
+        table_name = 'ratio_data'
+    
+    query = f"""
+    SELECT 
+        exp.*,
+        psl.trans_id,
+        iso.gene_name
+    FROM {table_name} exp
+    JOIN psl_data psl ON exp.id = psl.id
+    JOIN isoforms iso ON exp.id = iso.id
+    WHERE iso.gene_name = ?
+    """
+    
+    try:
+        df = pd.read_sql_query(query, conn, params=[gene_name])
+        df = df.drop(['index'], axis=1)
 
-def create_transcript_structure_plot(db_path: str, transcript_data: pd.DataFrame, gene_name: str, height: int = 400) -> go.Figure:
-    """Create transcript structure plot similar to the R version"""
+        numeric_cols = [col for col in df.columns if col not in ['transcript', 'trans_id', 'gene', 'gene_name']]
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df[numeric_cols] = df[numeric_cols].fillna(0)
+
+        return df
+    
+    except Exception as e:
+        print(f"Error loading {data_type} data: {e}")
+        return pd.DataFrame()
+    
+    finally:
+        conn.close()
+    
+
+def create_transcript_structure_plot(db_path: str, 
+                                     transcript_data: pd.DataFrame, 
+                                     gene_name: str, 
+                                     height: int = 400) -> go.Figure:
+    """Create transcript structure plot similar to simplified Isoviz version"""
     orf_perplexity = "Unknown"
     conn = sqlite3.connect(db_path)
     
@@ -153,11 +228,19 @@ def create_transcript_structure_plot(db_path: str, transcript_data: pd.DataFrame
     if transcript_data.empty:
         return create_empty_isoform_message(f"No transcript data for gene: {gene_name}")
     
+    #transcript_summary = transcript_data.groupby('trans_id').agg({
+    #    'transcript_length': 'first',
+    #    'transcript_start': 'min',
+    #    'transcript_end': 'max'
+    #}).sort_values('transcript_length', ascending=False).reset_index()
+    
+    # Change 'id' to 'isoform_id'
     transcript_summary = transcript_data.groupby('trans_id').agg({
+        'id': 'first',  # Added
         'transcript_length': 'first',
         'transcript_start': 'min',
         'transcript_end': 'max'
-    }).sort_values('transcript_length', ascending=False).reset_index()
+    }).reset_index()
     
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
     
@@ -287,24 +370,22 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
         if 'gene_name' not in tpm_data.columns:
             return create_empty_isoform_message("Data missing 'gene_name' column.")
         
-        gene_tpm = tpm_data[tpm_data['gene_name'] == gene_name].copy()
-        
     except Exception as e:
         print(f"Error filtering data: {e}")
         return create_empty_isoform_message(f"Error filtering data for gene: {gene_name}")
     
-    if gene_tpm.empty:
+    if tpm_data.empty:
         return create_empty_isoform_message(f"No isoform data found for gene {gene_name}.")
     
-    metadata_cols = ['transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
-    tissue_cols = [col for col in gene_tpm.columns if col not in metadata_cols]
+    metadata_cols = ['id', 'trans_id', 'transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
+    tissue_cols = [col for col in tpm_data.columns if col not in metadata_cols]
     
-    transcript_names = gene_tpm['transcript'].tolist() if 'transcript' in gene_tpm.columns else gene_tpm.index.tolist()
+    transcript_names = tpm_data['transcript'].tolist() if 'transcript' in tpm_data.columns else tpm_data.index.tolist()
 
     if collapse_tissues:
-        heatmap_data, tissue_display_names, tissue_categories = collapse_tissues_by_average(gene_tpm, tissue_cols)
+        heatmap_data, tissue_display_names, tissue_categories = collapse_tissues_by_average(tpm_data, tissue_cols)
     else:
-        heatmap_data = gene_tpm[tissue_cols].values.T
+        heatmap_data = tpm_data[tissue_cols].values.T
         tissue_display_names, tissue_categories = process_individual_tissues(tissue_cols)
     
     num_tissues = len(tissue_display_names)
@@ -440,17 +521,13 @@ def calculate_colorbar_x_position(transcript_names, base_x=1.02, char_width=0.00
     calculated_x = base_x + additional_space
     calculated_x = min(calculated_x, 1.25) 
     
-    print(f"Max transcript label length: {max_label_length} characters")
-    print(f"Additional space needed: {additional_space}")
-    print(f"Calculated colorscale x-position: {calculated_x}")
-    
     return calculated_x
 
 
 def calculate_legend_x_position(colorbar_x, offset=0.15):
     """Calculate organ legend x position based on colorbar position"""
     x_position = colorbar_x + offset
-    print(f"Calculated organ legend x-position: {x_position}")
+
     return x_position
 
 
@@ -466,29 +543,23 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     if tpm_data.empty:
         return create_empty_isoform_message(f"No data for gene: {gene_name}")
     
-    try:
-        if 'gene_name' not in tpm_data.columns:
-            return create_empty_isoform_message("Data missing 'gene_name' column.")
-         
-        gene_tpm = tpm_data[tpm_data['gene_name'] == gene_name].copy()
-        
-    except Exception as e:
-        print(f"Error filtering data: {e}")
-        return create_empty_isoform_message(f"Error filtering data for gene: {gene_name}")
+    if 'gene_name' not in tpm_data.columns:
+        return create_empty_isoform_message("Data missing 'gene_name' column.")
+    #tpm_data = tpm_data[tpm_data['gene_name'] == gene_name].copy()
     
-    if gene_tpm.empty:
+    if tpm_data.empty:
         return create_empty_isoform_message(f"No isoform data found for gene {gene_name}.")
     
-    metadata_cols = ['transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
-    tissue_cols = [col for col in gene_tpm.columns if col not in metadata_cols]
+    metadata_cols = ['id', 'trans_id', 'transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
+    tissue_cols = [col for col in tpm_data.columns if col not in metadata_cols]
     
-    transcript_names = gene_tpm['transcript'].tolist() if 'transcript' in gene_tpm.columns else gene_tpm.index.tolist()
-
+    transcript_names = tpm_data['transcript'].tolist() if 'transcript' in tpm_data.columns else tpm_data.index.tolist()
+    
     if collapse_tissues:
-        heatmap_data, tissue_display_names, tissue_categories = collapse_tissues_by_average(gene_tpm, tissue_cols)
+        heatmap_data, tissue_display_names, tissue_categories = collapse_tissues_by_average(tpm_data, tissue_cols)
         tissue_cols_for_organs = tissue_display_names
     else:
-        heatmap_data = gene_tpm[tissue_cols].values.T
+        heatmap_data = tpm_data[tissue_cols].values.T
         tissue_display_names, tissue_categories = process_individual_tissues(tissue_cols)
         tissue_cols_for_organs = tissue_cols
     
@@ -523,6 +594,18 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], 0)
     clustergram_data_processed = clustergram_data_processed.astype(float)
     clustergram_data_processed = clustergram_data_processed.fillna(0)
+    
+    num_transcripts = len(transcript_names)
+    if num_transcripts == 1:
+        return create_single_transcript_heatmap(
+            heatmap_data=heatmap_data,
+            transcript_names=transcript_names,
+            tissue_display_names=tissue_display_names,
+            gene_name=gene_name,
+            height=height,
+            colorscale=colorscale,
+            data_type=data_type
+        )
     
     try:
         clustergram = dash_bio.Clustergram(
@@ -678,6 +761,31 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     return fig
 
 
+def create_single_transcript_heatmap(heatmap_data, transcript_names, tissue_display_names,
+                                     gene_name, height, colorscale, data_type):
+    """Create simple heatmap when only one transcript remains"""
+    fig = go.Figure()
+    
+    fig.add_trace(go.Heatmap(
+        z=heatmap_data,
+        x=transcript_names,
+        y=tissue_display_names,
+        colorscale=colorscale,
+        colorbar=dict(title=data_type),
+        hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title=f"{gene_name} Expression (1 isoform)",
+        height=height,
+        xaxis=dict(title="Transcript"),
+        yaxis=dict(title="Tissue"),
+        margin=dict(l=100, r=50, t=80, b=100)
+    )
+    
+    return fig
+
+
 def apply_colorscale_to_clustergram(fig, colorscale):
     """Apply colorscale to the heatmap portion of a clustergram"""
     try:
@@ -690,7 +798,7 @@ def apply_colorscale_to_clustergram(fig, colorscale):
     return fig
 
 
-def collapse_tissues_by_average(gene_tpm: pd.DataFrame, 
+def collapse_tissues_by_average(tpm_data: pd.DataFrame, 
                                 tissue_cols: List[str]) -> Tuple[np.ndarray, List[str], List[str]]:
     """Collapse multiple experiments per tissue by averaging values"""
     tissue_mapping = {}
@@ -713,7 +821,7 @@ def collapse_tissues_by_average(gene_tpm: pd.DataFrame,
     tissue_categories = []
     
     for tissue_name, columns in tissue_groups.items():
-        tissue_data = gene_tpm[columns].values
+        tissue_data = tpm_data[columns].values
         
         averaged_values = np.mean(tissue_data, axis=1)
         averaged_data.append(averaged_values)

@@ -351,15 +351,30 @@ def get_gene_options(db_path, search_term=None, limit=10):
     return options
 
 
-def get_master_table_columns(db_path, table_name):
+def get_master_table_columns(db_path: str, table_name: str) -> list:
+    """Get columns for DataTables with index handling"""
     conn = sqlite3.connect(db_path)
-    cols = pd.read_sql_query(f"PRAGMA table_info({table_name})", conn)
-    conn.close()
+    columns = [{
+        'name': 'id',
+        'id': 'id',
+        'type': 'numeric'
+    }]
     
-    return [
-        {"name": col.replace('_', ' ').title(), "id": col} 
-        for col in cols['name']
-    ]
+    cursor = conn.execute(f"PRAGMA table_info({table_name})")
+    cols = cursor.fetchall()
+    
+    for col in cols:
+        if col[1] == 'id':
+            continue
+            
+        columns.append({
+            'name': col[1].replace('_', ' ').title(),
+            'id': col[1],
+            'type': 'numeric' if col[2] in ['REAL', 'INTEGER'] else 'text'
+        })
+    
+    conn.close()
+    return columns
 
 
 def get_column_types(db_path, table_name):
