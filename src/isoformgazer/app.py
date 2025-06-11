@@ -636,7 +636,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                 # Data Panel 1: Isoform Data
                 #####################################
                 html.Div(className='panel', children=[
-                    html.H2("Bulk RNA-seq Long-Read Data"),
+                    html.H2("ENCODE4 Bulk RNA-seq Long-Read Data"),
                     html.Div(className='graph-wrapper', children=[
                         html.Div(className='barplot-container', children=[
                             dcc.Graph(
@@ -680,7 +680,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                 # Data Panel 2: Junction Data
                 #####################################
                 html.Div(className='panel', children=[
-                    html.H2("Pseudobulked Smart-seq2 Single-cell and Single Nuclei for Brain Data"),
+                    html.H2("Tabula Sapiens 2.0 Pseudobulked Smart-seq2 Single-cell and Allen Brain Single Nuclei for Brain Data"),
                     html.Div(className='graph-wrapper', children=[
                         html.Div(className='atse-container', children=[
                             dcc.Graph(
