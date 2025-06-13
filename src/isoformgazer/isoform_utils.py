@@ -405,7 +405,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
     right_margin = 100
     top_margin = 60
     
-    tissue_colors = get_tissue_colors()
+    tissue_colors = get_organ_colors()
     
     if show_tables == 'show':
         fig = make_subplots(
@@ -572,12 +572,6 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     else:
         clustergram_data = heatmap_data
     
-    column_colors_list = []
-    for organ in organ_list:
-        organ_colors = get_organ_colors()
-        color = organ_colors.get(organ, '#CCCCCC')
-        column_colors_list.append(color)
-    
     num_tissues = len(clean_tissue_names)
     hide_tissue_labels = (num_tissues > 30) or (show_tables == 'show')
     left_margin = max(120, int(height * 0.2))
@@ -608,11 +602,11 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         )
     
     try:
-        clustergram = dash_bio.Clustergram(
+        clustergram, computed_traces = dash_bio.Clustergram(
             data=clustergram_data_processed.values,
             column_labels=clean_tissue_names,
             row_labels=transcript_names,
-            column_colors=column_colors_list,
+            column_colors=color_list,
             height=actual_clustergram_height,
             width=width,
             color_threshold={
@@ -628,111 +622,45 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             },
             line_width=2,
             display_ratio=[0.12, 0.08] if not hide_tissue_labels else [0.08, 0.05],
-            standardize='none'
+            standardize=None, 
+            return_computed_traces=True
+        )
+        # Update heatmap trace with reordered organs
+        column_ids = computed_traces['column_ids']
+        reordered_organ_list = [organ_list[i] for i in column_ids]
+        heatmap_trace = clustergram.data[-1]
+        heatmap_trace.customdata = np.array([reordered_organ_list] * len(transcript_names))
+        heatmap_trace.text = heatmap_trace.customdata
+        heatmap_trace.hovertemplate = (
+            "<b>Transcript:</b> %{y}<br>"
+            "<b>Tissue:</b> %{x}<br>"
+            "<b>Organ:</b> %{text}<br>"
+            f"<b>{data_type}:</b> %{{z:.2f}}"
+            "<extra></extra>"
         )
         
-    except Exception as e:
-        print(f"Warning: standardize='none' failed, trying without standardize parameter: {e}")
-        try:
-            clustergram = dash_bio.Clustergram(
-                data=clustergram_data_processed.values,
-                column_labels=clean_tissue_names,
-                row_labels=transcript_names,
-                column_colors=column_colors_list,
-                height=actual_clustergram_height,
-                width=width,
-                color_threshold={
-                    'row': 0.7,
-                    'col': 0.7
-                },
-                hidden_labels='col' if hide_tissue_labels else None,
-                cluster='all',
-                color_list={
-                    'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
-                    'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
-                    'bg': '#506784'
-                },
-                line_width=2,
-                display_ratio=[0.12, 0.08] if not hide_tissue_labels else [0.08, 0.05]
-            )
-            
-        except Exception as e2:
-            print(f"Error creating clustergram: {e2}")
-            return create_empty_isoform_message(f"Error creating visualization for {gene_name}")
+    except Exception as e2:
+        print(f"Error creating clustergram: {e2}")
+        return create_empty_isoform_message(f"Error creating visualization for {gene_name}")
     
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
-    
-    # have colorscale to the right of y-axis labels with padding
-    #colorbar_x = calculate_colorbar_x_position(transcript_names)
-    #legend_x = calculate_legend_x_position(colorbar_x)
+
+    # Convert to Figure for adding annotations
+    fig = go.Figure(clustergram)
     
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
             heatmap_trace.colorscale = colorscale
             heatmap_trace.showscale = True
-            customdata_array = np.array([organ_list for _ in range(len(transcript_names))])
-            heatmap_trace.customdata = customdata_array
-            heatmap_trace.hovertemplate = (
-                "<b>Transcript:</b> %{y}<br>" +
-                "<b>Tissue:</b> %{x}<br>" +
-                "<b>Organ:</b> %{customdata}<br>" +
-                f"<b>{data_type}:</b> %{{z:.2f}}" +
-                "<extra></extra>"
-            )
             heatmap_trace.colorbar.update(
                 title=dict(text=data_type, font=dict(size=10)),
                 x=1.02
             )
-            # Position colorscale to the right of longest y-axis labels
-            #heatmap_trace.colorbar.update(
-            #    x=colorbar_x,  # Dynamic position based on transcript name length
-            #    len=0.7,  # Reasonable length
-            #    thickness=12,  # Thickness of colorscale
-            #    title=dict(text=data_type, font=dict(size=10))
-            #)
+            
     except Exception as e:
-        print(f"Warning: Could not set color range: {e}")
-    
-    # Convert to Figure for adding annotations
-    fig = go.Figure(clustergram)
-    
-    # Add organ color label mapping as legend to the right of colorscale
-    #legend_x = 1.40  # Position to the right of colorscale
-    #legend_y_start = 0.95
-    #legend_y_step = 0.04
-    
-    #unique_organs = list(set(organ_list))
-    #organ_colors = get_organ_colors()
-    
-    # Add legend title
-    #fig.add_annotation(
-    #    x=legend_x,  
-    #    y=legend_y_start,
-    #    xref='paper',
-    #    yref='paper',
-    #    text='<b>Organ Group</b>',
-    #    showarrow=False,
-    #    xanchor='left',
-    #    font=dict(size=12, color='black')
-    #)
-    
-    #for i, organ in enumerate(unique_organs):
-    #    color = organ_colors.get(organ, '#CCCCCC')
-    #    fig.add_annotation(
-    #        x=legend_x,  
-    #        y=legend_y_start - ((i + 1) * legend_y_step),
-    #        xref='paper',
-    #        yref='paper',
-    #        text=f'<span style="color:{color}; font-size:14px;">■</span> {organ}',
-    #        showarrow=False,
-    #        xanchor='left',
-    #        font=dict(size=11)  
-    #    )
-    
-    #calculated_right_margin = max(200, int((legend_x - 1.0) * 800)) 
+        pass
 
-    # Update layout with dynamic right margin
     fig.update_layout(
         title={
             'text': f"Isoform Expression Clustergram for {gene_name} ({len(transcript_names)} isoforms, {data_type} data)",
@@ -740,7 +668,6 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             'xanchor': 'center',
             'font': {'size': 14 if hide_tissue_labels else 16}
         },
-        #margin=dict(l=left_margin, r=calculated_right_margin, t=90, b=bottom_margin), 
         margin=dict(l=left_margin, r=150, t=90, b=bottom_margin),
         autosize=True,
         height=height,
@@ -794,20 +721,19 @@ def apply_colorscale_to_clustergram(fig, colorscale):
             heatmap_trace.colorscale = colorscale
             heatmap_trace.showscale = True
     except Exception as e:
-        print(f"Warning: Could not apply colorscale: {e}")
+        pass
+
     return fig
 
 
 def collapse_tissues_by_average(tpm_data: pd.DataFrame, 
                                 tissue_cols: List[str]) -> Tuple[np.ndarray, List[str], List[str]]:
     """Collapse multiple experiments per tissue by averaging values"""
+    tissue_to_organ_mapping = get_tissue_to_organ_mapping()
     tissue_mapping = {}
+    
     for col in tissue_cols:
-        if '.' in col:
-            clean_tissue_name = '.'.join(col.split('.')[1:]).replace('_', ' ')
-        else:
-            clean_tissue_name = col.replace('_', ' ')
-        tissue_mapping[col] = clean_tissue_name
+        tissue_mapping[col] = extract_tissue_name_from_column(col)
     
     # Group columns by tissue name
     tissue_groups = {}
@@ -827,7 +753,7 @@ def collapse_tissues_by_average(tpm_data: pd.DataFrame,
         averaged_data.append(averaged_values)
         
         tissue_display_names.append(tissue_name)
-        tissue_category = map_tissue_to_category(tissue_name)
+        tissue_category = tissue_to_organ_mapping[tissue_name]
         tissue_categories.append(tissue_category)
     
     heatmap_data = np.array(averaged_data)
@@ -839,134 +765,84 @@ def process_individual_tissues(tissue_cols: List[str]) -> Tuple[List[str], List[
     """Process individual tissue experiments (current behavior)"""
     tissue_display_names = []
     tissue_categories = []
+    tissue_to_organ_mapping = get_tissue_to_organ_mapping()
     
     for col in tissue_cols:
-        if '.' in col:
-            tissue_ensembl_id = col.split('.')[0]
-            tissue_name = '.'.join(col.split('.')[1:])
-            display_name = f"{tissue_name} ({tissue_ensembl_id})"
-        else:
-            display_name = col
-        
-        display_name = display_name.replace('_', ' ')
+        display_name = extract_tissue_name_from_column(col)
         tissue_display_names.append(display_name)
-
-        base_tissue_name = tissue_name if '.' in col else col
-        tissue_category = map_tissue_to_category(base_tissue_name)
+        tissue_category = tissue_to_organ_mapping[display_name]
         tissue_categories.append(tissue_category)
     
     return tissue_display_names, tissue_categories
 
 
-def map_tissue_to_category(tissue_name: str) -> str:
-    """Map individual tissue name to broader category"""
-    tissue_lower = tissue_name.lower().replace('-', '_').replace(' ', '_')
-    
-    tissue_keywords = {
-        'blood': ['gm12878', 'k562', 'hl_60', 'hl.60'],
-        'brain': ['brain', 'neuron', 'astrocyte', 'cortex', 'dorsolateral_prefrontal_cortex', 'glutamatergic_neuron'],
-        'liver': ['hepg2', 'liver', 'right_lobe_of_liver'],
-        'lung': ['lung', 'calu3', 'pc_9', 'left_lung', 'lower_lobe_of_left_lung'],
-        'heart': ['heart', 'cardiac', 'cardiac_septum', 'heart_left_ventricle'],
-        'kidney': ['kidney'],
-        'muscle': ['muscle', 'psoas_muscle'],
-        'colon': ['colon', 'caco_2', 'hct116', 'left_colon', 'mucosa_of_descending_colon'],
-        'breast': ['mcf', 'mammary_epithelial_cell'],
-        'pancreas': ['panc1', 'type_b_pancreatic_cell', 'progenitor_cell_of_endocrine_pancreas'],
-        'stem_cell': ['wtc11', 'h1', 'h9', 'progenitor_cell'],
-        'bone': ['chondrocyte'],
-        'other': []
-    }
-    
-    for category, keywords in tissue_keywords.items():
-        if any(keyword in tissue_lower for keyword in keywords):
-            return category
-    
-    return 'other'
-
-
-def create_tissue_mapping(tissue_names: List[str]) -> Dict[str, str]:
-    """Create tissue mapping for samples"""
-    tissue_keywords = {
-        'blood': ['GM12878', 'K562', 'HL-60', 'HL.60'],
-        'brain': ['brain', 'neuron', 'astrocyte', 'cortex', 'dorsolateral_prefrontal_cortex', 'glutamatergic_neuron'],
-        'liver': ['HepG2', 'liver', 'right_lobe_of_liver'],
-        'lung': ['lung', 'Calu3', 'PC-9', 'left_lung', 'lower_lobe_of_left_lung', 'lower_lobe_of_right_lung', 'upper_lobe_of_right_lung'],
-        'heart': ['heart', 'cardiac', 'cardiac_septum', 'heart_left_ventricle', 'heart_right_ventricle', 'left_cardiac_atrium', 'right_cardiac_atrium'],
-        'kidney': ['kidney'],
-        'muscle': ['muscle', 'psoas_muscle'],
-        'colon': ['colon', 'Caco-2', 'HCT116', 'left_colon', 'mucosa_of_descending_colon'],
-        'breast': ['MCF', 'mammary_epithelial_cell'],
-        'pancreas': ['Panc1', 'type_B_pancreatic_cell', 'progenitor_cell_of_endocrine_pancreas'],
-        'prostate': ['PC-3'],
-        'ovary': ['ovary'],
-        'stem_cell': ['WTC11', 'H1', 'H9'],
-        'embryo': ['endodermal_cell', 'endothelial_cell', 'neural_crest_cell']
-    }
-    
-    mapping = {}
-    for tissue in tissue_names:
-        tissue_lower = tissue.lower().replace('-', '_').replace(' ', '_')
-        assigned = False
-        for tissue_type, keywords in tissue_keywords.items():
-            if any(keyword.lower() in tissue_lower for keyword in keywords):
-                mapping[tissue] = tissue_type
-                assigned = True
-                break
-        if not assigned:
-            mapping[tissue] = 'other'
-    
-    return mapping
-
-
-def get_tissue_colors() -> Dict[str, str]:
-    """Get colors for different tissue types"""
-    return {
-        'blood': '#FF6B6B',
-        'brain': '#4ECDC4', 
-        'liver': '#45B7D1',
-        'lung': '#96CEB4',
-        'heart': '#FFEAA7',
-        'kidney': '#DDA0DD',
-        'muscle': '#98D8C8',
-        'colon': '#F7DC6F',
-        'breast': '#F8C471',
-        'pancreas': '#82E0AA',
-        'prostate': '#AED6F1',
-        'ovary': '#E8DAEF',
-        'stem_cell': '#D5DBDB',
-        'embryo': '#FADBD8',
-        'other': '#BDC3C7',
-        'unknown': '#CCCCCC'
-    }
-
-
 def get_tissue_to_organ_mapping():
-    """Create tissue to organ mapping based on R code"""
-    tissue_to_organ = {
-        'GM12878': 'blood', 'HL-60': 'blood', 'K562': 'blood', 'OCI-LY7': 'blood',
-        'astrocyte': 'brain', 'dorsolateral prefrontal cortex': 'brain', 
-        'glutamatergic neuron': 'brain', 'chondrocyte': 'cartilage', 'HFFc6': 'cartilage',
-        'IMR-90': 'lung', 'mesenteric fat pad': 'adipose', 'osteocyte': 'bone',
-        'WTC11': 'iPS', 'endodermal cell': 'embryo', 'endothelial cell': 'embryo',
-        'H1': 'embryo', 'H9': 'embryo', 'neural crest cell': 'embryo',
-        'endothelial cell of umbilical vein': 'epithelial', 'HepG2': 'liver',
-        'mammary epithelial cell': 'epithelial', 'MCF 10A': 'breast', 'MCF-7.00': 'breast',
-        'Panc1': 'pancreas', 'type B pancreatic cell': 'pancreas', 'adrenal gland': 'adrenal gland',
-        'PC-3': 'prostate', 'progenitor cell of endocrine pancreas': 'pancreas',
-        'aorta': 'vessels', 'cardiac septum': 'heart', 'heart left ventricle': 'heart',
-        'heart right ventricle': 'heart', 'left cardiac atrium': 'heart',
-        'left ventricle myocardium inferior': 'heart', 'left ventricle myocardium superior': 'heart',
-        'posterior vena cava': 'vessels', 'right cardiac atrium': 'heart',
-        'Right ventricle myocardium inferior': 'heart', 'Right ventricle myocardium superior': 'heart',
-        'Caco-2': 'colon', 'HCT116': 'colon', 'left colon': 'colon',
-        'mucosa of descending colon': 'colon', 'GM23338': 'iPS', 'kidney': 'kidney',
-        'right lobe of liver': 'liver', 'Calu3': 'lung', 'left lung': 'lung',
-        'lower lobe of left lung': 'lung', 'lower lobe of right lung': 'lung',
-        'PC-9': 'lung', 'upper lobe of right lung': 'lung', 'A673': 'bone',
-        'psoas muscle': 'muscle', 'ovary': 'ovary'
+    """Create tissue to organ mapping with complete heart anatomy"""
+    return {
+        'GM12878': 'blood',
+        'HL-60': 'blood',
+        'HL.60': 'blood',
+        'K562': 'blood',
+        'OCI-LY7': 'blood',
+        'OCI.LY7': 'blood',
+        'astrocyte': 'brain',
+        'dorsolateral prefrontal cortex': 'brain',
+        'glutamatergic neuron': 'brain',
+        'chondrocyte': 'cartilage',
+        'HFFc6': 'cartilage',
+        'IMR-90': 'lung',
+        'IMR.90': 'lung',
+        'mesenteric fat pad': 'adipose',
+        'osteocyte': 'bone',
+        'WTC11': 'iPS',
+        'endodermal cell': 'embryo',
+        'endothelial cell': 'embryo',
+        'H1': 'embryo',
+        'H9': 'embryo',
+        'neural crest cell': 'embryo',
+        'endothelial cell of umbilical vein': 'epithelial',
+        'HepG2': 'liver', 
+        'mammary epithelial cell': 'epithelial',
+        'MCF 10A': 'breast', 
+        'MCF.7': 'breast',
+        'MCF-7': 'breast',
+        'Panc1': 'pancreas',
+        'type B pancreatic cell': 'pancreas',
+        'adrenal gland': 'adrenal gland',
+        'PC-3': 'prostate',
+        'PC.3': 'prostate',
+        'progenitor cell of endocrine pancreas': 'pancreas',
+        'aorta': 'vessels',
+        'cardiac septum': 'heart',
+        'heart left ventricle': 'heart',
+        'heart right ventricle': 'heart',
+        'left cardiac atrium': 'heart',
+        'left ventricle myocardium inferior': 'heart',
+        'left ventricle myocardium superior': 'heart',
+        'posterior vena cava': 'vessels',
+        'right cardiac atrium': 'heart',
+        'Right ventricle myocardium inferior': 'heart',
+        'Right ventricle myocardium superior': 'heart',
+        'Caco-2': 'colon',
+        'Caco.2': 'colon',
+        'HCT116': 'colon',
+        'left colon': 'colon',
+        'mucosa of descending colon': 'colon',
+        'GM23338': 'iPS',
+        'kidney': 'kidney',
+        'right lobe of liver': 'liver',
+        'Calu3': 'lung',
+        'left lung': 'lung',
+        'lower lobe of left lung': 'lung',
+        'lower lobe of right lung': 'lung',
+        'PC-9': 'lung',
+        'PC.9': 'lung',
+        'upper lobe of right lung': 'lung',
+        'A673': 'bone',
+        'psoas muscle': 'muscle',
+        'ovary': 'ovary'
     }
-    return tissue_to_organ
+
 
 def get_organ_colors():
     """Get organ color mapping based on R code"""
@@ -1003,9 +879,12 @@ def extract_tissue_name_from_column(column_name):
     else:
         tissue_name = column_name
     
-    tissue_name = tissue_name.replace('_', ' ').replace('.', '-')
+    tissue_name = (
+        tissue_name.replace('_', ' ')
+                  .replace('.', '-')
+                  .strip()
+    )
     return tissue_name
-
 
 def create_organ_annotation_bar(tissue_cols, height=20):
     """Create organ color annotation bar for clustergram"""
