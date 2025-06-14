@@ -531,6 +531,14 @@ def calculate_legend_x_position(colorbar_x, offset=0.15):
     return x_position
 
 
+def calculate_bottom_margin(show_labels: bool, transcript_names: list) -> int:
+    """Calculate bottom margin based on label visibility and name lengths"""
+    if show_labels:
+        max_name_length = max(len(str(name)) for name in transcript_names) if transcript_names else 10
+        return max(100, min(200, max_name_length * 7))
+    return 50
+
+
 def create_isoform_expression_clustergram(tpm_data: pd.DataFrame, 
                                           gene_name: str, 
                                           height: int = 600,
@@ -574,7 +582,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     
     num_tissues = len(clean_tissue_names)
     hide_tissue_labels = (num_tissues > 30) or (show_tables == 'show')
-    left_margin = max(120, int(height * 0.2))
+    left_margin = max(120, int(height * 0.1))
     
     if hide_tissue_labels:
         bottom_margin = 50 
@@ -583,7 +591,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         bottom_margin = max(200, int(height * 0.35)) 
         actual_clustergram_height = height - 80
     
-    width = min(1000, max(800, len(clean_tissue_names) * 12, int(height * 1.2)))
+    width = min(1500, max(800, len(clean_tissue_names) * 12, int(height * 1.2)))
     clustergram_data_processed = pd.DataFrame(clustergram_data).copy()
     clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], 0)
     clustergram_data_processed = clustergram_data_processed.astype(float)
@@ -613,7 +621,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                 'row': 0.7,
                 'col': 0.7
             },
-            hidden_labels='col' if hide_tissue_labels else None,
+            hidden_labels='col' if not show_labels else None,
             cluster='all',
             color_list={
                 'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
@@ -668,7 +676,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             'xanchor': 'center',
             'font': {'size': 14 if hide_tissue_labels else 16}
         },
-        margin=dict(l=left_margin, r=150, t=90, b=bottom_margin),
+        margin=dict(l=left_margin, r=150, t=90, b=calculate_bottom_margin(show_labels, transcript_names)),
         autosize=True,
         height=height,
         yaxis=dict(
@@ -678,8 +686,12 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         ),
         xaxis=dict(
             automargin=True,
-            tickangle=45 if not hide_tissue_labels else 0,
-            tickfont=dict(size=8) if not hide_tissue_labels else dict(size=10)
+            tickangle=45 if show_labels else 0,
+            tickfont=dict(
+                size=6 if show_labels else 1,
+                color='rgba(0,0,0,0)' if not show_labels else None 
+            ),
+            showticklabels=show_labels
         ),
         plot_bgcolor='white',
         paper_bgcolor='white'

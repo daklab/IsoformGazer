@@ -600,9 +600,9 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                         style={'display': 'inline-block', 'marginRight': '15px'}),
                                 daq.ToggleSwitch(
                                     id='show-labels-toggle',
-                                    value=True,
+                                    value=False,
                                     label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
-                                    labelPosition='right',
+                                    labelPosition='left',
                                     style={'display': 'inline-block'}
                                 )
                             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
