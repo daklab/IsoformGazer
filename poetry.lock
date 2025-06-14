@@ -415,6 +415,24 @@ scikit-learn = ">=0.20.1"
 scipy = "*"
 
 [[package]]
+name = "dash-bootstrap-components"
+version = "2.0.3"
+description = "Bootstrap themed components for use in Plotly Dash"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "dash_bootstrap_components-2.0.3-py3-none-any.whl", hash = "sha256:82754d3d001ad5482b8a82b496c7bf98a1c68d2669d607a89dda7ec627304af5"},
+    {file = "dash_bootstrap_components-2.0.3.tar.gz", hash = "sha256:5c161b04a6e7ed19a7d54e42f070c29fd6c385d5a7797e7a82999aa2fc15b1de"},
+]
+
+[package.dependencies]
+dash = ">=3.0.4"
+
+[package.extras]
+pandas = ["numpy (>=2.0.2)", "pandas (>=2.2.3)"]
+
+[[package]]
 name = "dash-core-components"
 version = "2.0.0"
 description = "Core component suite for Dash"
@@ -1921,4 +1939,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "0020fd9061f9ab4bb99f3f356f96aa77abb655e62dbec030a0aa9a1194cf782e"
+content-hash = "28359c3a6058f22a2776a21de47058dd22866db8a5232128982835e1cf68156b"

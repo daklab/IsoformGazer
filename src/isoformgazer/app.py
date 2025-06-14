@@ -11,6 +11,7 @@ matplotlib.use('Agg')
 from pathlib import Path
 import dash
 from dash import html, dcc, dash_table
+import dash_bootstrap_components as dbc
 import dash_daq as daq
 import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
@@ -363,8 +364,14 @@ left_data_table = dash_table.DataTable(
         'minWidth': '100px', 
         'maxWidth': '220px',
         'padding': '5px',
+        'whiteSpace': 'normal'
     },
-    style_table={'height': '100%', 'overflowY': 'auto'},
+    style_table={
+        'height': '100%', 
+        'overflowY': 'auto',
+        'overflowX': 'scroll', 
+        'minWidth': '100%'     
+    },
     style_header={
         'backgroundColor': 'white',
         'fontWeight': 'bold',
@@ -386,6 +393,9 @@ left_data_table = dash_table.DataTable(
     },
     virtualization=True,
     fixed_rows={'headers': True},
+    column_selectable=False,
+    row_selectable=False,
+    css=[{"selector": ".show-hide", "rule": "display: none"}]
 )
 
 ###################################################################
@@ -410,11 +420,17 @@ right_data_table = dash_table.DataTable(
     style_cell={
         'overflow': 'hidden',
         'textOverflow': 'ellipsis',
-        'minWidth': '100px',
+        'minWidth': '100px', 
         'maxWidth': '220px',
         'padding': '5px',
+        'whiteSpace': 'normal'
     },
-    style_table={'height': '100%', 'overflowY': 'auto'},
+    style_table={
+        'height': '100%', 
+        'overflowY': 'auto',
+        'overflowX': 'scroll',
+        'minWidth': '100%'     
+    },
     style_header={
         'backgroundColor': 'white',
         'fontWeight': 'bold',
@@ -436,6 +452,9 @@ right_data_table = dash_table.DataTable(
     },
     virtualization=True,
     fixed_rows={'headers': True},
+    column_selectable=False,
+    row_selectable=False,
+    css=[{"selector": ".show-hide", "rule": "display: none"}]
 )
 
 ###################################################################
@@ -671,8 +690,18 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             )
                         ]),
                         html.Div(className='table-container', id='table1-container', children=[
-                            left_data_table
-                        ])
+                        html.Div(className='table-header-controls', children=[
+                            dbc.Button(
+                                "Clear Filters",
+                                id='clear-left-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True
+                            )
+                        ]),
+                        left_data_table
+                    ])
                     ])
                 ]),
                 
@@ -711,6 +740,16 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             )
                         ]),
                         html.Div(className='table-container', id='table2-container', children=[
+                            html.Div(className='table-header-controls', children=[
+                                dbc.Button(
+                                    "Clear Filters",
+                                    id='clear-right-filters',
+                                    color="secondary",
+                                    size="sm",
+                                    className="clear-filters-btn",
+                                    disabled=True
+                                )
+                            ]),
                             right_data_table
                         ])
                     ])
@@ -729,7 +768,7 @@ app.layout.children.extend([
 # CALLBACKS
 #######################################################################
 #######################################################################
-# MASTER TABLE VISUALIZATION FILTERING CALLBACKS
+# MASTER TABLE FILTERING CALLBACKS
 #######################################################################
 @app.callback(
     [dash.dependencies.Output('filtered-isoform-store', 'data'),
@@ -759,6 +798,40 @@ def update_filtered_data_stores(isoform_filtered_data, junction_filtered_data,
                                 if row.get('id') in junction_all_ids]
     
     return filtered_transcript_ids, filtered_junction_ids
+
+
+@app.callback(
+    [dash.dependencies.Output('left_data_table', 'filter_query'),
+     dash.dependencies.Output('right_data_table', 'filter_query')],
+    [dash.dependencies.Input('clear-left-filters', 'n_clicks'),
+     dash.dependencies.Input('clear-right-filters', 'n_clicks')],
+    [dash.dependencies.State('left_data_table', 'filter_query'),
+     dash.dependencies.State('right_data_table', 'filter_query')]
+)
+def clear_filters(left_clicks, right_clicks, left_filter, right_filter):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if button_id == 'clear-left-filters':
+        return '', right_filter
+    elif button_id == 'clear-right-filters':
+        return left_filter, ''
+    return left_filter, right_filter
+
+
+@app.callback(
+    [dash.dependencies.Output('clear-left-filters', 'disabled'),
+     dash.dependencies.Output('clear-right-filters', 'disabled')],
+    [dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('right_data_table', 'filter_query')]
+)
+def update_button_states(left_filter, right_filter):
+    left_disabled = not left_filter or left_filter.strip() == ''
+    right_disabled = not right_filter or right_filter.strip() == ''
+    return left_disabled, right_disabled
 
 
 ##############################################################################################
@@ -886,12 +959,10 @@ def update_junction_clustergram(selected_gene, colorscale, show_tables, filtered
     
 
 @app.callback(
-    [
-        dash.dependencies.Output('table1-container', 'style'),
-        dash.dependencies.Output('table2-container', 'style'),
-        dash.dependencies.Output('heatmap1', 'style'),
-        dash.dependencies.Output('heatmap2', 'style')
-    ],
+    [dash.dependencies.Output('table1-container', 'style'), 
+     dash.dependencies.Output('table2-container', 'style'),
+     dash.dependencies.Output('heatmap1', 'style'),
+     dash.dependencies.Output('heatmap2', 'style')],
     [dash.dependencies.Input('show-table-radio', 'value')]
 )
 def toggle_tables(show_tables):
@@ -913,7 +984,6 @@ def toggle_tables(show_tables):
     return table_style, table_style, heatmap1_style, heatmap2_style
 
 
-# Add this callback to manage container classes
 @app.callback(
     [dash.dependencies.Output('left-panel-graph-wrapper', 'className'),
      dash.dependencies.Output('right-panel-graph-wrapper', 'className')],

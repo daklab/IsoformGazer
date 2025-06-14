@@ -394,3 +394,83 @@ html, body {
 .app-controls-block .daq-ToggleSwitch:last-child {
     margin-bottom: 0;
 }
+
+.btn-clear {
+    background-color: #6c757d;
+    color: white;
+    border-radius: 15px;
+    padding: 4px 12px;
+    font-size: 0.875rem;
+    transition: all 0.3s ease;
+}
+
+.btn-clear:hover {
+    background-color: #5a6268;
+    transform: translateY(-1px);
+}
+
+.btn-clear:active {
+    transform: translateY(0);
+}
+
+.btn-clear i {
+    margin-right: 5px;
+}
+
+.table-header-controls {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    padding: 0px 0;
+    display: flex;
+    justify-content: flex-start;
+    margin-bottom: 2px;
+}
+
+.clear-filters-btn {
+    background-color: #6c757d !important;
+    border-color: #6c757d !important;
+    border-radius: 15px;
+    padding: 4px 12px;
+    font-size: 0.875rem;
+    transition: all 0.3s ease;
+    min-width: 100px;
+    margin-bottom: 0; 
+}
+
+.clear-filters-btn:hover:not(:disabled) {
+    background-color: #5a6268 !important;
+    transform: translateY(-1px);
+}
+
+.clear-filters-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: #e9ecef !important;
+    border-color: #dee2e6 !important;
+    color: #6c757d !important;
+}
+
+.table-container-fixed {
+    max-height: 40vh;
+    overflow: auto;
+    position: relative;
+    width: 100%;
+}
+
+.dash-table-container {
+    overflow: auto !important;
+    width: 100% !important;
+}
+
+.dash-table-container .dash-spreadsheet-container {
+    overflow: auto !important;
+    max-width: 100% !important;
+}
+
+.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner table {
+    width: auto !important;
+    min-width: 100% !important;
+}
+
+.show-hide { display: none !important; }
