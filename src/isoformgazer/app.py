@@ -16,7 +16,7 @@ import dash_daq as daq
 import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
-from data_utils import generate_mock_data, get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner
+from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
     load_atse_data, process_gene_atse_data, create_junction_exon_visualization,
@@ -30,17 +30,6 @@ from isoform_utils import (
 
 RANDOM_SEED = 18
 np.random.seed(RANDOM_SEED)
-
-###################################################################
-# PROTOTYPE MOCK DATA
-###################################################################
-mock_data = generate_mock_data(RANDOM_SEED)
-data1 = mock_data['data1']
-data2 = mock_data['data2']
-df1 = mock_data['df1']
-df2 = mock_data['df2']
-atse_data = mock_data['atse_data']
-atse_fig = mock_data['atse_fig']
 
 ###################################################################
 # SQLLITE DATABASE SETUP
@@ -490,6 +479,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         dcc.Dropdown(
                             id='gene-search-dropdown',
                             options=[
+                                {'label': 'A1BG-AS1', 'value': 'A1BG-AS1'},
                                 {'label': 'RBFOX2 (RNA Binding Fox-1 Homolog 2)', 'value': 'RBFOX2'},
                                 {'label': 'EGFR (Epidermal growth factor receptor)', 'value': 'EGFR'},
                                 {'label': 'BRCA1 (Breast cancer type 1)', 'value': 'BRCA1'},
@@ -497,6 +487,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 {'label': 'TP53 (Tumor protein p53)', 'value': 'TP53'}
                             ],
                             placeholder="Type to search for a gene...",
+                            value='A1BG-AS1',
                             searchable=True,
                             clearable=True
                         ),
@@ -737,12 +728,12 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                     dcc.Graph(
                                         id='heatmap2',
                                         figure={
-                                            'data': [go.Heatmap(z=data2, colorscale='Plasma')],
+                                            'data': [],
                                             'layout': go.Layout(
-                                                margin=dict(l=40, r=40, t=40, b=40),
-                                                title={'text': 'Junction Usage by Cell Type', 'font': {'size': 14}},
-                                                autosize=True
-                                            ),
+                                                title={'text': 'Loading junction usage data...', 'font': {'size': 14}},
+                                                plot_bgcolor='white',
+                                                margin=dict(l=40, r=40, t=40, b=40)
+                                            )
                                         },
                                         config={'responsive': True},
                                         style={'height': '100%', 'width': '100%'}
@@ -863,22 +854,24 @@ def update_gene_options(search_value, current_value):
     
     if not search_value:
         options = get_gene_options(db_path, limit=5)
+        a1bg_option = {'label': 'A1BG-AS1', 'value': 'A1BG-AS1'}
+        if not any(opt['value'] == 'A1BG-AS1' for opt in options):
+            options.insert(0, a1bg_option)
     else:
         options = get_gene_options(db_path, search_term=search_value, limit=10)
     
-    # Preserve current selection if it exists in the new options
-    option_values = [opt['value'] for opt in options]
+    if current_value is None:
+        return options, 'A1BG-AS1'
     
-    if current_value and current_value in option_values:
-        return options, current_value
-    elif current_value and current_value not in option_values:
-        if current_value:
-            current_options = get_gene_options(db_path, search_term=current_value, limit=1)
-            if current_options:
-                options = current_options + [opt for opt in options if opt['value'] != current_value]
+    option_values = [opt['value'] for opt in options]
+    if current_value in option_values:
         return options, current_value
     else:
-        return options, None
+        current_options = get_gene_options(db_path, search_term=current_value, limit=1)
+        if current_options:
+            options = current_options + [opt for opt in options if opt['value'] != current_value]
+        return options, current_value
+
 
 ######################################################################
 # SQLLITE MASTER TABLE PROCESSING CALLBACKS
@@ -1089,17 +1082,6 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
         heatmap_height = 450
     else:
         heatmap_height = 650
-
-    if not selected_gene or current_data.empty:
-        return {
-            'data': [go.Heatmap(z=data1, colorscale=colorscale)],
-            'layout': go.Layout(
-                margin=dict(l=40, r=40, t=40, b=40),
-                title={'text': f'Isoform Expression by Tissue ({data_type})', 'font': {'size': 14}},
-                autosize=True,
-                height=heatmap_height
-            )
-        }
     
     try:
         filtered_data = current_data.copy()
@@ -1229,7 +1211,7 @@ def update_atse_visualization(selected_gene, filtered_junction_ids):
 )
 def update_barplot1_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
-        return ""
+        selected_gene = 'A1BG-AS1'
     T = len(filtered_ids) if filtered_ids else 0
     return f"Loading data for {T} isoform transcripts for {selected_gene}"
 
@@ -1241,7 +1223,7 @@ def update_barplot1_loading_message(selected_gene, filtered_ids):
 )
 def update_heatmap1_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
-        return ""
+        selected_gene = 'A1BG-AS1'
     T = len(filtered_ids) if filtered_ids else 0
     return f"Loading data for {T} isoform transcripts for {selected_gene}"
 
@@ -1253,7 +1235,7 @@ def update_heatmap1_loading_message(selected_gene, filtered_ids):
 )
 def update_atse_map_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
-        return ""
+        selected_gene = 'A1BG-AS1'
     N = len(filtered_ids) if filtered_ids else 0
     return f"Loading data for {N} junctions for {selected_gene}"
 
@@ -1265,7 +1247,7 @@ def update_atse_map_loading_message(selected_gene, filtered_ids):
 )
 def update_heatmap2_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
-        return ""
+        selected_gene = 'A1BG-AS1'
     N = len(filtered_ids) if filtered_ids else 0
     return f"Loading data for {N} junctions for {selected_gene}"
 
