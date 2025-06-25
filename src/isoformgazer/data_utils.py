@@ -2,6 +2,8 @@ import sqlite3
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
+from dash import html
+import dash_bootstrap_components as dbc
 
 def create_atse_map(gene_data, gene_name="Rpsa", gene_id="ENSMUSG00000032518.6", strand="+"):
     """
@@ -467,3 +469,46 @@ def parse_filter_query(db_path, filter_query, table_name=None):
             print(f"Error parsing filter expression '{expression}': {e}")
     
     return filters
+
+
+def create_custom_spinner(message):
+    """Create custom spinner with both animation and text message"""
+    return html.Div(
+        style={
+            'display': 'flex',
+            'flexDirection': 'column',
+            'alignItems': 'center',
+            'justifyContent': 'center',
+            'height': '100%',
+            'width': '100%',
+            'padding': '20px',
+            'backgroundColor': 'rgba(255, 255, 255, 0.9)',
+            'borderRadius': '8px'
+        },
+        children=[
+            # Spinner container
+            html.Div(
+                className="dash-spinner dash-default-spinner",
+                style={'marginBottom': '15px'},
+                children=[
+                    html.Div(className="dash-default-spinner-rect1"),
+                    html.Div(className="dash-default-spinner-rect2"),
+                    html.Div(className="dash-default-spinner-rect3"),
+                    html.Div(className="dash-default-spinner-rect4"),
+                    html.Div(className="dash-default-spinner-rect5"),
+                ]
+            ),
+            # Message text
+            html.P(
+                message,
+                style={
+                    'fontSize': '14px',
+                    'color': '#506784',
+                    'textAlign': 'center',
+                    'fontFamily': '"Open Sans", sans-serif',
+                    'margin': '0',
+                    'fontWeight': '500'
+                }
+            )
+        ]
+    )

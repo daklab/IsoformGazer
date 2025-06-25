@@ -474,3 +474,17 @@ html, body {
 }
 
 .show-hide { display: none !important; }
+
+[data-dash-is-loading="true"] + .custom-loading-message {
+    display: block !important;
+}
+
+.custom-loading-message {
+    display: none;
+    margin-top: 8px;
+    text-align: center;
+    font-size: 14px;
+    color: #506784;
+    font-family: "Open Sans", sans-serif;
+    font-weight: 500;
+}

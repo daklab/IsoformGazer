@@ -16,7 +16,7 @@ import dash_daq as daq
 import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
-from data_utils import generate_mock_data, get_master_table_columns, parse_filter_query, query_master_table, get_gene_options
+from data_utils import generate_mock_data, get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
     load_atse_data, process_gene_atse_data, create_junction_exon_visualization,
@@ -658,50 +658,42 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                     html.H2("ENCODE4 Bulk RNA-seq Long-Read Data"),
                     html.Div(className='graph-wrapper', children=[
                         html.Div(className='barplot-container', children=[
-                            dcc.Graph(
-                                id='barplot1',
-                                figure={
-                                    'data': [go.Bar(x=list(range(10)), y=data1.sum(axis=1), marker_color='blue')],
-                                    'layout': go.Layout(
-                                        margin=dict(l=40, r=40, t=20, b=20),
-                                        title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}, },
-                                        xaxis={'title': {'text': 'Tissue', 'font': {'size': 12}}, 'title_standoff': 40, 'ticksuffix': ' '},
-                                        yaxis={'title': {'text': 'Count', 'font': {'size': 12}}},
-                                        autosize=True
-                                    )
-                                },
-                                config={'responsive': True},
-                                style={'height': '100%', 'width': '100%'}
-                            )
+                            html.Div(className='loading-container', children=[
+                                dcc.Loading(
+                                    id="loading-transcript-plot",
+                                    type="default",
+                                    delay_show=500,
+                                    delay_hide=200,
+                                    children=[dcc.Graph(id='barplot1')]
+                                ),
+                                html.Div(id="barplot1-loading-message", className="custom-loading-message")
+                            ])
                         ]),
                         html.Div(className='heatmap-container', children=[
-                            dcc.Graph(
-                                id='heatmap1',
-                                figure={
-                                    'data': [go.Heatmap(z=data1, colorscale='Viridis')],
-                                    'layout': go.Layout(
-                                        margin=dict(l=40, r=40, t=40, b=40),
-                                        title={'text': 'Isoform Expression by Tissue', 'font': {'size': 14}},
-                                        autosize=True
-                                    )
-                                },
-                                config={'responsive': True, 'displayModeBar': True},
-                                style={'height': '100%', 'width': '100%'}
-                            )
+                            html.Div(className='loading-container', children=[
+                                dcc.Loading(
+                                    id="loading-isoform-heatmap",
+                                    type="default",
+                                    delay_show=500,
+                                    delay_hide=200,
+                                    children=[dcc.Graph(id='heatmap1')]
+                                ),
+                                html.Div(id="heatmap1-loading-message", className="custom-loading-message")
+                            ])
                         ]),
                         html.Div(className='table-container', id='table1-container', children=[
-                        html.Div(className='table-header-controls', children=[
-                            dbc.Button(
-                                "Clear Filters",
-                                id='clear-left-filters',
-                                color="secondary",
-                                size="sm",
-                                className="clear-filters-btn",
-                                disabled=True
-                            )
-                        ]),
-                        left_data_table
-                    ])
+                            html.Div(className='table-header-controls', children=[
+                                dbc.Button(
+                                    "Clear Filters",
+                                    id='clear-left-filters',
+                                    color="secondary",
+                                    size="sm",
+                                    className="clear-filters-btn",
+                                    disabled=True
+                                )
+                            ]),
+                            left_data_table
+                        ])
                     ])
                 ]),
                 
@@ -712,32 +704,53 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                     html.H2("Tabula Sapiens 2.0 Pseudobulked Smart-seq2 Single-cell and Allen Brain Single Nuclei for Brain Data"),
                     html.Div(className='graph-wrapper', children=[
                         html.Div(className='atse-container', children=[
-                            dcc.Graph(
-                                id='atse-map',
-                                figure=create_empty_atse_message("Select a gene to view splice junctions and exons"),
-                                config={
-                                    'responsive': True, 
-                                    'displayModeBar': True,
-                                    'scrollZoom': True
-                                },
-                                style={'height': '100%', 'width': '100%'}
-                            )
-                        ], style={'height': '25%', 'min-height': '200px', 'margin-bottom': '15px'}),
+                            html.Div(className='loading-container', children=[
+                                dcc.Loading(
+                                    id="loading-atse-plot",
+                                    type="default",
+                                    #color="#0C4142",
+                                    delay_hide=500,
+                                    children=[
+                                        dcc.Graph(
+                                            id='atse-map',
+                                            figure=create_empty_atse_message("Select a gene to view splice junctions and exons"),
+                                            config={
+                                                'responsive': True, 
+                                                'displayModeBar': True,
+                                                'scrollZoom': True
+                                            },
+                                            style={'height': '100%', 'width': '100%'}
+                                        )
+                                    ]
+                                ),
+                                html.Div(id="atse-map-loading-message", className="custom-loading-message")
+                            ], style={'height': '25%', 'min-height': '200px', 'margin-bottom': '15px'})
+                        ]),
                         html.Div(className='heatmap-container', children=[
-                            dcc.Graph(
-                                id='heatmap2',
-                                figure={
-                                    'data': [go.Heatmap(z=data2, colorscale='Plasma')],
-                                    'layout': go.Layout(
-                                        margin=dict(l=40, r=40, t=40, b=40),
-                                        title={'text': 'Junction Usage by Cell Type', 'font': {'size': 14}},
-                                        autosize=True
-                                    ),
-                                    
-                                },
-                                config={'responsive': True},
-                                style={'height': '100%', 'width': '100%'}
-                            )
+                            html.Div(className='loading-container', children=[
+                                dcc.Loading(
+                                id="loading-junction-heatmap",
+                                type="default",
+                                #color="#0C4142",
+                                delay_hide=500,
+                                children=[
+                                    dcc.Graph(
+                                        id='heatmap2',
+                                        figure={
+                                            'data': [go.Heatmap(z=data2, colorscale='Plasma')],
+                                            'layout': go.Layout(
+                                                margin=dict(l=40, r=40, t=40, b=40),
+                                                title={'text': 'Junction Usage by Cell Type', 'font': {'size': 14}},
+                                                autosize=True
+                                            ),
+                                        },
+                                        config={'responsive': True},
+                                        style={'height': '100%', 'width': '100%'}
+                                    )
+                                ]
+                            ),
+                            html.Div(id="heatmap2-loading-message", className="custom-loading-message")
+                            ])
                         ]),
                         html.Div(className='table-container', id='table2-container', children=[
                             html.Div(className='table-header-controls', children=[
@@ -1207,6 +1220,54 @@ def update_atse_visualization(selected_gene, filtered_junction_ids):
         traceback.print_exc()
 
         return create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
+
+
+@app.callback(
+    dash.dependencies.Output('barplot1-loading-message', 'children'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('filtered-isoform-store', 'data')]
+)
+def update_barplot1_loading_message(selected_gene, filtered_ids):
+    if not selected_gene:
+        return ""
+    T = len(filtered_ids) if filtered_ids else 0
+    return f"Loading data for {T} isoform transcripts for {selected_gene}"
+
+
+@app.callback(
+    dash.dependencies.Output('heatmap1-loading-message', 'children'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('filtered-isoform-store', 'data')]
+)
+def update_heatmap1_loading_message(selected_gene, filtered_ids):
+    if not selected_gene:
+        return ""
+    T = len(filtered_ids) if filtered_ids else 0
+    return f"Loading data for {T} isoform transcripts for {selected_gene}"
+
+
+@app.callback(
+    dash.dependencies.Output('atse-map-loading-message', 'children'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('filtered-junction-store', 'data')]
+)
+def update_atse_map_loading_message(selected_gene, filtered_ids):
+    if not selected_gene:
+        return ""
+    N = len(filtered_ids) if filtered_ids else 0
+    return f"Loading data for {N} junctions for {selected_gene}"
+
+
+@app.callback(
+    dash.dependencies.Output('heatmap2-loading-message', 'children'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('filtered-junction-store', 'data')]
+)
+def update_heatmap2_loading_message(selected_gene, filtered_ids):
+    if not selected_gene:
+        return ""
+    N = len(filtered_ids) if filtered_ids else 0
+    return f"Loading data for {N} junctions for {selected_gene}"
 
 
 ###################################################################
