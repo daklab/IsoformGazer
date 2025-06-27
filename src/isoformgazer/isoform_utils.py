@@ -630,7 +630,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             },
             line_width=2,
             display_ratio=[0.12, 0.08] if not hide_tissue_labels else [0.08, 0.05],
-            standardize=None, 
+            standardize='none', 
+            center_values=False,
             return_computed_traces=True
         )
         # Update heatmap trace with reordered organs

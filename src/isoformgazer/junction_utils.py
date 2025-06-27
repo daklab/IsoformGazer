@@ -99,10 +99,10 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
 
 
 def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None):
-    """Create ATSE-level clustergram for a specific gene with all junctions"""
+    """Create ATSE-level clustergram with correct junction ID matching for tooltips"""
     conn = sqlite3.connect(db_path)
     query = """
-    SELECT cell_type, junction_id, psi, event_id, gene_name
+    SELECT cell_type, junction_id, psi, n_cells, event_id, gene_name
     FROM junctions 
     WHERE gene_name = ? AND psi IS NOT NULL
     """
@@ -133,10 +133,14 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     orig_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
     psi_matrix = psi_matrix[valid_columns]
+
+    # n_cells matrix to allow us to show cell count in tooltip on hover in dashboard
+    n_cells_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='n_cells')
+    n_cells_matrix = n_cells_matrix.reindex(index=psi_matrix.index, columns=psi_matrix.columns).fillna(0)
+    n_cells_values = n_cells_matrix[valid_columns].values.astype(int)
     
     if psi_matrix.empty:
         return create_empty_clustergram_message(f"No PSI data available for gene: {gene_name}")
-    #print(f"Showing {psi_matrix.shape[1]} junctions for gene {gene_name}")
     
     junction_labels = [column for column in psi_matrix.columns]
     
@@ -160,7 +164,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     psi_matrix_processed = psi_matrix_processed.fillna(0)
     
     try:
-        clustergram = dash_bio.Clustergram(
+        clustergram, computed_traces = dash_bio.Clustergram(
             data=psi_matrix_processed.values,
             column_labels=junction_labels,
             row_labels=list(psi_matrix_processed.index),
@@ -179,13 +183,15 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             },
             line_width=2,
             display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05],
-            standardize='none'
+            standardize='none', 
+            center_values=False,
+            return_computed_traces=True
         )
         
     except Exception as e:
         print(f"Warning: standardize='none' failed, trying without standardize parameter: {e}")
         try:
-            clustergram = dash_bio.Clustergram(
+            clustergram, computed_traces = dash_bio.Clustergram(
                 data=psi_matrix_processed.values,
                 column_labels=junction_labels,
                 row_labels=list(psi_matrix_processed.index),
@@ -203,13 +209,27 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
                     'bg': '#506784'
                 },
                 line_width=2,
-                display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05]
+                display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05],
+                return_computed_traces=True
             )
             
         except Exception as e2:
             print(f"Error creating clustergram: {e2}")
             return create_empty_clustergram_message(f"Error creating visualization for {gene_name}")
     
+    row_ids = computed_traces['row_ids']
+    col_ids = computed_traces['column_ids']
+    reordered_n_cells = n_cells_values[row_ids, :][:, col_ids]
+
+    heatmap_trace = clustergram.data[-1]
+    heatmap_trace.hovertemplate = (
+        '<b>Junction ID</b>: %{x}<br>'
+        '<b>Cell Type</b>: %{y}<br>'
+        '<b>PSI</b>: %{z:.2f}<br>'
+        '<b>Number of Cells</b>: %{text}<extra></extra>'
+    )
+    heatmap_trace.text = reordered_n_cells.astype(str).tolist()
+   
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
     
     try:
