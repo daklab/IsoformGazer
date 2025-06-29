@@ -179,7 +179,12 @@ html, body {
     min-height: 0;
     overflow: auto;
     margin-top: 8px;
-    border-top: 1px solid #e0e0e0; 
+    border-top: none !important;
+}
+
+.table-header-controls .btn {
+    border-top: none !important;
+    box-shadow: none !important;
 }
 
 .graph-wrapper:not(.tables-hidden) .table-container {
@@ -425,6 +430,9 @@ html, body {
     display: flex;
     justify-content: flex-start;
     margin-bottom: 2px;
+    border-top: none !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
 }
 
 .clear-filters-btn {
@@ -436,6 +444,8 @@ html, body {
     transition: all 0.3s ease;
     min-width: 100px;
     margin-bottom: 0; 
+    border-top: none !important;
+    box-shadow: none !important;
 }
 
 .clear-filters-btn:hover:not(:disabled) {
@@ -461,16 +471,24 @@ html, body {
 .dash-table-container {
     overflow: auto !important;
     width: 100% !important;
+    border-top: none !important;
 }
 
 .dash-table-container .dash-spreadsheet-container {
     overflow: auto !important;
     max-width: 100% !important;
+    border-top: none !important;
 }
 
 .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner table {
     width: auto !important;
     min-width: 100% !important;
+    border-top: none !important;
+}
+
+.table-header-controls::before,
+.table-header-controls::after {
+    display: none !important;
 }
 
 .show-hide { display: none !important; }
