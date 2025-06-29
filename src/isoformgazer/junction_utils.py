@@ -496,7 +496,7 @@ def process_transcript_structure(psl_df: pd.DataFrame,
 
 
 def create_junction_exon_visualization(gene_data: dict, 
-                                       height: int = 300) -> go.Figure:
+                                       height: int = 250) -> go.Figure:
     """Create junction and exon visualization identical to transcript structure plot + junctions"""
     
     if 'error' in gene_data:
@@ -649,19 +649,19 @@ def create_junction_exon_visualization(gene_data: dict,
         },
         xaxis=dict(
             title="Genomic Position",
-            range=[min_start - 1000, max_end + 1000],  
-            showgrid=False, 
+            range=[min_start - 1000, max_end + 1000],
+            showgrid=False,
             tickformat=',',
-            rangeslider=dict(visible=True, range=[min_start, max_end])  
+            rangeslider=dict(visible=True, range=[min_start, max_end])
         ),
         yaxis=dict(
             showticklabels=False,
             showgrid=False,
             zeroline=False,
-            range=[0, total_y_range]  
+            range=[0, total_y_range]
         ),
-        height=max(height, int(total_y_range * 40 + 150)), 
-        margin=dict(l=100, r=150, t=80, b=50),  
+        height=height,
+        margin=dict(l=100, r=150, t=80, b=50),
         hovermode='closest',
         plot_bgcolor='white'
     )
@@ -723,7 +723,7 @@ def create_empty_atse_message(message: str) -> go.Figure:
         xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
         yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
         plot_bgcolor='white',
-        height=300,
+        height=250,
         margin=dict(l=50, r=50, t=50, b=50)
     )
     

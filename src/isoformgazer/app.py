@@ -565,10 +565,10 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 min=100,
                                 max=300,
                                 step=25,
-                                value=150,
+                                value=250,
                                 marks={str(i): str(i) for i in range(100, 301, 50)}
                             ),
-                            html.Div(className='app-controls-desc', children='Adjust the height of the isoform-level event visualization')
+                            html.Div(className='app-controls-desc', children='Adjust the height of both the isoform-level and junction-level event visualizations')
                         ]),
                         html.Hr(),
 
@@ -1168,9 +1168,10 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids):
 @app.callback(
     dash.dependencies.Output('atse-map', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('filtered-junction-store', 'data')]
+     dash.dependencies.Input('filtered-junction-store', 'data'),
+     dash.dependencies.Input('bar-height-slider', 'value')]  # Add this input
 )
-def update_atse_visualization(selected_gene, filtered_junction_ids):
+def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height):
     """Update ATSE splice junction visualization with filtered data"""
     
     if not selected_gene:
@@ -1193,7 +1194,7 @@ def update_atse_visualization(selected_gene, filtered_junction_ids):
             
             gene_data['junctions'] = filtered_junctions
         
-        fig = create_junction_exon_visualization(gene_data, height=300)
+        fig = create_junction_exon_visualization(gene_data, height=plot_height)
         
         return fig
     

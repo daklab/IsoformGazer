@@ -899,6 +899,7 @@ def extract_tissue_name_from_column(column_name):
     )
     return tissue_name
 
+
 def create_organ_annotation_bar(tissue_cols, height=20):
     """Create organ color annotation bar for clustergram"""
     tissue_to_organ = get_tissue_to_organ_mapping()
