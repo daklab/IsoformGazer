@@ -777,29 +777,18 @@ app.layout.children.extend([
 @app.callback(
     [dash.dependencies.Output('filtered-isoform-store', 'data'),
      dash.dependencies.Output('filtered-junction-store', 'data')],
-    [dash.dependencies.Input('left_data_table', 'derived_virtual_data'),
-     dash.dependencies.Input('right_data_table', 'derived_virtual_data')],
-    [dash.dependencies.State('left_data_table', 'data'),
-     dash.dependencies.State('right_data_table', 'data')]
+    [dash.dependencies.Input('left_data_table', 'data'),
+     dash.dependencies.Input('right_data_table', 'data')]
 )
-def update_filtered_data_stores(isoform_filtered_data, junction_filtered_data, 
-                               isoform_full_data, junction_full_data):
-    """Store filtered transcript and junction IDs from master tables"""
-    # Extract IDs using new 'id' column
-    isoform_all_ids = [row.get('id', '') for row in isoform_full_data]
-    junction_all_ids = [row.get('id', '') for row in junction_full_data]
-    
+def update_filtered_data_stores(isoform_data, junction_data):
+    """Store ALL filtered transcript and junction IDs (across all pages)"""
     filtered_transcript_ids = []
-    if isoform_filtered_data:
-        filtered_transcript_ids = [row.get('id', '') 
-                                  for row in isoform_filtered_data 
-                                  if row.get('id') in isoform_all_ids]
-    
+    if isoform_data:
+        filtered_transcript_ids = [row.get('id', '') for row in isoform_data if row.get('id')]
+
     filtered_junction_ids = []
-    if junction_filtered_data:
-        filtered_junction_ids = [row.get('id', '') 
-                                for row in junction_filtered_data 
-                                if row.get('id') in junction_all_ids]
+    if junction_data:
+        filtered_junction_ids = [row.get('junction_id', '') for row in junction_data if row.get('junction_id')]
     
     return filtered_transcript_ids, filtered_junction_ids
 
@@ -921,6 +910,7 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
         gene_filter=selected_gene
     )
     page_count = math.ceil(total_count / page_size) if page_size else 1
+    #print(f"JUNCTION DATA: {data}")
     return data, page_count
 
 
@@ -935,7 +925,7 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
      dash.dependencies.Input('filtered-junction-store', 'data')]
 )
 def update_junction_clustergram(selected_gene, colorscale, show_tables, filtered_junction_ids):
-    """Update junction visualization based on gene selection"""
+    """Update junction visualization based on gene selection and filtering"""
     if show_tables == 'show':
         heatmap_height = 450
     else:
@@ -958,7 +948,9 @@ def update_junction_clustergram(selected_gene, colorscale, show_tables, filtered
             show_tables=show_tables,
             filtered_junction_ids=filtered_junction_ids
         )
+
         return fig
+    
     except Exception as e:
         print(f"Error creating gene clustergram: {e}")
         return create_empty_clustergram_message(f"Error loading data for {selected_gene}")
@@ -1169,11 +1161,10 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids):
     dash.dependencies.Output('atse-map', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('bar-height-slider', 'value')]  # Add this input
+     dash.dependencies.Input('bar-height-slider', 'value')]
 )
 def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height):
     """Update ATSE splice junction visualization with filtered data"""
-    
     if not selected_gene:
         return create_empty_atse_message("Select a gene to view splice junctions and exons")
     
@@ -1181,27 +1172,18 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height)
         return create_empty_atse_message("ATSE data not loaded - check file path")
     
     try:
-        gene_data = process_gene_atse_data(atse_data, selected_gene, db_path)
-        
-        if filtered_junction_ids and 'junctions' in gene_data:
-            original_junctions = gene_data['junctions']
-            filtered_junctions = []
-            
-            for junction in original_junctions:
-                junction_id = f"chr{gene_data.get('chromosome', '').replace('chr', '')}_{junction['start']}_{junction['end']}_{gene_data.get('strand', '+')}"
-                if junction_id in filtered_junction_ids:
-                    filtered_junctions.append(junction)
-            
-            gene_data['junctions'] = filtered_junctions
+        gene_data = process_gene_atse_data(
+            atse_data, 
+            selected_gene, 
+            db_path,
+            filtered_junction_ids=filtered_junction_ids
+        )
         
         fig = create_junction_exon_visualization(gene_data, height=plot_height)
-        
         return fig
     
     except Exception as e:
         print(f"Error creating ATSE visualization: {e}")
-        traceback.print_exc()
-
         return create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
 
 

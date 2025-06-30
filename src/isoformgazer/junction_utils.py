@@ -98,6 +98,47 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     return clustergram
 
 
+def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
+    """Create simple heatmap when only one junction remains"""
+    junction_id = gene_vals['junction_id'].iloc[0]
+    heatmap_data = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
+    n_cells_data = gene_vals.pivot(index='cell_type', columns='junction_id', values='n_cells')
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Heatmap(
+        z=heatmap_data.values,
+        x=[junction_id],
+        y=heatmap_data.index.tolist(),
+        colorscale=colorscale,
+        zmin=0,
+        zmax=1,
+        customdata=n_cells_data.values,
+        text=n_cells_data.values.astype(str),
+        hovertemplate=(
+            '<b>Junction ID</b>: %{x}<br>'
+            '<b>Cell Type</b>: %{y}<br>'
+            '<b>PSI</b>: %{z:.2f}<br>'
+            '<b>Number of Cells</b>: %{text}<extra></extra>'
+        )
+    ))
+    
+    fig.update_layout(
+        title={
+            'text': f"Splicing PSI Heatmap for Junction {junction_id} in {gene_name}",
+            'font': {'size': 14},
+            'x': 0.5,
+            'xanchor': 'center'
+        },
+        height=height,
+        xaxis=dict(title="Junction"),
+        yaxis=dict(title="Cell Type"),
+        margin=dict(l=100, r=50, t=80, b=100)
+    )
+    
+    return fig
+
+
 def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None):
     """Create ATSE-level clustergram with correct junction ID matching for tooltips"""
     conn = sqlite3.connect(db_path)
@@ -106,11 +147,11 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     FROM junctions 
     WHERE gene_name = ? AND psi IS NOT NULL
     """
-    # Add filtering if IDs are provided
     if filtered_junction_ids:
-        placeholders = ','.join(['?'] * len(filtered_junction_ids))
+        filtered_ids_str = [str(jid) for jid in filtered_junction_ids]
+        placeholders = ','.join(['?'] * len(filtered_ids_str))
         query += f" AND junction_id IN ({placeholders})"
-        params = [gene_name] + filtered_junction_ids
+        params = [gene_name] + filtered_ids_str
     else:
         params = [gene_name]
     
@@ -162,6 +203,11 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     psi_matrix_processed = psi_matrix_processed.astype(float)
     psi_matrix_processed = psi_matrix_processed.clip(lower=0, upper=1)
     psi_matrix_processed = psi_matrix_processed.fillna(0)
+    
+    if len(gene_vals['junction_id'].unique()) == 1:
+        return create_single_junction_heatmap(
+            gene_vals, gene_name, height, colorscale
+        )
     
     try:
         clustergram, computed_traces = dash_bio.Clustergram(
@@ -325,7 +371,7 @@ def get_gene_id_from_atse(db_path: str, gene_name: str) -> str:
     return None
 
 
-def process_gene_atse_data(atse_df: pd.DataFrame, gene_name: str, db_path: str) -> dict:
+def process_gene_atse_data(atse_df: pd.DataFrame, gene_name: str, db_path: str, filtered_junction_ids=None) -> dict:
     """Process ATSE data for a specific gene to extract junction and transcript information"""
     # Get gene_id from db
     gene_id_with_version = None
@@ -432,6 +478,19 @@ def process_gene_atse_data(atse_df: pd.DataFrame, gene_name: str, db_path: str) 
             unique_junctions.append(j)
     
     unique_junctions.sort(key=lambda x: x['start'])
+    
+    if filtered_junction_ids and len(filtered_junction_ids) > 0:
+        valid_junction_ids = [str(jid).strip() for jid in filtered_junction_ids if jid and str(jid).strip()]
+        
+        if valid_junction_ids:
+            filtered_unique_junctions = []
+            
+            for junction in unique_junctions:
+                junction_id = f"chr{chromosome.replace('chr', '')}_{junction['start']}_{junction['end']}_{strand}"
+                if junction_id in valid_junction_ids:
+                    filtered_unique_junctions.append(junction)
+            
+            unique_junctions = filtered_unique_junctions
     
     return {
         'gene_name': gene_name,
