@@ -466,7 +466,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                 dcc.Tab(label='About', value='tab-1', children=[
                     html.Div(className='control-tab', children=[
                         html.H4('About'),
-                        html.P('Isoform Gazers allows for a unified view of RNA splicing across ' \
+                        html.P('Isoform Gazer allows for a unified view of RNA splicing across ' \
                         'both single-cell junction usage and long-read isoform data in GENCODEv46 (GRCh38.p14).'),
                         html.P('Use the controls in the "Query" tab to dynamically query the master table data and generate visualizations.'),
                         html.P('Use the controls in the "Custom" tab to customize the visualizations.')
@@ -765,7 +765,9 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
 
 app.layout.children.extend([
     dcc.Store(id='filtered-isoform-store', data=[]),
-    dcc.Store(id='filtered-junction-store', data=[])
+    dcc.Store(id='filtered-junction-store', data=[]),
+    dcc.Store(id='isoform-full-data-store', data=[]),
+    dcc.Store(id='junction-full-data-store', data=[])
 ])
 
 #######################################################################
@@ -777,18 +779,18 @@ app.layout.children.extend([
 @app.callback(
     [dash.dependencies.Output('filtered-isoform-store', 'data'),
      dash.dependencies.Output('filtered-junction-store', 'data')],
-    [dash.dependencies.Input('left_data_table', 'data'),
-     dash.dependencies.Input('right_data_table', 'data')]
+    [dash.dependencies.Input('isoform-full-data-store', 'data'),
+     dash.dependencies.Input('junction-full-data-store', 'data')]
 )
-def update_filtered_data_stores(isoform_data, junction_data):
-    """Store ALL filtered transcript and junction IDs (across all pages)"""
+def update_filtered_data_stores(isoform_full_data, junction_full_data):
+    """Store ALL filtered transcript/junction IDs from FULL datasets"""
     filtered_transcript_ids = []
-    if isoform_data:
-        filtered_transcript_ids = [row.get('id', '') for row in isoform_data if row.get('id')]
-
+    if isoform_full_data:
+        filtered_transcript_ids = [row.get('id', '') for row in isoform_full_data if row.get('id')]
+    
     filtered_junction_ids = []
-    if junction_data:
-        filtered_junction_ids = [row.get('junction_id', '') for row in junction_data if row.get('junction_id')]
+    if junction_full_data:
+        filtered_junction_ids = [row.get('junction_id', '') for row in junction_full_data if row.get('junction_id')]
     
     return filtered_transcript_ids, filtered_junction_ids
 
@@ -867,7 +869,8 @@ def update_gene_options(search_value, current_value):
 ######################################################################
 @app.callback(
     [dash.dependencies.Output('left_data_table', 'data'),
-     dash.dependencies.Output('left_data_table', 'page_count')],
+     dash.dependencies.Output('left_data_table', 'page_count'),
+     dash.dependencies.Output('isoform-full-data-store', 'data')],
     [dash.dependencies.Input('left_data_table', 'page_current'),
      dash.dependencies.Input('left_data_table', 'page_size'),
      dash.dependencies.Input('left_data_table', 'sort_by'),
@@ -876,22 +879,39 @@ def update_gene_options(search_value, current_value):
 )
 def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene):
     filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
-    data, total_count = query_master_table(
+    
+    _, total_count = query_master_table(
         db_path,
         table_name='isoforms',
-        page=page_current if page_current is not None else 0,
-        page_size=page_size if page_size is not None else 10,
+        page=0,
+        page_size=0, 
+        sort_by=None,
+        filters=filters,
+        gene_filter=selected_gene
+    )
+    
+    full_data, _ = query_master_table(
+        db_path,
+        table_name='isoforms',
+        page=0,
+        page_size=total_count,
         sort_by=sort_by,
         filters=filters,
         gene_filter=selected_gene
     )
+    
+    start_idx = page_current * page_size
+    end_idx = (page_current + 1) * page_size
+    paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
-    return data, page_count
+    
+    return paginated_data, page_count, full_data
 
 
 @app.callback(
     [dash.dependencies.Output('right_data_table', 'data'),
-     dash.dependencies.Output('right_data_table', 'page_count')],
+     dash.dependencies.Output('right_data_table', 'page_count'),
+     dash.dependencies.Output('junction-full-data-store', 'data')],
     [dash.dependencies.Input('right_data_table', 'page_current'),
      dash.dependencies.Input('right_data_table', 'page_size'),
      dash.dependencies.Input('right_data_table', 'sort_by'),
@@ -900,18 +920,33 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
 )
 def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene):
     filters = parse_filter_query(db_path, filter_query, table_name='junctions')
-    data, total_count = query_master_table(
+    
+    _, total_count = query_master_table(
         db_path,
         table_name="junctions",
-        page=page_current if page_current is not None else 0,
-        page_size=page_size if page_size is not None else 10,
+        page=0,
+        page_size=0, 
+        sort_by=None,
+        filters=filters,
+        gene_filter=selected_gene
+    )
+    
+    full_data, _ = query_master_table(
+        db_path,
+        table_name="junctions",
+        page=0,
+        page_size=total_count,
         sort_by=sort_by,
         filters=filters,
         gene_filter=selected_gene
     )
+    
+    start_idx = page_current * page_size
+    end_idx = (page_current + 1) * page_size
+    paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
-    #print(f"JUNCTION DATA: {data}")
-    return data, page_count
+    
+    return paginated_data, page_count, full_data
 
 
 ######################################################################
