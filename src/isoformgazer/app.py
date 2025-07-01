@@ -75,7 +75,7 @@ def setup_local_database(force_rebuild=False):
     ########################################################
     # Load isoform master table data
     ########################################################
-    isoform_file = os.path.join(data_dir, "mt_isoform_gazers_250514.tsv")
+    isoform_file = os.path.join(data_dir, "mt_isoform_gazers_250616.tsv")
     
     with tqdm(desc="Loading isoform master table data", unit=" rows") as pbar:
         df_isoform = pd.read_csv(isoform_file, sep='\t')
@@ -177,7 +177,7 @@ def setup_local_database(force_rebuild=False):
     ########################################################
     # Load junction master table data
     ########################################################
-    junction_file = os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250514_072922.csv")
+    junction_file = os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250623_171456.csv")
     
     # Need to count total lines (minus header) to estimate progress
     with open(junction_file, 'r') as f:
