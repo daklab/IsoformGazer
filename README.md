@@ -35,6 +35,8 @@ curl -sSL https://install.python-poetry.org | python3 -
 poetry install
 ```
 
+Please note that if you run ``git pull`` in order to update to the latest version of IsoformGazer, you should also rerun the ``poetry install`` command afterwards. 
+
 If you're interested in viewing details on the package dependencies and other options Poetry offers, within the IsoformGazer repository you can run: 
 ```
 poetry show --help 
