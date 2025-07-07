@@ -78,61 +78,52 @@ def prepare_gene_psl_data(psl_df: pd.DataFrame):
     
 
 def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: list) -> pd.DataFrame:
-    """Obtains gene_id based on queried gene name and queries the isoform and PSL data tables 
-    to fetch the needed data for generating isoform-level visualizations"""
-    gene_id = get_gene_id_for_gene_name(db_path, gene_name)
-    
+    """Optimized transcript structure processing"""
     conn = sqlite3.connect(db_path)
-
-    isoform_query = """
-    SELECT id 
-    FROM isoforms 
-    WHERE gene_id LIKE ?
-    """
-    isoform_ids = pd.read_sql_query(isoform_query, conn, params=[gene_id])['id'].tolist()
-    if not isoform_ids:
-        return pd.DataFrame()
+    gene_query = "SELECT DISTINCT gene_id FROM isoforms WHERE gene_name = ? LIMIT 1"
+    gene_result = pd.read_sql_query(gene_query, conn, params=[gene_name])
     
-    if filtered_ids: 
-        isoform_ids = [id for id in isoform_ids if id in filtered_ids]
-    
-    # Master table filtering clauses if provided
-    placeholders = ','.join(['?'] * len(isoform_ids))
-    base_query = f"""
-    SELECT 
-        psl.id,
-        psl.trans_id,
-        psl.gene_id,
-        psl.tName,
-        psl.strand,
-        psl.tStart,
-        psl.tEnd,
-        (psl.tEnd - psl.tStart) AS transcript_length,
-        psl.blockSizes,
-        psl.tStarts
-    FROM psl_data psl
-    WHERE psl.id IN ({placeholders})
-    """
-    
-    try:
-        gene_psl = pd.read_sql_query(base_query, conn, params=isoform_ids)
-
-    except Exception as e:
-        print(f"Database error: {e}")
-        print(f"Query: {base_query}")
-        print(f"Params: {isoform_ids}")
-        return pd.DataFrame()
-    
-    finally: 
+    if gene_result.empty:
         conn.close()
+        return pd.DataFrame()
+    
+    gene_id = gene_result.iloc[0]['gene_id'].split('.')[0]
+    
+    if filtered_ids:
+        placeholders = ','.join(['?'] * len(filtered_ids))
+        isoform_query = f"""
+        SELECT id FROM isoforms 
+        WHERE gene_id LIKE ? AND id IN ({placeholders})
+        """
+        params = [f"{gene_id}%"] + filtered_ids
+    else:
+        isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ?"
+        params = [f"{gene_id}%"]
+    
+    isoform_ids = pd.read_sql_query(isoform_query, conn, params=params)['id'].tolist()
+    
+    if not isoform_ids:
+        conn.close()
+        return pd.DataFrame()
+    
+    placeholders = ','.join(['?'] * len(isoform_ids))
+    psl_query = f"""
+    SELECT 
+        id, trans_id, gene_id, tName, strand, 
+        tStart, tEnd, blockSizes, tStarts
+    FROM psl_data 
+    WHERE id IN ({placeholders})
+    ORDER BY tStart
+    """
+    gene_psl = pd.read_sql_query(psl_query, conn, params=isoform_ids)
+    conn.close()
     
     transcript_data = []
     for _, row in gene_psl.iterrows():
         try:
-            block_sizes = [int(x) for x in row['blockSizes'].strip(',').split(',') if x]
-            block_starts = [int(x) for x in row['tStarts'].strip(',').split(',') if x]
+            block_sizes = [int(x) for x in row['blockSizes'].split(',') if x]
+            block_starts = [int(x) for x in row['tStarts'].split(',') if x]
             
-            # Create exon coordinates
             for i, (size, start) in enumerate(zip(block_sizes, block_starts)):
                 transcript_data.append({
                     'id': row['id'],
@@ -142,14 +133,12 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
                     'strand': row['strand'],
                     'transcript_start': row['tStart'],
                     'transcript_end': row['tEnd'],
-                    'transcript_length': row['transcript_length'],
                     'exon_number': i + 1,
                     'exon_start': start,
                     'exon_end': start + size,
                     'exon_size': size
                 })
-        except Exception as e:
-            print(f"Error processing transcript {row['trans_id']} with index {row['id']}: {e}")
+        except Exception:
             continue
     
     return pd.DataFrame(transcript_data)
@@ -236,11 +225,13 @@ def create_transcript_structure_plot(db_path: str,
     
     # Change 'id' to 'isoform_id'
     transcript_summary = transcript_data.groupby('trans_id').agg({
-        'id': 'first',  # Added
-        'transcript_length': 'first',
+        'id': 'first',
         'transcript_start': 'min',
         'transcript_end': 'max'
     }).reset_index()
+
+    transcript_summary['transcript_length'] = transcript_summary['transcript_end'] - transcript_summary['transcript_start']
+    transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
     
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
     
@@ -511,19 +502,6 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
     return fig
 
 
-def calculate_colorbar_x_position(transcript_names, base_x=1.02, char_width=0.006, padding=0.05):
-    """Calculate optimal colorscale x position based on longest transcript name"""
-    if not transcript_names:
-        return base_x
-    
-    max_label_length = max([len(str(name)) for name in transcript_names])
-    additional_space = max_label_length * char_width + padding
-    calculated_x = base_x + additional_space
-    calculated_x = min(calculated_x, 1.25) 
-    
-    return calculated_x
-
-
 def calculate_legend_x_position(colorbar_x, offset=0.15):
     """Calculate organ legend x position based on colorbar position"""
     x_position = colorbar_x + offset
@@ -617,10 +595,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             column_colors=color_list,
             height=actual_clustergram_height,
             width=width,
-            color_threshold={
-                'row': 0.7,
-                'col': 0.7
-            },
+            color_threshold={'row': 0.7, 'col': 0.7},
             hidden_labels='col' if not show_labels else None,
             cluster='all',
             color_list={
@@ -647,30 +622,33 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             f"<b>{data_type}:</b> %{{z:.2f}}"
             "<extra></extra>"
         )
+        # Title for continuous colorscale bar - currently breaks viz, TO DO investigate why
+        #heatmap_trace.colorbar.title = data_type
         
     except Exception as e2:
         print(f"Error creating clustergram: {e2}")
         return create_empty_isoform_message(f"Error creating visualization for {gene_name}")
     
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
-
-    # Convert to Figure for adding annotations
-    fig = go.Figure(clustergram)
+    colorbar_x = -0.35
     
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
-            heatmap_trace.colorscale = colorscale
-            heatmap_trace.showscale = True
-            heatmap_trace.colorbar.update(
-                title=dict(text=data_type, font=dict(size=10)),
-                x=1.02
-            )
-            
-    except Exception as e:
-        pass
+            if hasattr(heatmap_trace, 'colorbar'):
+                heatmap_trace.colorbar.x = colorbar_x 
+                heatmap_trace.colorbar.y = 1.0     
+                heatmap_trace.colorbar.yanchor = 'top'
+                heatmap_trace.colorbar.len = 0.3    
+                heatmap_trace.colorbar.thickness = 20
 
-    fig.update_layout(
+            elif hasattr(heatmap_trace, 'colorscale'):
+                heatmap_trace.update(colorbar=dict(x=colorbar_x,title={'text': data_type}))
+
+    except Exception as e:
+        print(f"Warning: Could not update colorbar position: {e}")
+    
+    clustergram.update_layout(
         title={
             'text': f"Isoform Expression Clustergram for {gene_name} ({len(transcript_names)} isoforms, {data_type} data)",
             'x': 0.5,
@@ -698,7 +676,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         paper_bgcolor='white'
     )
     
-    return fig
+    return clustergram
 
 
 def create_single_transcript_heatmap(heatmap_data, transcript_names, tissue_display_names,

@@ -35,10 +35,10 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     if len(df) == 0:
         return create_empty_clustergram_message("No junction data available for summary view")
     
-    psi_matrix = df.pivot(index='cell_type', columns='junction_id', values='avg_psi')
+    psi_matrix = df.pivot(index='junction_id', columns='cell_type', values='avg_psi')
     psi_matrix = psi_matrix.fillna(0)
     
-    orig_matrix = df.pivot(index='cell_type', columns='junction_id', values='avg_psi')
+    orig_matrix = df.pivot(index='junction_id', columns='cell_type', values='avg_psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
     psi_matrix = psi_matrix[valid_columns]
     
@@ -101,14 +101,14 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
 def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
     """Create simple heatmap when only one junction remains"""
     junction_id = gene_vals['junction_id'].iloc[0]
-    heatmap_data = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
-    n_cells_data = gene_vals.pivot(index='cell_type', columns='junction_id', values='n_cells')
-    
+    heatmap_data = gene_vals.pivot(index='junction_id', columns='cell_type', values='psi')
+    n_cells_data = gene_vals.pivot(index='junction_id', columns='cell_type', values='n_cells')
+
     fig = go.Figure()
     
     fig.add_trace(go.Heatmap(
         z=heatmap_data.values,
-        x=[junction_id],
+        x=heatmap_data.columns.tolist(),
         y=heatmap_data.index.tolist(),
         colorscale=colorscale,
         zmin=0,
@@ -116,8 +116,8 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
         customdata=n_cells_data.values,
         text=n_cells_data.values.astype(str),
         hovertemplate=(
-            '<b>Junction ID</b>: %{x}<br>'
-            '<b>Cell Type</b>: %{y}<br>'
+            '<b>Junction ID</b>: %{y}<br>'
+            '<b>Cell Type</b>: %{x}<br>'
             '<b>PSI</b>: %{z:.2f}<br>'
             '<b>Number of Cells</b>: %{text}<extra></extra>'
         )
@@ -161,29 +161,34 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     if len(gene_vals) == 0:
         return create_empty_clustergram_message(f"No junction data found for gene: {gene_name}")
     
-    # FILTER based on master table selection
-    if filtered_junction_ids:
-        gene_vals = gene_vals[gene_vals['junction_id'].isin(filtered_junction_ids)]
-        
-        if gene_vals.empty:
-            return create_empty_clustergram_message(f"No junction data remaining after filtering for gene: {gene_name}")
-    
-    psi_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
+    psi_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='psi')
     psi_matrix = psi_matrix.fillna(0)
 
-    orig_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='psi')
+    orig_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
     psi_matrix = psi_matrix[valid_columns]
 
     # n_cells matrix to allow us to show cell count in tooltip on hover in dashboard
-    n_cells_matrix = gene_vals.pivot(index='cell_type', columns='junction_id', values='n_cells')
+    n_cells_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='n_cells')
     n_cells_matrix = n_cells_matrix.reindex(index=psi_matrix.index, columns=psi_matrix.columns).fillna(0)
-    n_cells_values = n_cells_matrix[valid_columns].values.astype(int)
+    
+    n_cells_values = n_cells_matrix.values.astype(int)
+    junction_labels = list(psi_matrix.index)
+    cell_type_labels = list(psi_matrix.columns)
     
     if psi_matrix.empty:
         return create_empty_clustergram_message(f"No PSI data available for gene: {gene_name}")
     
-    junction_labels = [column for column in psi_matrix.columns]
+    if len(gene_vals['junction_id'].unique()) == 1:
+        return create_single_junction_heatmap(
+            gene_vals, gene_name, height, colorscale
+        )
+    
+    psi_matrix_processed = psi_matrix.copy()
+    psi_matrix_processed = psi_matrix_processed.replace([np.inf, -np.inf], 0)
+    psi_matrix_processed = psi_matrix_processed.astype(float)
+    psi_matrix_processed = psi_matrix_processed.clip(lower=0, upper=1)
+    psi_matrix_processed = psi_matrix_processed.fillna(0)
     
     num_junctions = len(junction_labels)
     hide_junction_labels = (num_junctions > 30) or (show_tables == 'show')
@@ -196,30 +201,16 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         bottom_margin = max(200, int(height * 0.35)) 
         actual_clustergram_height = height - 80
     
-    width = min(1000, max(800, len(junction_labels) * 12, int(height * 1.2)))
-    
-    psi_matrix_processed = psi_matrix.copy()
-    psi_matrix_processed = psi_matrix_processed.replace([np.inf, -np.inf], 0)
-    psi_matrix_processed = psi_matrix_processed.astype(float)
-    psi_matrix_processed = psi_matrix_processed.clip(lower=0, upper=1)
-    psi_matrix_processed = psi_matrix_processed.fillna(0)
-    
-    if len(gene_vals['junction_id'].unique()) == 1:
-        return create_single_junction_heatmap(
-            gene_vals, gene_name, height, colorscale
-        )
+    width = min(1000, max(800, len(cell_type_labels) * 12, int(height * 1.2)))
     
     try:
         clustergram, computed_traces = dash_bio.Clustergram(
             data=psi_matrix_processed.values,
-            column_labels=junction_labels,
-            row_labels=list(psi_matrix_processed.index),
+            row_labels=junction_labels,        
+            column_labels=cell_type_labels,
             height=actual_clustergram_height, 
             width=width,
-            color_threshold={
-                'row': 0.7,
-                'col': 0.7
-            },
+            color_threshold={'row': 0.7, 'col': 0.7},
             hidden_labels='col' if hide_junction_labels else None,
             cluster='all',
             color_list={
@@ -234,63 +225,43 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             return_computed_traces=True
         )
         
-    except Exception as e:
-        print(f"Warning: standardize='none' failed, trying without standardize parameter: {e}")
-        try:
-            clustergram, computed_traces = dash_bio.Clustergram(
-                data=psi_matrix_processed.values,
-                column_labels=junction_labels,
-                row_labels=list(psi_matrix_processed.index),
-                height=actual_clustergram_height, 
-                width=width,
-                color_threshold={
-                    'row': 0.7,
-                    'col': 0.7
-                },
-                hidden_labels='col' if hide_junction_labels else None,
-                cluster='all',
-                color_list={
-                    'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
-                    'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
-                    'bg': '#506784'
-                },
-                line_width=2,
-                display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05],
-                return_computed_traces=True
-            )
-            
-        except Exception as e2:
-            print(f"Error creating clustergram: {e2}")
-            return create_empty_clustergram_message(f"Error creating visualization for {gene_name}")
-    
-    row_ids = computed_traces['row_ids']
-    col_ids = computed_traces['column_ids']
-    reordered_n_cells = n_cells_values[row_ids, :][:, col_ids]
+        row_ids = computed_traces['row_ids']
+        col_ids = computed_traces['column_ids']
+        reordered_n_cells = n_cells_values[row_ids, :][:, col_ids]
 
-    heatmap_trace = clustergram.data[-1]
-    heatmap_trace.hovertemplate = (
-        '<b>Junction ID</b>: %{x}<br>'
-        '<b>Cell Type</b>: %{y}<br>'
-        '<b>PSI</b>: %{z:.2f}<br>'
-        '<b>Number of Cells</b>: %{text}<extra></extra>'
-    )
-    heatmap_trace.text = reordered_n_cells.astype(str).tolist()
-   
+        heatmap_trace = clustergram.data[-1]
+        heatmap_trace.hovertemplate = (
+            '<b>Junction ID</b>: %{y}<br>'     
+            '<b>Cell Type</b>: %{x}<br>' 
+            '<b>PSI</b>: %{z:.2f}<br>'
+            '<b>Number of Cells</b>: %{text}<extra></extra>'
+        )
+        heatmap_trace.text = reordered_n_cells.astype(str).tolist()
+        
+    except Exception as e:
+        print(f"Error creating clustergram: {e}")
+        return create_empty_clustergram_message(f"Error creating visualization for {gene_name}")
+    
+    # Apply colorscale and positioning
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
     
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
-            heatmap_trace.zmin = 0  
-            heatmap_trace.zmax = 1  
-            heatmap_trace.colorscale = colorscale
-            heatmap_trace.showscale = True
+            if hasattr(heatmap_trace, 'colorbar'):
+                heatmap_trace.colorbar.x = -0.3  
+                heatmap_trace.colorbar.y = 1.0   
+                heatmap_trace.colorbar.yanchor = 'top'
+                heatmap_trace.colorbar.len = 0.3    
+                heatmap_trace.colorbar.thickness = 20 
+                heatmap_trace.colorbar.title = 'PSI'
+
     except Exception as e:
-        print(f"Warning: Could not set color range: {e}")
-    
+        print(f"Warning: Could not update colorbar position: {e}")
+
     clustergram.update_layout(
         title={
-            'text': f"Splicing PSI Clustermap for {gene_name} ({psi_matrix_processed.shape[1]} junctions)",
+            'text': f"Splicing PSI Clustermap for {gene_name} ({len(junction_labels)} junctions)",
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 14 if hide_junction_labels else 16}  
