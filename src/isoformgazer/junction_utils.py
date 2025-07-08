@@ -663,7 +663,7 @@ def create_junction_exon_visualization(gene_data: dict,
     
     fig.update_layout(
         title={
-            'text': f"Splice Junctions and Exons for Gene {gene_name}<br>(ID: {gene_id}, Strand: {strand})",
+            'text': f"Splice Junctions and Exons for Gene {gene_name} ({gene_id})<br>(Coordinates: {min_start} - {max_end}, Strand: {strand})",
             'x': 0.5,
             'xanchor': 'center',
             'font': {'size': 14}

@@ -194,6 +194,11 @@ def create_transcript_structure_plot(db_path: str,
     """Create transcript structure plot similar to simplified Isoviz version"""
     orf_perplexity = "Unknown"
     conn = sqlite3.connect(db_path)
+
+    gene_ensembl_column = 'gene_id'
+    query = f"SELECT {gene_ensembl_column} FROM isoforms WHERE gene_name = ? LIMIT 1"
+    gene_ensembl_result = pd.read_sql_query(query, conn, params=[gene_name])
+    gene_ensembl_id = gene_ensembl_result.iloc[0][gene_ensembl_column]
     
     orf_column = 'ORF_perplexity'
     query = f"SELECT {orf_column} FROM isoforms WHERE gene_name = ? LIMIT 1"
@@ -273,7 +278,7 @@ def create_transcript_structure_plot(db_path: str,
                 hovertemplate=f"Exon {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Position: {exon['exon_start']:,}-{exon['exon_end']:,}<extra></extra>"
             ))
     
-    title_text = f"{gene_name} Transcript Summary<br>(ORF Perplexity: {orf_perplexity}, Strand: {strand})"
+    title_text = f"Transcript Summary for Gene {gene_name} ({gene_ensembl_id})<br>(ORF Perplexity: {orf_perplexity}, Coordinates: {min_start} - {max_end}, Strand: {strand})"
     
     fig.update_layout(
         title={
