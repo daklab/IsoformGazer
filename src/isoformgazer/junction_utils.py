@@ -232,7 +232,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         heatmap_trace = clustergram.data[-1]
         heatmap_trace.hovertemplate = (
             '<b>Junction ID</b>: %{y}<br>'     
-            '<b>Cell Type</b>: %{x}<br>' 
+            '<b>Cell Type</b>: %{x}<br>'      
             '<b>PSI</b>: %{z:.2f}<br>'
             '<b>Number of Cells</b>: %{text}<extra></extra>'
         )
@@ -526,8 +526,9 @@ def process_transcript_structure(psl_df: pd.DataFrame,
 
 
 def create_junction_exon_visualization(gene_data: dict, 
-                                       height: int = 250) -> go.Figure:
-    """Create junction and exon visualization identical to transcript structure plot + junctions"""
+                                       height: int = 250,
+                                       show_y_labels: bool = False) -> go.Figure:
+    """Create junction and exon visualization with labels only on the right"""
     
     if 'error' in gene_data:
         return create_empty_atse_message(gene_data['error'])
@@ -537,7 +538,7 @@ def create_junction_exon_visualization(gene_data: dict,
     gene_id = gene_data['gene_id']
     strand = gene_data['strand']
     
-    # Get PSL data for transcript structure (same as isoform panel)
+    # PSL data for transcript structure
     base_dir = os.path.dirname(os.path.abspath(__file__))
     psl_file = os.path.join(base_dir, "data", "all_samples_sp_collapse_all_chr_no_treatment_full.psl")
     
@@ -556,20 +557,27 @@ def create_junction_exon_visualization(gene_data: dict,
     exon_color = '#2E86C1'  
     intron_color = '#85929E' 
     junction_color = '#85929E' 
+    transcript_labels = []
+    transcript_y_positions = []
     
     if not transcript_data.empty:
         transcript_summary = transcript_data.groupby('trans_id').agg({
-            'transcript_length': 'first',
             'transcript_start': 'min',
             'transcript_end': 'max'
-        }).sort_values('transcript_length', ascending=False).reset_index()
+        }).reset_index()
         
+        transcript_summary['transcript_length'] = transcript_summary['transcript_end'] - transcript_summary['transcript_start']
+        transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
+        
         plot_data = transcript_data.merge(transcript_summary[['trans_id', 'trans_order']], on='trans_id')
         
         min_start = plot_data['transcript_start'].min()
         max_end = plot_data['transcript_end'].max()
         y_max = len(transcript_summary) + 1
+        
+        transcript_labels = transcript_summary['trans_id'].tolist()
+        transcript_y_positions = transcript_summary['trans_order'].tolist()
         
         for _, transcript in transcript_summary.iterrows():
             trans_id = transcript['trans_id']
@@ -605,18 +613,6 @@ def create_junction_exon_visualization(gene_data: dict,
                     hovertemplate=f"Exon {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Position: {exon['exon_start']:,}-{exon['exon_end']:,}<extra></extra>"
                 ))
         
-        for _, transcript in transcript_summary.iterrows():
-            fig.add_annotation(
-                x=max_end + (max_end - min_start) * 0.02,
-                y=transcript['trans_order'],
-                text=transcript['trans_id'],
-                showarrow=False,
-                xanchor='left',
-                yanchor='middle',
-                font=dict(size=10)
-            )
-        
-        # Set junction start position above transcripts
         junction_y_start = y_max + 0.5
         
     else:
@@ -632,11 +628,18 @@ def create_junction_exon_visualization(gene_data: dict,
         y_max = 1
         junction_y_start = 1.5
     
+    junction_labels = []
+    junction_y_positions = []
+    
     if junctions:
         for i, junction in enumerate(junctions):
             start = junction['start']
             end = junction['end']
             junction_y_pos = junction_y_start + (i * 1.0)
+    
+            junction_id = f"chr{gene_data.get('chromosome', '').replace('chr', '')}_{start}_{end}_{strand}"
+            junction_labels.append(junction_id)
+            junction_y_positions.append(junction_y_pos)
             
             fig.add_shape(
                 type="rect",
@@ -645,18 +648,6 @@ def create_junction_exon_visualization(gene_data: dict,
                 fillcolor=junction_color,
                 line=dict(color=junction_color, width=1),
                 opacity=0.8
-            )
-            
-            junction_id = f"chr{gene_data.get('chromosome', '').replace('chr', '')}_{start}_{end}_{strand}"
-            
-            fig.add_annotation(
-                x=max_end + (max_end - min_start) * 0.02,
-                y=junction_y_pos,
-                text=junction_id,
-                showarrow=False,
-                xanchor='left',
-                yanchor='middle',
-                font=dict(size=10, color='black')
             )
             
             fig.add_trace(go.Scatter(
@@ -682,20 +673,54 @@ def create_junction_exon_visualization(gene_data: dict,
             range=[min_start - 1000, max_end + 1000],
             showgrid=False,
             tickformat=',',
-            rangeslider=dict(visible=True, range=[min_start, max_end])
+            rangeslider=dict(visible=True, range=[min_start, max_end]),
+            autorange=False,
+            fixedrange=False
         ),
         yaxis=dict(
             showticklabels=False,
             showgrid=False,
             zeroline=False,
-            range=[0, total_y_range]
+            range=[0, total_y_range],
+            autorange=False,
+            fixedrange=False
         ),
         height=height,
-        margin=dict(l=100, r=150, t=80, b=50),
+        margin=dict(
+            l=100,  
+            r=200,  
+            t=80, 
+            b=50
+        ),
         hovermode='closest',
-        plot_bgcolor='white'
+        plot_bgcolor='white',
+        autosize=True
     )
     
+    for idx, transcript in enumerate(transcript_labels):
+        y_pos = transcript_y_positions[idx]
+        fig.add_annotation(
+            x=max_end + (max_end - min_start) * 0.02,
+            y=y_pos,
+            text=transcript,
+            showarrow=False,
+            xanchor='left',
+            yanchor='middle',
+            font=dict(size=10)
+        )
+
+    for idx, junction in enumerate(junction_labels):
+        y_pos = junction_y_positions[idx]
+        fig.add_annotation(
+            x=max_end + (max_end - min_start) * 0.02,
+            y=y_pos,
+            text=junction,
+            showarrow=False,
+            xanchor='left',
+            yanchor='middle',
+            font=dict(size=10, color='black')
+        )
+
     return fig
 
 

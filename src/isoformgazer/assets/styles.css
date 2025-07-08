@@ -18,7 +18,7 @@ html, body {
     margin-bottom: 18px;
     padding-top: 10px;
     padding-bottom: 0px;
-    #border-bottom: 2px solid #0C4142; /* subtle underline for separation */
+    /*border-bottom: 2px solid #0C4142; /* subtle underline for separation */
     background: linear-gradient(90deg, #0C4142 0%, #0a7f8c 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -266,7 +266,7 @@ html, body {
     overflow: visible !important; 
 }
 
-.heatmap-container .plotly-graph-div {
+.plotly-graph-div {
     width: 100% !important;
     height: 100% !important;
     max-width: none !important;
@@ -505,4 +505,111 @@ html, body {
     color: #506784;
     font-family: "Open Sans", sans-serif;
     font-weight: 500;
+}
+
+.full-panel-event .barplot-container,
+.full-panel-event .atse-container {
+    height: calc(100vh - 200px) !important;
+    max-height: none !important;
+    flex: 1 1 auto !important;
+}
+
+.full-panel-clustergram .heatmap-container {
+    height: calc(100vh - 200px) !important;
+    max-height: none !important;
+    flex: 1 1 auto !important;
+}
+
+.full-panel-event .graph-wrapper,
+.full-panel-clustergram .graph-wrapper {
+    height: 100% !important;
+    max-height: none !important;
+}
+
+.full-panel-event .js-plotly-plot,
+.full-panel-clustergram .js-plotly-plot {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    overflow: visible !important;
+}
+
+.full-panel-clustergram .heatmap-container .dash-bio-clustergram {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    overflow: visible !important;
+}
+
+.full-panel-clustergram .heatmap-container .plotly-graph-div {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    overflow: visible !important;
+}
+
+.panel.full-panel-event,
+.panel.full-panel-clustergram {
+    height: calc(100vh - 140px) !important;
+    max-height: none !important;
+}
+
+@media (max-width: 1200px) {
+    .full-panel-event .barplot-container,
+    .full-panel-event .atse-container,
+    .full-panel-clustergram .heatmap-container {
+        height: calc(100vh - 250px) !important;
+    }
+    
+    .panel.full-panel-event,
+    .panel.full-panel-clustergram {
+        height: calc(100vh - 180px) !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .full-panel-event .barplot-container,
+    .full-panel-event .atse-container,
+    .full-panel-clustergram .heatmap-container {
+        height: calc(100vh - 300px) !important;
+    }
+    
+    .panel.full-panel-event,
+    .panel.full-panel-clustergram {
+        height: calc(100vh - 220px) !important;
+    }
+}
+
+/* Better table hiding that doesn't interfere with Dash callbacks */
+.table-container[data-hidden="true"] {
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+}
+
+.table-container[data-hidden="true"] .dash-table-container {
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+}
+
+/* Ensure DataTable components remain functional when hidden */
+.table-container[data-hidden="true"] .dash-spreadsheet-container {
+    position: absolute !important;
+    top: -9999px !important;
+    left: -9999px !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
 }

@@ -189,7 +189,8 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
 def create_transcript_structure_plot(db_path: str, 
                                      transcript_data: pd.DataFrame, 
                                      gene_name: str, 
-                                     height: int = 400) -> go.Figure:
+                                     height: int = 400,
+                                     show_y_labels: bool = False) -> go.Figure:
     """Create transcript structure plot similar to simplified Isoviz version"""
     orf_perplexity = "Unknown"
     conn = sqlite3.connect(db_path)
@@ -217,13 +218,6 @@ def create_transcript_structure_plot(db_path: str,
     if transcript_data.empty:
         return create_empty_isoform_message(f"No transcript data for gene: {gene_name}")
     
-    #transcript_summary = transcript_data.groupby('trans_id').agg({
-    #    'transcript_length': 'first',
-    #    'transcript_start': 'min',
-    #    'transcript_end': 'max'
-    #}).sort_values('transcript_length', ascending=False).reset_index()
-    
-    # Change 'id' to 'isoform_id'
     transcript_summary = transcript_data.groupby('trans_id').agg({
         'id': 'first',
         'transcript_start': 'min',
@@ -293,18 +287,28 @@ def create_transcript_structure_plot(db_path: str,
             range=[min_start - 1000, max_end + 1000],
             showgrid=False,
             tickformat=',',
-            rangeslider=dict(visible=True, range=[min_start, max_end])
+            rangeslider=dict(visible=True, range=[min_start, max_end]),
+            autorange=False,
+            fixedrange=False
         ),
         yaxis=dict(
             showticklabels=False,
             showgrid=False,
             zeroline=False,
-            range=[0, y_max]
+            range=[0, y_max],
+            autorange=False,
+            fixedrange=False
         ),
         height=height,
-        margin=dict(l=100, r=150, t=80, b=50),
+        margin=dict(
+            l=100,  
+            r=160,  
+            t=80, 
+            b=50
+        ),
         hovermode='closest',
-        plot_bgcolor='white'
+        plot_bgcolor='white',
+        autosize=True 
     )
     
     for _, transcript in transcript_summary.iterrows():
@@ -622,7 +626,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             f"<b>{data_type}:</b> %{{z:.2f}}"
             "<extra></extra>"
         )
-        # Title for continuous colorscale bar - currently breaks viz, TO DO investigate why
+        # Title for continuous colorscale bar - currently breaks viz, TO DO: figure out why 
         #heatmap_trace.colorbar.title = data_type
         
     except Exception as e2:
