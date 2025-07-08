@@ -632,7 +632,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 id='overview-dropdown',
                                 className='app-controls-block-dropdown',
                                 options=[
-                                    {'label': 'Event-level', 'value': 'event-level'},
+                                    {'label': 'Structure Plots', 'value': 'event-level'},
                                     {'label': 'Clustergrams', 'value': 'clustergram'},
                                     {'label': 'Both', 'value': 'both'}
                                 ],

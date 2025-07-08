@@ -278,7 +278,7 @@ def create_transcript_structure_plot(db_path: str,
                 hovertemplate=f"Exon {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Position: {exon['exon_start']:,}-{exon['exon_end']:,}<extra></extra>"
             ))
     
-    title_text = f"Transcript Summary for Gene {gene_name} ({gene_ensembl_id})<br>(ORF Perplexity: {orf_perplexity}, Coordinates: {min_start} - {max_end}, Strand: {strand})"
+    title_text = f"Transcripts for Gene {gene_name} ({gene_ensembl_id})<br>(ORF Perplexity: {orf_perplexity}, Coordinates: {min_start} - {max_end}, Strand: {strand})"
     
     fig.update_layout(
         title={
