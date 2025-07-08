@@ -610,7 +610,7 @@ def create_junction_exon_visualization(gene_data: dict,
                     mode='markers',
                     marker=dict(size=1, opacity=0),
                     showlegend=False,
-                    hovertemplate=f"Exon {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Position: {exon['exon_start']:,}-{exon['exon_end']:,}<extra></extra>"
+                    hovertemplate=f"Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}<extra></extra>"
                 ))
         
         junction_y_start = y_max + 0.5
@@ -656,7 +656,7 @@ def create_junction_exon_visualization(gene_data: dict,
                 mode='markers',
                 marker=dict(size=10, opacity=0),
                 showlegend=False,
-                hovertemplate=f'Junction: {start:,}-{end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}<extra></extra>'
+                hovertemplate=f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}<extra></extra>'
             ))
     
     total_y_range = junction_y_start + len(junctions) * 1.0 + 0.5 if junctions else y_max
