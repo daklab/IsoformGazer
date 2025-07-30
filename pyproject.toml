@@ -25,7 +25,8 @@ dependencies = [
     "requests (>=2.32.4,<3.0.0)",
     "tqdm (>=4.67.1,<5.0.0)",
     "dash-bootstrap-components (>=2.0.3,<3.0.0)",
-    "pillow (>=11.3.0,<12.0.0)"
+    "pillow (>=11.3.0,<12.0.0)",
+    "urllib3 (>=2.5.0,<3.0.0)"
 ]
 
 [tool.poetry]
