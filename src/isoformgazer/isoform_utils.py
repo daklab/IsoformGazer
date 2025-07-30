@@ -420,6 +420,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             color = tissue_colors.get(category, '#CCCCCC')
             tissue_color_values.append([color])
         
+        colorbar_title = "TPM" if data_type == "TPM" else "Ratio"
         fig.add_trace(
             go.Heatmap(
                 z=tissue_color_values,
@@ -428,7 +429,10 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 colorscale=[[0, '#CCCCCC'], [1, '#CCCCCC']],
                 showscale=False,
                 hovertemplate='Tissue: %{y}<br>Category: %{customdata}<extra></extra>',
-                customdata=tissue_categories
+                customdata=tissue_categories,
+                colorbar=dict(
+                    title=colorbar_title,   
+                )
             ),
             row=1, col=1
         )
@@ -490,7 +494,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
         heatmap_resolution_level = "averaged by tissue"
     else: 
         heatmap_resolution_level = "across all samples and tissues"
-    
+
     fig.update_layout(
         height=calculated_height,
         margin=dict(l=left_margin, r=right_margin, t=top_margin, b=bottom_margin),
@@ -651,11 +655,73 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                 heatmap_trace.colorbar.len = 0.3    
                 heatmap_trace.colorbar.thickness = 20
 
-            elif hasattr(heatmap_trace, 'colorscale'):
-                heatmap_trace.update(colorbar=dict(x=colorbar_x,title={'text': data_type}))
-
     except Exception as e:
         print(f"Warning: Could not update colorbar position: {e}")
+    
+    organ_list, color_list = create_organ_annotation_bar(tissue_cols_for_organs)
+    unique_organs = []
+    unique_colors = []
+    for organ, color in zip(organ_list, color_list):
+        if organ not in unique_organs:
+            unique_organs.append(organ)
+            unique_colors.append(color)
+
+    # Adjust positioning to prevent cutoff on right and place legend correctly
+    colorbar_x = -0.87
+    legend_x = -0.34
+    legend_y_start = 1.04
+    legend_y_step = 0.04
+
+    try:
+        if len(clustergram.data) > 0:
+            heatmap_trace = clustergram.data[-1]
+            if hasattr(heatmap_trace, 'colorbar'):
+                heatmap_trace.colorbar.x = colorbar_x
+                heatmap_trace.colorbar.y = 1.005
+                heatmap_trace.colorbar.yanchor = 'top'
+                heatmap_trace.colorbar.len = 0.3    
+                heatmap_trace.colorbar.thickness = 20
+    except Exception as e:
+        print(f"Warning: Could not update colorbar position: {e}")
+    
+    # Colorscale bar title
+    clustergram.add_annotation(
+        x=-0.52,
+        y=1.04,
+        xref="paper",
+        yref="paper",
+        text=f"<b>{data_type}</b>",
+        showarrow=False,
+        font={"size": 13},
+        xanchor="left",
+        yanchor="top"
+    )
+
+    # Add organ legend annotations (to the right of TPM / ratio abundance colorscale)
+    clustergram.add_annotation(
+        x=legend_x,                 
+        y=legend_y_start,                    
+        xref="paper",
+        yref="paper",
+        text="<b>Organ Legend</b>",
+        showarrow=False,
+        xanchor="left",
+        yanchor="top",
+        font=dict(size=12)
+    )
+
+    for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
+        clustergram.add_annotation(
+            x=legend_x,  # note: positioned to the right of colorbar
+            y=legend_y_start - 0.04 - (i * legend_y_step),
+            xref='paper',
+            yref='paper',
+            text=f'<span style="color:{color}; font-size:14px">&#9632;</span> {organ}',
+            showarrow=False,
+            xanchor='left',
+            yanchor='top',
+            font=dict(size=11)
+        )
     
     clustergram.update_layout(
         title={
@@ -664,7 +730,12 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             'xanchor': 'center',
             'font': {'size': 14 if hide_tissue_labels else 16}
         },
-        margin=dict(l=left_margin, r=150, t=90, b=calculate_bottom_margin(show_labels, transcript_names)),
+        margin=dict(
+                l=max(200, left_margin + 50), 
+                r=150, 
+                t=90, 
+                b=calculate_bottom_margin(show_labels, transcript_names)
+            ),
         autosize=True,
         height=height,
         yaxis=dict(
