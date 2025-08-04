@@ -15,6 +15,13 @@ from dash import dcc
 from isoform_utils import load_psl_data, get_gene_id_for_gene_name
 
 ###################################################################
+# MARGIN PRESETS FOR FIGURES
+###################################################################
+MIN_MARGIN = 18 
+MAX_MARGIN = 55
+MAX_MARGIN_LABELS = 65
+
+###################################################################
 # VISUALIZATION METHODS
 ###################################################################
 def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show'):
@@ -88,7 +95,10 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             'xanchor': 'center',
             'font': {'size': 16}
         },
-        margin=dict(l=left_margin, r=50, t=80, b=bottom_margin),
+        margin=dict(l=MIN_MARGIN, 
+                    r=MIN_MARGIN, 
+                    t=MAX_MARGIN, 
+                    b=bottom_margin),
         autosize=True,
         height=height,
         yaxis=dict(automargin=True),  
@@ -133,7 +143,10 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
         height=height,
         xaxis=dict(title="Junction"),
         yaxis=dict(title="Cell Type"),
-        margin=dict(l=100, r=50, t=80, b=100)
+        margin=dict(l=MIN_MARGIN, 
+                    r=MIN_MARGIN, 
+                    t=MAX_MARGIN, 
+                    b=MAX_MARGIN)
     )
     
     return fig
@@ -195,7 +208,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     left_margin = max(120, int(height * 0.2))
     
     if hide_junction_labels:
-        bottom_margin = 50 
+        bottom_margin = MAX_MARGIN
         actual_clustergram_height = height
     else:
         bottom_margin = max(200, int(height * 0.35)) 
@@ -266,7 +279,12 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             'xanchor': 'center',
             'font': {'size': 14 if hide_junction_labels else 16}  
         },
-        margin=dict(l=left_margin, r=50, t=90, b=bottom_margin),  
+        margin=dict(
+            l=MIN_MARGIN, 
+            r=MIN_MARGIN, 
+            t=MAX_MARGIN, 
+            b=bottom_margin
+        ),  
         autosize=True,
         height=height,  
         yaxis=dict(
@@ -300,7 +318,7 @@ def create_empty_clustergram_message(message):
         paper_bgcolor='white',
         plot_bgcolor='white',
         height=400,
-        margin=dict(l=50, r=50, t=50, b=50)
+        margin=dict(l=MIN_MARGIN, r=MIN_MARGIN, t=MIN_MARGIN, b=MIN_MARGIN)
     )
     return fig
 
@@ -342,28 +360,34 @@ def get_gene_id_from_atse(db_path: str, gene_name: str) -> str:
     return None
 
 
-def process_gene_atse_data(atse_df: pd.DataFrame, gene_name: str, db_path: str, filtered_junction_ids=None) -> dict:
+def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=None) -> dict:
     """Process ATSE data for a specific gene to extract junction and transcript information"""
     # Get gene_id from db
     gene_id_with_version = None
     conn = sqlite3.connect(db_path)
-    query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = ? LIMIT 1"
-    result = pd.read_sql_query(query, conn, params=[gene_name])
-    conn.close()
     
-    if len(result) > 0:
-        gene_id_with_version = result.iloc[0]['gene_id']
-        gene_id_base = gene_id_with_version.split('.')[0]
-    else:
+    # Get gene_id from db
+    gene_id_query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = ? LIMIT 1"
+    gene_result = pd.read_sql_query(gene_id_query, conn, params=[gene_name])
+    
+    if gene_result.empty:
+        conn.close()
         return {'error': f"No gene_id found for {gene_name}"}
     
-    gene_atse = atse_df[atse_df['gene_id'].str.contains(gene_id_base, na=False)].copy()
+    gene_id_with_version = gene_result.iloc[0]['gene_id']
+    gene_id_base = gene_id_with_version.split('.')[0]
+    
+    # Query ATSE data for this gene
+    atse_query = "SELECT * FROM atse_data WHERE gene_id_clean = ? OR gene_name = ?"
+    gene_atse = pd.read_sql_query(atse_query, conn, params=[gene_id_base, gene_name])
+    conn.close()
     
     if gene_atse.empty:
         return {'error': f"No ATSE data found for gene {gene_name}"}
     
+    # Rest of your existing processing logic stays the same...
     gene_info = gene_atse.iloc[0]
-    strand = gene_info.get('strand', '+')
+    strand = gene_info.get('event_strand', gene_info.get('strand', '+'))  # Use event_strand first
     chromosome = gene_info.get('chromosome', gene_info.get('chrom', 'chr1'))
     
     junctions = []
@@ -687,10 +711,10 @@ def create_junction_exon_visualization(gene_data: dict,
         ),
         height=height,
         margin=dict(
-            l=100,  
-            r=200,  
-            t=80, 
-            b=50
+            l=MIN_MARGIN,  
+            r=MIN_MARGIN,  
+            t=MAX_MARGIN, 
+            b=MAX_MARGIN+7
         ),
         hovermode='closest',
         plot_bgcolor='white',
@@ -779,7 +803,10 @@ def create_empty_atse_message(message: str) -> go.Figure:
         yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
         plot_bgcolor='white',
         height=250,
-        margin=dict(l=50, r=50, t=50, b=50)
+        margin=dict(l=MIN_MARGIN, 
+                    r=MIN_MARGIN, 
+                    t=MIN_MARGIN, 
+                    b=MIN_MARGIN)
     )
     
     return fig

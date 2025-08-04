@@ -378,25 +378,6 @@ def verify_database_schema(db_path):
 
 
 ###################################################################
-# ATSE DATA SETUP
-###################################################################
-def setup_atse_data():
-    """Load ATSE data for junction visualization"""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    atse_file = os.path.join(base_dir, "data", "TMS_atse_file_unanno_also_2025-05-11_06-23-05.tsv")
-    
-    print("Loading ATSE data for junction visualization...")
-    if os.path.exists(atse_file):
-        atse_df = load_atse_data(atse_file)
-        print(f"✓ Loaded ATSE data with {len(atse_df)} records")
-        return atse_df
-    else:
-        print(f"ATSE file not found at {atse_file}")
-        return pd.DataFrame()
-
-atse_data = setup_atse_data()
-
-###################################################################
 # APPLICATION SETUP
 ###################################################################
 db_path = setup_local_database()
@@ -1510,12 +1491,8 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height,
     if not selected_gene:
         return create_empty_atse_message("Select a gene to view splice junctions and exons")
     
-    if atse_data.empty:
-        return create_empty_atse_message("ATSE data not loaded - check file path")
-    
     try:
         gene_data = process_gene_atse_data(
-            atse_data, 
             selected_gene, 
             db_path,
             filtered_junction_ids=filtered_junction_ids
