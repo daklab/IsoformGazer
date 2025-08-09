@@ -1,7 +1,7 @@
 <table>
 <tr>
 <td>
-  <img src="src/isoformgazer/assets/Isoform-Gazer-Logo.png" alt="Isoform Gazer Logo" width="800">
+  <img src="src/isoformgazer/assets/Isoform-Gazer-Logo.png" alt="Isoform Gazer Logo" width="1000">
 </td>
 <td>
   <h1 style="margin-bottom:0;">Isoform Gazer</h1>

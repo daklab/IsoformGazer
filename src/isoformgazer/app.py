@@ -200,7 +200,8 @@ def setup_local_database(force_rebuild=False):
         'junction_count',
         'cell_type',
         'n_cells',
-        'psi'
+        'psi'#,
+#        'matched_transcript_ids'
     ]
     
     with tqdm(desc="Writing junction master table data to local database", 
@@ -346,6 +347,8 @@ def setup_local_database(force_rebuild=False):
         idx_pbar.update(1)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_psl_coords ON psl_data(gene_id, tStart, tEnd)")
         idx_pbar.update(1)
+        #conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_transcript_mapping ON junctions(matched_transcript_ids)")
+        #idx_pbar.update(1)
     
     conn.commit()
     conn.close()
@@ -408,8 +411,8 @@ app.index_string = '''
 # APPLICATION TITLE (ISOFORM GAZER)
 ###################################################################
 header = html.Div(className='app-header', children=[
-    html.Div('daklab ---', style={'fontWeight': 'bold'}),
-    html.Div('Isoform Gazer', className='app-header--title')
+    html.Img(src='/assets/Isoform-Gazer-telescope.png', className='app-header--logo'),
+    html.Img(src='/assets/Isoform-Gazer-text.png', className='app-header--title')
 ])
 
 ###################################################################
@@ -477,6 +480,7 @@ left_data_table = dash_table.DataTable(
 right_data_table = dash_table.DataTable(
     id='right_data_table',
     columns=get_master_table_columns(db_path, table_name='junctions'),
+    #hidden_columns=['id', 'matched_transcript_ids'],
     hidden_columns=['id'],
     data=[],
     editable=False,
@@ -549,7 +553,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
             dcc.Tabs(id='tabs', value='tab-1', style={'height': '100%'}, children=[
                 dcc.Tab(label='About', value='tab-1', children=[
                     html.Div(className='control-tab', children=[
-                        html.H4('About'),
+                        html.H2('About'),
                         html.P('Isoform Gazer allows for a unified view of RNA splicing across ' \
                         'both single-cell junction usage and long-read isoform data in GENCODEv46 (GRCh38.p14).'),
                         html.P('Use the controls in the "Query" tab to dynamically query the master table data and generate visualizations.'),
@@ -559,7 +563,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                 dcc.Tab(label='Query', value='tab-2', children=[
                     html.Div(className='control-tab', children=[
                         html.Div(className='app-controls-block', children=[
-                        html.Div(className='app-controls-name', children='Search by Gene'),
+                        html.Div(className='app-controls-query', children='Search by Gene'),
                         dcc.Dropdown(
                             id='gene-search-dropdown',
                             options=[
@@ -579,7 +583,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         ]),
                         html.Div(id='gene-filter-status'),
                         html.Div(className="app-controls-block", children=[
-                            html.Div(className='app-controls-name', children='Query by Value'),
+                            html.Div(className='app-controls-query', children='Query by Value'),
                             html.P("You can use the filter boxes below each master table column header to search and filter the data:"),
                             html.Ul([
                                 html.Li([html.Strong("Text columns: "), "Simply type text to find rows with exact matches."]),
@@ -737,6 +741,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 dcc.Loading(
                                     id="loading-transcript-plot",
                                     type="default",
+                                    color='#EDAE49',
                                     delay_show=500,
                                     delay_hide=200,
                                     children=[dcc.Graph(id='barplot1')]
@@ -749,6 +754,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 dcc.Loading(
                                     id="loading-isoform-heatmap",
                                     type="default",
+                                    color='#EDAE49',
                                     delay_show=500,
                                     delay_hide=200,
                                     children=[dcc.Graph(id='heatmap1')]
@@ -783,6 +789,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 dcc.Loading(
                                     id="loading-atse-plot",
                                     type="default",
+                                    color='#EDAE49',
                                     delay_hide=500,
                                     children=[
                                         dcc.Graph(
@@ -805,6 +812,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 dcc.Loading(
                                     id="loading-junction-heatmap",
                                     type="default",
+                                    color='#EDAE49',
                                     delay_hide=500,
                                     children=[
                                         dcc.Graph(
