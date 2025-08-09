@@ -1,10 +1,19 @@
-# IsoformGazer
-Isoform Gazer is a comprehensive dashboard application for visualizing RNA splicing events across pseudobulked single-cell junction usage and long-read isoform expression data. 
-
-Please note that all data in Isoform Gazer uses GENCODEv46 (GRCh38.p14). 
+<table>
+<tr>
+<td>
+  <img src="src/isoformgazer/assets/Isoform-Gazer-Logo.png" alt="Isoform Gazer Logo" width="800">
+</td>
+<td>
+  <h1 style="margin-bottom:0;">Isoform Gazer</h1>
+  <p style="margin-top:5px;"><em>A comprehensive dashboard application for visualizing RNA splicing events across pseudobulked single-cell junction usage and long-read isoform expression data.</em></p>
+</td>
+</tr>
+</table>
 
 ## Data Availability
 To run IsoformGazer locally, all master table data is available through the v0.0.0 prerelease. You can either download the data directly through Github and ensure it is present in the ```src/isoformgazer/data``` directory, or run the provided helper script at ```src/isoformgazer/download_master_table_data.py``` to automatically download both master tables. 
+
+Note that all data in Isoform Gazer uses GENCODEv46 (GRCh38.p14). 
 
 ## Installation 
 Installation is currently supported for Linux and MacOS. 
