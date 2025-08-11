@@ -573,7 +573,14 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     
     num_tissues = len(clean_tissue_names)
     hide_tissue_labels = (num_tissues > 30) or (show_tables == 'show')
-    left_margin = min(40, int(height * 0.1))
+    #left_margin = min(40, int(height * 0.1))
+    if not show_labels or (num_transcripts > 30):   # or whatever your threshold for showing ticks is
+        left_margin = 2  # Minimum left margin, just enough to prevent figure overflow
+    else:
+        # Calculate pixel width for longest label
+        max_label_len = max((len(str(name)) for name in transcript_names), default=10)
+        # Approximate: 7px per character, add 10px for a buffer
+        left_margin = min(70, max(20, 7 * max_label_len + 10))
     
     if hide_tissue_labels:
         bottom_margin = 50 
@@ -736,7 +743,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             'font': {'size': 14 if hide_tissue_labels else 16}
         },
         margin=dict(
-                l=min(40, left_margin + 50), 
+                l=min(20, left_margin + 50), 
                 r=150, 
                 t=90, 
                 b=calculate_bottom_margin(show_labels, transcript_names)

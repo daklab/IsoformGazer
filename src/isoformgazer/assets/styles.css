@@ -255,7 +255,6 @@ html, body {
     height: 100% !important;
     max-width: none !important;
     min-width: none !important;
-    overflow: visible !important;
 }
 
 .clustergram-container text {
@@ -271,6 +270,7 @@ html, body {
     display: flex;
     flex-direction: column;
     margin-bottom: 0;
+    overflow-x: auto !important;
 }
 
 /* Axis ticks in clustergrams/heatmaps */
@@ -302,6 +302,19 @@ html, body {
     font-size: 10px;
     font-weight: bold;
 }
+
+/* Horizontal & vertical scrollbars for clustergrams to temporarily bypass overflow issues */
+.scroll-x-wrapper {
+    width: 100%;
+    overflow-x: auto !important;
+}
+
+.scroll-x-wrapper > .js-plotly-plot,
+.scroll-x-wrapper > .dash-bio-clustergram,
+.scroll-x-wrapper > .plotly-graph-div {
+    min-width: 100% !important; 
+}
+
 
 /* ######################################################################################
    # Table + Table Header Controls
