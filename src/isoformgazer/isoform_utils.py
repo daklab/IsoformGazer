@@ -395,7 +395,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
     
     if show_labels and show_tables != 'show':
         max_tissue_name_length = max([len(name) for name in tissue_display_names]) if tissue_display_names else 10
-        left_margin = max(200, min(350, max_tissue_name_length * 8))
+        left_margin = min(40, min(50, max_tissue_name_length * 8))
     else:
         left_margin = 40
     
@@ -573,7 +573,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     
     num_tissues = len(clean_tissue_names)
     hide_tissue_labels = (num_tissues > 30) or (show_tables == 'show')
-    left_margin = max(120, int(height * 0.1))
+    left_margin = min(40, int(height * 0.1))
     
     if hide_tissue_labels:
         bottom_margin = 50 
@@ -582,7 +582,12 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         bottom_margin = max(200, int(height * 0.35)) 
         actual_clustergram_height = height - 80
     
-    width = min(1500, max(800, len(clean_tissue_names) * 12, int(height * 1.2)))
+    # Calculate width based on number of tissues
+    base_width = 350
+    width_per_tissue = 12 
+    calculated_width = base_width + (num_tissues * width_per_tissue)
+    width = min(calculated_width, 850)
+
     clustergram_data_processed = pd.DataFrame(clustergram_data).copy()
     clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], 0)
     clustergram_data_processed = clustergram_data_processed.astype(float)
@@ -686,7 +691,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     
     # Colorscale bar title
     clustergram.add_annotation(
-        x=-0.52,
+        x=-0.54,
         y=1.04,
         xref="paper",
         yref="paper",
@@ -731,7 +736,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             'font': {'size': 14 if hide_tissue_labels else 16}
         },
         margin=dict(
-                l=max(200, left_margin + 50), 
+                l=min(40, left_margin + 50), 
                 r=150, 
                 t=90, 
                 b=calculate_bottom_margin(show_labels, transcript_names)
@@ -774,7 +779,7 @@ def create_single_transcript_heatmap(heatmap_data, transcript_names, tissue_disp
     ))
     
     fig.update_layout(
-        title=f"{gene_name} Expression (1 isoform)",
+        title=f"{gene_name} Expression for Transcript {transcript_names[0]}",
         height=height,
         xaxis=dict(title="Transcript"),
         yaxis=dict(title="Tissue"),

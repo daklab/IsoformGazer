@@ -1,3 +1,7 @@
+/* ######################################################################################
+   # Global layout, fonts, base stylings
+   ###################################################################################### */
+
 html, body {
     margin: 0;
     padding: 0;
@@ -8,61 +12,40 @@ html, body {
     background-color: #f6f6f6;
 }
 
-.panel h2 {
-    font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
-    font-size: 1.15rem;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    margin-top: 0;
-    margin-bottom: 18px;
-    padding-top: 10px;
-    padding-bottom: 0px;
-    color: #301279;
-    background: none;
-    -webkit-background-clip: initial;
-    -webkit-text-fill-color: initial;
-    background-clip: initial;
-    text-align: center;
-    box-shadow: none;
-}
-
-@media (max-width: 768px) {
-    .panel h2 {
-        font-size: 1.1rem;
-        padding-bottom: 4px;
-        margin-bottom: 10px;
-    }
-}
-
-#react-entry-point {
-    height: 100%;
-    width: 100%;
-}
-
+#react-entry-point,
 #react-entry-point > div {
     height: 100%;
     width: 100%;
 }
+
+/* ######################################################################################
+   # Header and branding
+   ###################################################################################### */
 
 .app-header {
     height: 60px;
     line-height: 60px;
     border-bottom: thin lightgrey solid;
     display: flex;
-    background-color: #301279; /* <-- deep purple */
-    color: #EDAE49;            /* <-- gold/yellow text for contrast */
+    background-color: #301279;
+    color: #EDAE49;           
     padding-left: 20px;
     width: 100%;
+}
+
+.app-header .app-header--title,
+.app-header--title,
+.app-header--title {
+    display: flex;
+    align-items: center;
 }
 
 .app-header .app-header--title {
     font-size: 22px;
     padding-left: 5px;
-}
-
-.app-header--title, .app-header--title {
-    display: flex;
-    align-items: center;
+    height: 42px;
+    margin-left: 10px;
+    padding-top: 12px;
 }
 
 .app-header--logo {
@@ -73,11 +56,9 @@ html, body {
     align-items: center;
 }
 
-.app-header--title {
-    height: 42px;
-    margin-left: 10px;
-    padding-top: 12px;
-}
+/* ######################################################################################
+   # Panel layout and dashboard sectioning styles
+   ###################################################################################### */
 
 .app-body {
     display: flex;
@@ -85,6 +66,67 @@ html, body {
     width: 100%;
     overflow: hidden;
 }
+
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: auto;
+}
+
+.panels-container {
+    display: flex;
+    flex: 1;
+    gap: 20px;
+    padding: 20px;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+.panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    background-color: white;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
+    overflow: hidden;
+    min-height: 0;
+    color: #1C1C2C;
+}
+
+.panel h2,
+.control-tab h2 {
+    font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #301279;
+    background: none;
+    -webkit-background-clip: initial;
+    -webkit-text-fill-color: initial;
+    background-clip: initial;
+    text-align: center;
+    box-shadow: none;
+    margin-top: 0;
+    margin-bottom: 18px;
+    padding-top: 10px;
+    padding-bottom: 0px;
+}
+
+@media (max-width: 768px) {
+    .panel h2 {
+        font-size: 1.1rem;
+        padding-bottom: 4px;
+        margin-bottom: 10px;
+    }
+}
+
+/* ######################################################################################
+   # Sidebar stuff (controls, tabs)
+   ###################################################################################### */
 
 .control-tabs {
     height: 100%;
@@ -97,19 +139,6 @@ html, body {
     box-sizing: border-box;
     height: 100%;
     overflow-y: auto;
-}
-
-.control-tab h2 {
-    font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
-    font-size: 1.15rem;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    color: #301279;
-    background: none;
-    -webkit-background-clip: initial;
-    -webkit-text-fill-color: initial;
-    background-clip: initial;
-    box-shadow: none;
 }
 
 .app-controls-block {
@@ -146,43 +175,22 @@ html, body {
     margin-right: 15px;
 }
 
-.app-controls-block-dropdown {
-    width: 100%;
-}
-
+.app-controls-block-dropdown,
 .control-slider {
     width: 100%;
 }
 
-.main-content {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: auto;
+/* ---------- Toggle/DAQ -------------- */
+.app-controls-block .daq-ToggleSwitch {
+    margin-bottom: 15px;
+}
+.app-controls-block .daq-ToggleSwitch:last-child {
+    margin-bottom: 0;
 }
 
-.panels-container {
-    display: flex;
-    flex: 1;
-    gap: 20px;
-    padding: 20px;
-    height: 100%;
-    box-sizing: border-box;
-}
-
-.panel {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    background-color: white;
-    padding: 15px;
-    border-radius: 8px;
-    box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
-    overflow: hidden;
-    min-height: 0;
-    color: #1C1C2C;
-}
+/* ######################################################################################
+   # Panel graph content and layout
+   ###################################################################################### */
 
 .graph-wrapper {
     height: 100%;
@@ -195,18 +203,10 @@ html, body {
     gap: 8px;
 }
 
-.barplot-container {
-    flex: 0 0 auto; 
-    height: 180px; 
-    min-height: 150px;
-    max-height: 220px;
-    overflow: hidden;
-    margin-bottom: 0;
-}
-
+.barplot-container,
 .atse-container {
     flex: 0 0 auto;
-    height: 180px; 
+    height: 180px;
     min-height: 150px;
     max-height: 220px;
     overflow: hidden;
@@ -214,16 +214,11 @@ html, body {
 }
 
 .table-container {
-    flex: 0 0 auto; 
+    flex: 0 0 auto;
     min-height: 0;
     overflow: auto;
     margin-top: 8px;
     border-top: none !important;
-}
-
-.table-header-controls .btn {
-    border-top: none !important;
-    box-shadow: none !important;
 }
 
 .graph-wrapper:not(.tables-hidden) .table-container {
@@ -242,6 +237,176 @@ html, body {
     padding: 0 !important;
 }
 
+/* ######################################################################################
+   # Clustergram / heatmap components
+   ###################################################################################### */
+
+.clustergram-container {
+    width: 100%;
+    height: 100%;
+    overflow: visible !important;
+}
+
+.clustergram-container .js-plotly-plot,
+.heatmap-container .dash-bio-clustergram,
+.heatmap-container .js-plotly-plot,
+.plotly-graph-div {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    min-width: none !important;
+    overflow: visible !important;
+}
+
+.clustergram-container text {
+    font-size: 10px !important;
+}
+
+.heatmap-container {
+    width: 100%;
+    flex: 1 1 auto;
+    transition: all 0.3s ease;
+    overflow: visible !important;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
+}
+
+/* Axis ticks in clustergrams/heatmaps */
+.heatmap-container .xtick text {
+    font-size: 9px !important;
+}
+.heatmap-container .ytick text {
+    font-size: 10px !important;
+}
+
+/* Clustergram/heatmap legends & organ annotation */
+.clustergram-legend {
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px;
+}
+.organ-legend {
+    position: absolute;
+    right: 10px;
+    top: 20%;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 12px;
+}
+.organ-annotation {
+    font-size: 10px;
+    font-weight: bold;
+}
+
+/* ######################################################################################
+   # Table + Table Header Controls
+   ###################################################################################### */
+
+.table-header-controls .btn {
+    border-top: none !important;
+    box-shadow: none !important;
+}
+.table-header-controls {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    padding: 0px 0;
+    display: flex;
+    justify-content: flex-start;
+    margin-bottom: 2px;
+    border-top: none !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
+}
+.table-header-controls::before,
+.table-header-controls::after {
+    display: none !important;
+}
+.clear-filters-btn {
+    background-color: #EDAE49 !important;
+    border-color: #EDAE49 !important;
+    color: #301279 !important;
+    border-radius: 15px;
+    padding: 4px 12px;
+    font-size: 0.875rem;
+    transition: all 0.3s ease;
+    min-width: 100px;
+    margin-bottom: 0;
+    border-top: none !important;
+    box-shadow: none !important;
+}
+.clear-filters-btn:hover:not(:disabled) {
+    background-color: #5a6268 !important;
+    transform: translateY(-1px);
+}
+.clear-filters-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: #e9ecef !important;
+    border-color: #dee2e6 !important;
+    color: #6c757d !important;
+}
+.btn-clear {
+    background-color: #6c757d;
+    color: white;
+    border-radius: 15px;
+    padding: 4px 12px;
+    font-size: 0.875rem;
+    transition: all 0.3s ease;
+}
+.btn-clear:hover {
+    background-color: #5a6268;
+    transform: translateY(-1px);
+}
+.btn-clear:active {
+    transform: translateY(0);
+}
+.btn-clear i {
+    margin-right: 5px;
+}
+
+.table-container-fixed {
+    max-height: 40vh;
+    overflow: auto;
+    position: relative;
+    width: 100%;
+}
+/* ---------- Dash DataTable specifics ---------- */
+.dash-table-container {
+    overflow: auto !important;
+    width: 100% !important;
+    border-top: none !important;
+}
+.dash-table-container .dash-spreadsheet-container {
+    overflow: auto !important;
+    max-width: 100% !important;
+    border-top: none !important;
+}
+.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner table {
+    width: auto !important;
+    min-width: 100% !important;
+    border-top: none !important;
+}
+
+/* ######################################################################################
+   # Query instructions/info, binders, miscellaneous UX blocks
+   ###################################################################################### */
+
+.query-instructions {
+    background-color: #f8f9fa;
+    border-left: 4px solid #0C4142;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+}
+.query-instructions-title { margin-top: 0; color: #0C4142; }
+.query-note { font-style: italic; margin-top: 15px; }
+
 .binder-tabs-container {
     display: flex;
     margin-left: auto;
@@ -249,7 +414,6 @@ html, body {
     height: 100%;
     align-items: flex-end;
 }
-
 .binder-tab {
     padding: 8px 20px;
     margin-right: 5px;
@@ -263,96 +427,110 @@ html, body {
     text-decoration: none;
     transition: background-color 0.3s;
 }
-
 .binder-tab:hover {
     background-color: #622e9d;
 }
-
 .binder-tab-active {
     background-color: #622e9d;
     height: 80%;
 }
 
-.clustergram-container {
-    width: 100%;
-    height: 100%;
-    overflow: visible !important;
-}
+/* ######################################################################################
+   # Plotly figure utilities, loading states
+   ###################################################################################### */
 
-.clustergram-container .js-plotly-plot {
-    width: 100% !important;
-    height: 100% !important;
-    overflow: visible !important;
-}
-
-.clustergram-container text {
-    font-size: 10px !important;
-}
-
-.heatmap-container .dash-bio-clustergram {
-    width: 100% !important;
-    height: 100% !important;
-    max-width: none !important; 
-    min-width: none !important; 
-    overflow: visible !important; 
-}
-
-.heatmap-container .js-plotly-plot {
-    width: 100% !important;
-    height: 100% !important;
-    max-width: none !important;
-    min-width: none !important;
-    overflow: visible !important; 
-}
-
+.atse-container .js-plotly-plot,
 .plotly-graph-div {
-    width: 100% !important;
     height: 100% !important;
-    max-width: none !important;
-    min-width: none !important;
+    width: 100% !important;
     overflow: visible !important;
 }
+.plotly-graph-div { overflow: visible !important; }
 
-.heatmap-container {
-    width: 100%;
-    flex: 1 1 auto; 
-    transition: all 0.3s ease;
-    overflow: visible !important; 
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    margin-bottom: 0;
+/* Loading/Spinner message UI */
+[data-dash-is-loading="true"] + .custom-loading-message {
+    display: block !important;
+}
+.custom-loading-message {
+    display: none;
+    margin-top: 8px;
+    text-align: center;
+    font-size: 14px;
+    color: #506784;
+    font-family: "Open Sans", sans-serif;
+    font-weight: 500;
 }
 
-.heatmap-container .xtick text {
-    font-size: 9px !important;
+/* Hide show/hide toggles */
+.show-hide { display: none !important; }
+
+/* ######################################################################################
+   # Table container (i.e. Hide/Show when DataTable hidden)
+   ###################################################################################### */
+
+.table-container[data-hidden="true"] {
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+}
+.table-container[data-hidden="true"] .dash-table-container {
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+}
+.table-container[data-hidden="true"] .dash-spreadsheet-container {
+    position: absolute !important;
+    top: -9999px !important;
+    left: -9999px !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
 }
 
-.heatmap-container .ytick text {
-    font-size: 10px !important;
-}
+/* ######################################################################################
+   # Full panel (Clustergram/Event) expansion for maximized view
+   ###################################################################################### */
 
-.clustergram-legend {
-    background: rgba(255, 255, 255, 0.95);
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 8px;
+.full-panel-event .barplot-container,
+.full-panel-event .atse-container,
+.full-panel-clustergram .heatmap-container {
+    height: calc(100vh - 200px) !important;
+    max-height: none !important;
+    flex: 1 1 auto !important;
 }
-
-.organ-legend {
-    position: absolute;
-    right: 10px;
-    top: 20%;
-    background: rgba(255, 255, 255, 0.9);
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 5px;
-    font-size: 12px;
+.full-panel-event .graph-wrapper,
+.full-panel-clustergram .graph-wrapper {
+    height: 100% !important;
+    max-height: none !important;
 }
-
-.organ-annotation {
-    font-size: 10px;
-    font-weight: bold;
+.full-panel-event .js-plotly-plot,
+.full-panel-clustergram .js-plotly-plot {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    overflow: visible !important;
+}
+.full-panel-clustergram .heatmap-container .dash-bio-clustergram,
+.full-panel-clustergram .heatmap-container .plotly-graph-div {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    overflow: visible !important;
+}
+.panel.full-panel-event,
+.panel.full-panel-clustergram {
+    height: calc(100vh - 140px) !important;
+    max-height: none !important;
 }
 
 @media (max-width: 1200px) {
@@ -367,15 +545,21 @@ html, body {
     .panels-container {
         height: auto;
     }
-    
-    /* Adjust for medium screens */
     .barplot-container,
     .atse-container {
         height: 160px;
     }
-    
     .graph-wrapper:not(.tables-hidden) .table-container {
         height: 180px;
+    }
+    .full-panel-event .barplot-container,
+    .full-panel-event .atse-container,
+    .full-panel-clustergram .heatmap-container {
+        height: calc(100vh - 250px) !important;
+    }
+    .panel.full-panel-event,
+    .panel.full-panel-clustergram {
+        height: calc(100vh - 180px) !important;
     }
 }
 
@@ -386,270 +570,25 @@ html, body {
     .panel {
         margin-bottom: 10px;
     }
-    
-    /* Stack vertically on mobile */
     .barplot-container,
     .atse-container {
         height: 200px;
         flex: 0 0 auto;
     }
-    
     .heatmap-container {
         height: 300px;
         flex: 0 0 auto;
     }
-    
     .graph-wrapper:not(.tables-hidden) .table-container {
         height: 250px;
     }
-}
-
-.query-instructions {
-    background-color: #f8f9fa;
-    border-left: 4px solid #0C4142;
-    padding: 15px;
-    margin-bottom: 20px;
-    border-radius: 4px;
-}
-
-.query-instructions-title {
-    margin-top: 0;
-    color: #0C4142;
-}
-
-.query-note {
-    font-style: italic;
-    margin-top: 15px;
-}
-
-.atse-container .js-plotly-plot {
-    height: 100% !important;
-    width: 100% !important;
-}
-
-.plotly-graph-div {
-    overflow: visible !important;
-}
-
-.app-controls-block .daq-ToggleSwitch {
-    margin-bottom: 15px;
-}
-
-.app-controls-block .daq-ToggleSwitch:last-child {
-    margin-bottom: 0;
-}
-
-.btn-clear {
-    background-color: #6c757d;
-    color: white;
-    border-radius: 15px;
-    padding: 4px 12px;
-    font-size: 0.875rem;
-    transition: all 0.3s ease;
-}
-
-.btn-clear:hover {
-    background-color: #5a6268;
-    transform: translateY(-1px);
-}
-
-.btn-clear:active {
-    transform: translateY(0);
-}
-
-.btn-clear i {
-    margin-right: 5px;
-}
-
-.table-header-controls {
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    padding: 0px 0;
-    display: flex;
-    justify-content: flex-start;
-    margin-bottom: 2px;
-    border-top: none !important;
-    border-bottom: none !important;
-    box-shadow: none !important;
-}
-
-.clear-filters-btn {
-    background-color: #EDAE49 !important;
-    border-color: #EDAE49 !important;
-    color: #301279 !important;
-    border-radius: 15px;
-    padding: 4px 12px;
-    font-size: 0.875rem;
-    transition: all 0.3s ease;
-    min-width: 100px;
-    margin-bottom: 0; 
-    border-top: none !important;
-    box-shadow: none !important;
-}
-
-.clear-filters-btn:hover:not(:disabled) {
-    background-color: #5a6268 !important;
-    transform: translateY(-1px);
-}
-
-.clear-filters-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    background-color: #e9ecef !important;
-    border-color: #dee2e6 !important;
-    color: #6c757d !important;
-}
-
-.table-container-fixed {
-    max-height: 40vh;
-    overflow: auto;
-    position: relative;
-    width: 100%;
-}
-
-.dash-table-container {
-    overflow: auto !important;
-    width: 100% !important;
-    border-top: none !important;
-}
-
-.dash-table-container .dash-spreadsheet-container {
-    overflow: auto !important;
-    max-width: 100% !important;
-    border-top: none !important;
-}
-
-.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner table {
-    width: auto !important;
-    min-width: 100% !important;
-    border-top: none !important;
-}
-
-.table-header-controls::before,
-.table-header-controls::after {
-    display: none !important;
-}
-
-.show-hide { display: none !important; }
-
-[data-dash-is-loading="true"] + .custom-loading-message {
-    display: block !important;
-}
-
-.custom-loading-message {
-    display: none;
-    margin-top: 8px;
-    text-align: center;
-    font-size: 14px;
-    color: #506784;
-    font-family: "Open Sans", sans-serif;
-    font-weight: 500;
-}
-
-.full-panel-event .barplot-container,
-.full-panel-event .atse-container {
-    height: calc(100vh - 200px) !important;
-    max-height: none !important;
-    flex: 1 1 auto !important;
-}
-
-.full-panel-clustergram .heatmap-container {
-    height: calc(100vh - 200px) !important;
-    max-height: none !important;
-    flex: 1 1 auto !important;
-}
-
-.full-panel-event .graph-wrapper,
-.full-panel-clustergram .graph-wrapper {
-    height: 100% !important;
-    max-height: none !important;
-}
-
-.full-panel-event .js-plotly-plot,
-.full-panel-clustergram .js-plotly-plot {
-    width: 100% !important;
-    height: 100% !important;
-    max-width: 100% !important;
-    max-height: 100% !important;
-    overflow: visible !important;
-}
-
-.full-panel-clustergram .heatmap-container .dash-bio-clustergram {
-    width: 100% !important;
-    height: 100% !important;
-    max-width: 100% !important;
-    max-height: 100% !important;
-    overflow: visible !important;
-}
-
-.full-panel-clustergram .heatmap-container .plotly-graph-div {
-    width: 100% !important;
-    height: 100% !important;
-    max-width: 100% !important;
-    max-height: 100% !important;
-    overflow: visible !important;
-}
-
-.panel.full-panel-event,
-.panel.full-panel-clustergram {
-    height: calc(100vh - 140px) !important;
-    max-height: none !important;
-}
-
-@media (max-width: 1200px) {
-    .full-panel-event .barplot-container,
-    .full-panel-event .atse-container,
-    .full-panel-clustergram .heatmap-container {
-        height: calc(100vh - 250px) !important;
-    }
-    
-    .panel.full-panel-event,
-    .panel.full-panel-clustergram {
-        height: calc(100vh - 180px) !important;
-    }
-}
-
-@media (max-width: 768px) {
     .full-panel-event .barplot-container,
     .full-panel-event .atse-container,
     .full-panel-clustergram .heatmap-container {
         height: calc(100vh - 300px) !important;
     }
-    
     .panel.full-panel-event,
     .panel.full-panel-clustergram {
         height: calc(100vh - 220px) !important;
     }
-}
-
-/* Better table hiding that doesn't interfere with Dash callbacks */
-.table-container[data-hidden="true"] {
-    height: 0 !important;
-    min-height: 0 !important;
-    max-height: 0 !important;
-    overflow: hidden !important;
-    visibility: hidden !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    border: none !important;
-}
-
-.table-container[data-hidden="true"] .dash-table-container {
-    height: 0 !important;
-    min-height: 0 !important;
-    max-height: 0 !important;
-    overflow: hidden !important;
-    visibility: hidden !important;
-}
-
-/* Ensure DataTable components remain functional when hidden */
-.table-container[data-hidden="true"] .dash-spreadsheet-container {
-    position: absolute !important;
-    top: -9999px !important;
-    left: -9999px !important;
-    width: 1px !important;
-    height: 1px !important;
-    overflow: hidden !important;
-    visibility: hidden !important;
 }
