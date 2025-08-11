@@ -12,17 +12,16 @@ html, body {
     font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
     font-size: 1.15rem;
     font-weight: 700;
-    color: #0C4142; /* matches your main header background */
     letter-spacing: 0.5px;
     margin-top: 0;
     margin-bottom: 18px;
     padding-top: 10px;
     padding-bottom: 0px;
-    /*border-bottom: 2px solid #0C4142; /* subtle underline for separation */
-    background: linear-gradient(90deg, #0C4142 0%, #0a7f8c 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: #301279;
+    background: none;
+    -webkit-background-clip: initial;
+    -webkit-text-fill-color: initial;
+    background-clip: initial;
     text-align: center;
     box-shadow: none;
 }
@@ -50,8 +49,8 @@ html, body {
     line-height: 60px;
     border-bottom: thin lightgrey solid;
     display: flex;
-    background-color: #0C4142;
-    color: white;
+    background-color: #301279; /* <-- deep purple */
+    color: #EDAE49;            /* <-- gold/yellow text for contrast */
     padding-left: 20px;
     width: 100%;
 }
@@ -59,6 +58,25 @@ html, body {
 .app-header .app-header--title {
     font-size: 22px;
     padding-left: 5px;
+}
+
+.app-header--title, .app-header--title {
+    display: flex;
+    align-items: center;
+}
+
+.app-header--logo {
+    height: 50px;
+    margin-left: 2px;
+    padding-top: 6px;
+    display: flex;
+    align-items: center;
+}
+
+.app-header--title {
+    height: 42px;
+    margin-left: 10px;
+    padding-top: 12px;
 }
 
 .app-body {
@@ -81,6 +99,19 @@ html, body {
     overflow-y: auto;
 }
 
+.control-tab h2 {
+    font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #301279;
+    background: none;
+    -webkit-background-clip: initial;
+    -webkit-text-fill-color: initial;
+    background-clip: initial;
+    box-shadow: none;
+}
+
 .app-controls-block {
     margin-bottom: 20px;
 }
@@ -88,7 +119,14 @@ html, body {
 .app-controls-name {
     margin-bottom: 5px;
     font-weight: bold;
-    color: #506784;
+    color: #622e9d;
+}
+
+.app-controls-query {
+    font-size: 18px;
+    margin-bottom: 5px;
+    font-weight: bold;
+    color: #301279;
 }
 
 .app-controls-desc {
@@ -101,7 +139,7 @@ html, body {
     font-size: 18px;
     margin-top: 20px;
     margin-bottom: 10px;
-    color: #506784;
+    color: #301279;
 }
 
 .alignment-radio label {
@@ -143,6 +181,7 @@ html, body {
     box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
     overflow: hidden;
     min-height: 0;
+    color: #1C1C2C;
 }
 
 .graph-wrapper {
@@ -226,11 +265,11 @@ html, body {
 }
 
 .binder-tab:hover {
-    background-color: #09646e;
+    background-color: #622e9d;
 }
 
 .binder-tab-active {
-    background-color: #07545c;
+    background-color: #622e9d;
     height: 80%;
 }
 
@@ -436,8 +475,9 @@ html, body {
 }
 
 .clear-filters-btn {
-    background-color: #6c757d !important;
-    border-color: #6c757d !important;
+    background-color: #EDAE49 !important;
+    border-color: #EDAE49 !important;
+    color: #301279 !important;
     border-radius: 15px;
     padding: 4px 12px;
     font-size: 0.875rem;
