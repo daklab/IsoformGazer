@@ -16,6 +16,8 @@ import dash_daq as daq
 import plotly.graph_objs as go
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
+import logging
+logging.getLogger('dash.dash').setLevel(logging.WARNING)
 from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
@@ -59,7 +61,6 @@ def setup_local_database(force_rebuild=False):
     os.makedirs(data_dir, exist_ok=True)
     
     db_path = os.path.join(data_dir, "isoformgazer.db")
-    
     if Path(db_path).exists() and not force_rebuild:
         return db_path
     
@@ -71,6 +72,10 @@ def setup_local_database(force_rebuild=False):
         os.remove(db_path)
     
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL") 
+    conn.execute("PRAGMA cache_size = 50000") 
+    conn.execute("PRAGMA temp_store = MEMORY")
 
     ########################################################
     # Load isoform master table data
@@ -326,29 +331,35 @@ def setup_local_database(force_rebuild=False):
         
         print(f"✓ Processed {total_lines:,} ATSE records!")
     
-    print("Creating optimized database indices...")
-    with tqdm(desc="Creating indices", total=8, unit="index") as idx_pbar:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_gene ON junctions(gene_name, gene_id)")
-        idx_pbar.update(1)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_isoforms_gene ON isoforms(gene_name, gene_id)")
-        idx_pbar.update(1)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_psl_gene ON psl_data(gene_id, id)")
-        idx_pbar.update(1)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_junction_id ON junctions(junction_id)")
-        idx_pbar.update(1)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_psi ON junctions(gene_name, psi)")
-        idx_pbar.update(1)
-        conn.execute("ALTER TABLE atse_data ADD COLUMN gene_id_clean TEXT")
-        conn.execute("UPDATE atse_data SET gene_id_clean = SUBSTR(gene_id, 1, INSTR(gene_id, '.') - 1) WHERE gene_id LIKE '%.%'")
-        conn.execute("UPDATE atse_data SET gene_id_clean = gene_id WHERE gene_id_clean IS NULL")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_gene ON atse_data(gene_id_clean, gene_name)")
-        idx_pbar.update(1)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_coords ON atse_data(chromosome, start, end)")
-        idx_pbar.update(1)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_psl_coords ON psl_data(gene_id, tStart, tEnd)")
-        idx_pbar.update(1)
-        #conn.execute("CREATE INDEX IF NOT EXISTS idx_junctions_transcript_mapping ON junctions(matched_transcript_ids)")
-        #idx_pbar.update(1)
+        print("Creating optimized database indices...")
+        indices = [
+            ("idx_junctions_gene", "junctions", "(gene_name, gene_id)"),
+            ("idx_junctions_gene_name", "junctions", "(gene_name)"),  
+            ("idx_isoforms_gene", "isoforms", "(gene_name, gene_id)"),
+            ("idx_isoforms_gene_name", "isoforms", "(gene_name)"), 
+            ("idx_isoforms_id", "isoforms", "(id)"), 
+            ("idx_psl_gene", "psl_data", "(gene_id, id)"),
+            ("idx_psl_id", "psl_data", "(id)"),  
+            ("idx_junctions_junction_id", "junctions", "(junction_id)"),
+            ("idx_junctions_psi", "junctions", "(gene_name, psi)"),
+            ("idx_junctions_cell_type", "junctions", "(cell_type)"),  
+            ("idx_tpm_id", "tpm_data", "(id)"), 
+            ("idx_ratio_id", "ratio_data", "(id)") 
+        ]
+        
+        with tqdm(desc="Creating indices", total=len(indices) + 3, unit="index") as idx_pbar:
+            for idx_name, table_name, columns in indices:
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name}{columns}")
+                idx_pbar.update(1)
+            
+            conn.execute("ALTER TABLE atse_data ADD COLUMN gene_id_clean TEXT")
+            conn.execute("UPDATE atse_data SET gene_id_clean = SUBSTR(gene_id, 1, INSTR(gene_id, '.') - 1) WHERE gene_id LIKE '%.%'")
+            conn.execute("UPDATE atse_data SET gene_id_clean = gene_id WHERE gene_id_clean IS NULL")
+            idx_pbar.update(1)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_gene ON atse_data(gene_id_clean, gene_name)")
+            idx_pbar.update(1)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_coords ON atse_data(chromosome, start, end)")
+            idx_pbar.update(1)
     
     conn.commit()
     conn.close()
@@ -363,15 +374,12 @@ def verify_database_schema(db_path):
     """Verify database schema has required columns"""
     conn = sqlite3.connect(db_path)
     
-    # Check isoforms table
     iso_schema = pd.read_sql("PRAGMA table_info(isoforms)", conn)
     print("Isoforms table columns:", iso_schema['name'].tolist())
     
-    # Check psl_data table
     psl_schema = pd.read_sql("PRAGMA table_info(psl_data)", conn)
     print("PSL data table columns:", psl_schema['name'].tolist())
     
-    # Verify id columns exist
     if 'id' not in iso_schema['name'].values:
         print("ERROR: Missing 'id' column in isoforms table")
     if 'id' not in psl_schema['name'].values:
@@ -1383,7 +1391,7 @@ def update_heatmap_container_class(show_tables):
 
 
 ######################################################################
-# EVENT-LEVEL VISUALIZATIONS CALLBACKS
+# STRUCTURE-LEVEL VISUALIZATIONS CALLBACKS
 ######################################################################
 app.clientside_callback(
     """

@@ -5,25 +5,26 @@ import plotly.graph_objs as go
 from dash import html
 import dash_bootstrap_components as dbc
 
+
 def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
     """
     Query isoform data with pagination, sorting, and filtering.
+    OPTIMIZED: Uses prepared statements and efficient indexing
     """
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA optimize")
+    conn.execute("PRAGMA cache_size = 10000") 
 
-    if table_name == 'isoforms': 
-        query = "SELECT * FROM isoforms"
-    elif table_name == 'junctions': 
-        query = "SELECT * FROM junctions"
+    # Select all columns for full data table functionality
+    query = f"SELECT * FROM {table_name}"
+    
     where_clauses = []
     params = []
     
-    # Filter by gene if provided - should search both gene_name and gene_id
     if gene_filter:
-        where_clauses.append("(gene_name = ? OR gene_id = ?)")
-        params.extend([gene_filter, gene_filter])
+        where_clauses.append("(gene_name = ? OR gene_id LIKE ?)")
+        params.extend([gene_filter, f"{gene_filter}%"])
     
-    # Apply any/all filtering conditions from user vals 
     if filters:
         for column, operator, value in filters:
             if operator == 'contains':
@@ -48,11 +49,9 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
                 where_clauses.append(f"{column} >= ?")
                 params.append(value)
     
-    # Add WHERE if needed
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     
-    # Sorting
     if sort_by:
         order_clauses = []
         for col, direction in sort_by:
@@ -60,10 +59,16 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
         if order_clauses:
             query += " ORDER BY " + ", ".join(order_clauses)
     
-    # Get total count for pagination info
-    count_query = f"SELECT COUNT(*) FROM ({query})"
+    if where_clauses:
+        count_where = " WHERE " + " AND ".join(where_clauses)
+    else:
+        count_where = ""
+    
+    count_query = f"SELECT COUNT(*) FROM {table_name}{count_where}"
     total_count = pd.read_sql_query(count_query, conn, params=params).iloc[0, 0]
-    query += f" LIMIT {page_size} OFFSET {page * page_size}"
+    
+    if page_size > 0:
+        query += f" LIMIT {page_size} OFFSET {page * page_size}"
     
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
@@ -74,6 +79,7 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
 def get_gene_options(db_path, search_term=None, limit=10):
     """Get gene options for dropdown from database"""
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA cache_size = 10000")
     
     if search_term:
         query = """

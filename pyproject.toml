@@ -26,7 +26,10 @@ dependencies = [
     "tqdm (>=4.67.1,<5.0.0)",
     "dash-bootstrap-components (>=2.0.3,<3.0.0)",
     "pillow (>=11.3.0,<12.0.0)",
-    "urllib3 (>=2.5.0,<3.0.0)"
+    "urllib3 (>=2.5.0,<3.0.0)",
+    "psutil (>=7.0.0,<8.0.0)",
+    "memory-profiler (>=0.61.0,<0.62.0)",
+    "line-profiler (>=5.0.0,<6.0.0)"
 ]
 
 [tool.poetry]
