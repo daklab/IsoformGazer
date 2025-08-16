@@ -238,9 +238,9 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
 def create_transcript_structure_plot(db_path: str, 
                                      transcript_data: pd.DataFrame, 
                                      gene_name: str, 
-                                     height: int = 400,
+                                     height: int = 800,
                                      show_y_labels: bool = False) -> go.Figure:
-    """HEAVILY OPTIMIZED: Create transcript structure plot showing ALL transcripts with 50%+ speed improvement"""
+    """Create transcript structure plot showing all transcripts with 50%+ speed improvement"""
     
     if transcript_data.empty:
         return create_empty_isoform_message(f"No transcript data for gene: {gene_name}")
@@ -626,7 +626,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     tissue_cols = [col for col in tpm_data.columns if col not in metadata_cols]
     
     transcript_names = tpm_data['transcript'].tolist() if 'transcript' in tpm_data.columns else tpm_data.index.tolist()
-    
+    num_transcripts = len(transcript_names)
+
     if collapse_tissues:
         heatmap_data, tissue_display_names, tissue_categories = collapse_tissues_by_average(tpm_data, tissue_cols)
         tissue_cols_for_organs = tissue_display_names
@@ -673,7 +674,6 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     clustergram_data_processed = clustergram_data_processed.astype(float)
     clustergram_data_processed = clustergram_data_processed.fillna(0)
     
-    num_transcripts = len(transcript_names)
     if num_transcripts == 1:
         return create_single_transcript_heatmap(
             heatmap_data=heatmap_data,

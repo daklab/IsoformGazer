@@ -402,6 +402,8 @@ app.index_string = '''
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Isoform Gazer</title>
+        <link rel="icon" type="image/png" href="/assets/Isoform-Gazer-Logo.png">
+        <link rel="shortcut icon" type="image/png" href="/assets/Isoform-Gazer-Logo.png">
         {%css%}
     </head>
     <body>
@@ -420,7 +422,16 @@ app.index_string = '''
 ###################################################################
 header = html.Div(className='app-header', children=[
     html.Img(src='/assets/Isoform-Gazer-telescope.png', className='app-header--logo'),
-    html.Img(src='/assets/Isoform-Gazer-text.png', className='app-header--title')
+    html.Img(src='/assets/Isoform-Gazer-text.png', className='app-header--title'),
+    html.A(
+        href='https://github.com/daklab/IsoformGazer',
+        target='_blank',
+        className='github-button',
+        children=[
+            html.Img(src='/assets/Octicons-mark-github.svg', className='github-icon'),
+            html.Span('VIEW ON GITHUB', className='github-text')
+        ]
+    )
 ])
 
 ###################################################################
@@ -438,8 +449,8 @@ left_data_table = dash_table.DataTable(
     sort_mode="multi",
     page_action="custom",
     page_current=0,
-    page_size=10,
     page_count=0,
+    page_size=10,
     filter_query='',
     sort_by=[],
     style_cell={
@@ -447,33 +458,58 @@ left_data_table = dash_table.DataTable(
         'textOverflow': 'ellipsis',
         'minWidth': '100px', 
         'maxWidth': '220px',
-        'padding': '5px',
-        'whiteSpace': 'normal'
+        'padding': '10px 8px',
+        'whiteSpace': 'normal',
+        'font-family': '"Open Sans", sans-serif',
+        'fontSize': '12px',
+        'lineHeight': '1.4',
+        'border': '1px solid #e1e5e9'
     },
     style_table={
-        'height': '100%', 
-        'overflowY': 'auto',
-        'overflowX': 'scroll', 
-        'minWidth': '100%'     
+        'overflowY': 'visible',
+        'height': 'auto'
     },
     style_header={
-        'backgroundColor': 'white',
-        'fontWeight': 'bold',
-        'font-family': 'sans-serif',
+        'backgroundColor': '#301279',
+        'color': 'white',
+        'fontWeight': '600',
+        'font-family': '"Open Sans", sans-serif',
+        'fontSize': '13px',
         'whiteSpace': 'normal',
         'height': 'auto',        
-        'lineHeight': '15px',    
-        'padding': '8px',        
-        'textAlign': 'center'
+        'lineHeight': '16px',    
+        'padding': '12px 8px',        
+        'textAlign': 'center',
+        'border': '1px solid #622e9d',
+        'borderRadius': '0px'
     },
-    style_data={'font-family': 'sans-serif'},
+    style_data={
+        'font-family': '"Open Sans", sans-serif',
+        'fontSize': '12px',
+        'backgroundColor': 'white',
+        'color': '#1C1C2C',
+        'padding': '8px',
+        'border': '1px solid #e1e5e9'
+    },
     style_data_conditional=[
-        {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}
+        {
+            'if': {'row_index': 'odd'}, 
+            'backgroundColor': '#f8f9fa'
+        },
+        {
+            'if': {'state': 'selected'},
+            'backgroundColor': '#622e9d',
+            'color': 'white'
+        }
     ],
     style_filter={
-        'backgroundColor': '#f8f9fa',
-        'fontWeight': 'bold',
-        'padding': '8px 0px'
+        'backgroundColor': '#622e9d',
+        'color': 'white',
+        'fontWeight': '500',
+        'font-family': '"Open Sans", sans-serif',
+        'fontSize': '12px',
+        'padding': '10px 8px',
+        'border': '1px solid #301279'
     },
     virtualization=True,
     fixed_rows={'headers': True},
@@ -498,8 +534,8 @@ right_data_table = dash_table.DataTable(
     sort_mode="multi",
     page_action="custom",
     page_current=0,
-    page_size=10,
     page_count=0,
+    page_size=10,
     filter_query='',
     sort_by=[],
     style_cell={
@@ -507,33 +543,60 @@ right_data_table = dash_table.DataTable(
         'textOverflow': 'ellipsis',
         'minWidth': '100px', 
         'maxWidth': '220px',
-        'padding': '5px',
-        'whiteSpace': 'normal'
+        'padding': '10px 8px',
+        'whiteSpace': 'normal',
+        'font-family': '"Open Sans", sans-serif',
+        'fontSize': '12px',
+        'lineHeight': '1.4',
+        'border': '1px solid #e1e5e9'
     },
     style_table={
-        'height': '100%', 
-        'overflowY': 'auto',
-        'overflowX': 'scroll',
-        'minWidth': '100%'     
+        'overflowY': 'visible',
+        'overflowX': 'auto', 
+        'minWidth': '100%',
+        'height': 'auto'     
     },
     style_header={
-        'backgroundColor': 'white',
-        'fontWeight': 'bold',
-        'font-family': 'sans-serif',
+        'backgroundColor': '#301279',
+        'color': 'white',
+        'fontWeight': '600',
+        'font-family': '"Open Sans", sans-serif',
+        'fontSize': '13px',
         'whiteSpace': 'normal',
         'height': 'auto',        
-        'lineHeight': '15px',    
-        'padding': '8px',        
-        'textAlign': 'center'
+        'lineHeight': '16px',    
+        'padding': '12px 8px',        
+        'textAlign': 'center',
+        'border': '1px solid #622e9d',
+        'borderRadius': '0px'
     },
-    style_data={'font-family': 'sans-serif'},
+    style_data={
+        'font-family': '"Open Sans", sans-serif',
+        'fontSize': '12px',
+        'backgroundColor': 'white',
+        'color': '#1C1C2C',
+        'padding': '8px',
+        'border': '1px solid #e1e5e9'
+    },
     style_data_conditional=[
-        {'if': {'row_index': 'odd'}, 'backgroundColor': 'rgb(248, 248, 248)'}
+        {
+            'if': {'row_index': 'odd'}, 
+            'backgroundColor': '#f8f9fa'
+        },
+        {
+            'if': {'state': 'selected'},
+            'backgroundColor': '#622e9d',
+            'color': 'white'
+        }
     ],
     style_filter={
-        'backgroundColor': '#f8f9fa',
-        'fontWeight': 'bold',
-        'padding': '8px 0px'
+        'backgroundColor': '#622e9d',
+        'color': 'white',
+        'fontWeight': '500',
+        'font-family': '"Open Sans", sans-serif',
+        'fontSize': '12px',
+        'padding': '10px 8px',
+        'border': '1px solid #301279'
     },
     virtualization=True,
     fixed_rows={'headers': True},
@@ -548,6 +611,32 @@ right_data_table = dash_table.DataTable(
 app.layout = html.Div(style={'height': '100vh', 'width': '100%', 
                              'display': 'flex', 'flexDirection': 'column'}, 
                              children=[
+    #####################################
+    # Initial loading screen overlay!
+    #####################################
+    html.Div(id='loading-overlay', className='loading-overlay', children=[
+        html.Div(className='loading-content', children=[
+            html.Img(src='/assets/Isoform-Gazer-Logo.png', className='loading-logo pulsing')
+        ]),
+        # Transcript constellations!
+        html.Div(className='constellation', children=[
+            html.Div(className='transcript-star transcript-1 exons-2'),
+            html.Div(className='transcript-star transcript-2 exons-4'),
+            html.Div(className='transcript-star transcript-3 exons-3'),
+            html.Div(className='transcript-star transcript-4 exons-5'),
+            html.Div(className='transcript-star transcript-5 exons-2'),
+            html.Div(className='transcript-star transcript-6 exons-6'),
+            html.Div(className='transcript-star transcript-7 exons-3'),
+            html.Div(className='transcript-star transcript-8 exons-5'),
+            html.Div(className='transcript-star transcript-9 exons-2'),
+            html.Div(className='transcript-star transcript-10 exons-4'),
+            html.Div(className='transcript-star transcript-11 exons-3'),
+            html.Div(className='transcript-star transcript-12 exons-6'),
+            html.Div(className='transcript-star transcript-13 exons-2'),
+            html.Div(className='transcript-star transcript-14 exons-5'),
+            html.Div(className='transcript-star transcript-15 exons-4')
+        ])
+    ]),
     header,
     html.Div(className='app-body', children=[
         #####################################
@@ -559,66 +648,75 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
             'borderRight': '1px solid #e1e1e1'
         }, children=[
             dcc.Tabs(id='tabs', value='tab-1', style={'height': '100%'}, children=[
-                dcc.Tab(label='About', value='tab-1', children=[
+                dcc.Tab(label='About', className='tab-1', value='tab-1', children=[
                     html.Div(className='control-tab', children=[
-                        html.H2('About'),
-                        html.P('Isoform Gazer allows for a unified view of RNA splicing across ' \
-                        'both single-cell junction usage and long-read isoform data in GENCODEv46 (GRCh38.p14).'),
-                        html.P('Use the controls in the "Query" tab to dynamically query the master table data and generate visualizations.'),
-                        html.P('Use the controls in the "Custom" tab to customize the visualizations.')
-                    ])
-                ]),
-                dcc.Tab(label='Query', value='tab-2', children=[
-                    html.Div(className='control-tab', children=[
-                        html.Div(className='app-controls-block', children=[
-                        html.Div(className='app-controls-query', children='Search by Gene'),
-                        dcc.Dropdown(
-                            id='gene-search-dropdown',
-                            options=[
-                                {'label': 'A1BG-AS1', 'value': 'A1BG-AS1'},
-                                {'label': 'RBFOX2 (RNA Binding Fox-1 Homolog 2)', 'value': 'RBFOX2'},
-                                {'label': 'EGFR (Epidermal growth factor receptor)', 'value': 'EGFR'},
-                                {'label': 'BRCA1 (Breast cancer type 1)', 'value': 'BRCA1'},
-                                {'label': 'TARDBP (TAR DNA Binding Protein)', 'value': 'TARDBP'},
-                                {'label': 'TP53 (Tumor protein p53)', 'value': 'TP53'}
-                            ],
-                            placeholder="Type to search for a gene...",
-                            value='A1BG-AS1',
-                            searchable=True,
-                            clearable=True
-                        ),
-                        html.Div(className='app-controls-desc', children='Select a gene identifier to query or type to search')
+                        html.Div(className='about-logo-header-container', children=[
+                            html.H2('About', className='about-tab-header'),
+                            #html.Img(src='/assets/Isoform-Gazer-Logo.png', 
+                            #        style={'height': '100px', 'width': 'auto'}, className='about-logo')
                         ]),
-                        html.Div(id='gene-filter-status'),
-                        html.Div(className="app-controls-block", children=[
-                            html.Div(className='app-controls-query', children='Query by Value'),
-                            html.P("You can use the filter boxes below each master table column header to search and filter the data:"),
-                            html.Ul([
-                                html.Li([html.Strong("Text columns: "), "Simply type text to find rows with exact matches."]),
-                                html.Li([html.Strong("Numeric columns: "), "Use operators for precise filtering:"]),
-                                html.Ul([
-                                    html.Li("Type a number (e.g., '4') to show only entries with exact matches."),
-                                    html.Li("Use > for greater than (e.g., '>5')."),
-                                    html.Li("Use < for less than (e.g., '<10')."),
-                                    html.Li("Use >= or <= for inclusive ranges.")
-                                ]),
-                                html.Li([html.Strong("Multiple filters: "), "You can apply filters to multiple columns simultaneously."]),
-                                html.Li([html.Strong("Clear filters: "), "Delete your queries in the filter boxes and hit Enter anytime to reset."])
+                        html.Div(className='about-content', children=[
+                            html.P([
+                                'Isoform Gazer provides a unified view of RNA splicing across both single-cell junction usage and long-read isoform data in GENCODEv46 (GRCh38.p14).'
                             ]),
                             html.P([
-                                "Select a gene from the dropdown above or directly filter the tables to explore the data.",
-                                html.Br(),
-                                "Visualizations will update automatically."
-                            ], className="app-controls-desc"),
+                                'Use the controls in the ',
+                                html.Span('Query', className='about-keyword-purple'),
+                                ' tab to dynamically query the master table data and generate visualizations.'
+                            ]),
+                            html.P([
+                                'Use the controls in the ',
+                                html.Span('Custom', className='about-keyword-gold'),
+                                ' tab to customize the visualizations.'
+                            ])
                         ])
                     ])
                 ]),
-                dcc.Tab(label='Custom', value='tab-3', children=[
+                dcc.Tab(label='Query', className='tab-1', value='tab-2', children=[
+                    html.Div(className='control-tab', children=[
+                        html.H2('Search by Gene', className='alignment-settings-section'),
+                        html.Div(className='app-controls-block', children=[
+                            dcc.Dropdown(
+                                id='gene-search-dropdown',
+                                options=[
+                                    {'label': 'A1BG-AS1', 'value': 'A1BG-AS1'},
+                                    {'label': 'RBFOX2 (RNA Binding Fox-1 Homolog 2)', 'value': 'RBFOX2'},
+                                    {'label': 'EGFR (Epidermal growth factor receptor)', 'value': 'EGFR'},
+                                    {'label': 'BRCA1 (Breast cancer type 1)', 'value': 'BRCA1'},
+                                    {'label': 'TARDBP (TAR DNA Binding Protein)', 'value': 'TARDBP'},
+                                    {'label': 'TP53 (Tumor protein p53)', 'value': 'TP53'}
+                                ],
+                                placeholder="Type to search for a gene...",
+                                value='A1BG-AS1',
+                                searchable=True,
+                                clearable=True
+                            ),
+                            html.Div(className='app-controls-desc', children='Select a gene identifier to query or type to search')
+                        ]),
+                        html.Div(id='gene-filter-status'),
+                        html.H2('Query by Value', className='alignment-settings-section'),
+                        html.Div(className='query-content', children=[
+                            html.P("You can query master tables to update plots using the query boxes below each column header:"),
+                            html.Ul([
+                                html.Li([html.Strong("Text columns: "), "Type text for exact matches"]),
+                                html.Li([html.Strong("Numerical columns: "), "Use operators =, >, <, >=, and <= (e.g., '>5', '<=10')"])
+                            ]),
+                            html.P([
+                                "You can apply multiple column filters simultaneously."
+                            ]),
+                            html.P([
+                                "Delete your queries in the filter boxes and hit Enter to remove individual filters. "
+                                "To clear all filters, use the Clear All button above the master table.",
+                            ])
+                        ])
+                    ])
+                ]),
+                dcc.Tab(label='Custom', className='tab-1', value='tab-3', children=[
                     html.Div(className='control-tab', children=[
                         #####################################
                         # General Controls Section
                         #####################################
-                        html.H3('General', className='alignment-settings-section'),
+                        html.H2('General', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Plots to Show'),
                             dcc.Dropdown(
@@ -633,45 +731,29 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             ),
                             html.Div(className='app-controls-desc', children='Select which visualizations to show')
                         ]),
-                        html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Display Master Tables'),
-                            dcc.RadioItems(
-                                id='show-table-radio',
-                                className='alignment-radio',
-                                options=[
-                                    {'label': 'Show', 'value': 'show'},
-                                    {'label': 'Hide', 'value': 'hide'},
-                                ],
-                                value='show',
-                                labelStyle={'display': 'inline-block', 'marginRight': '8px'}
-                            ),
-                            html.Div(className='app-controls-desc', children='Toggle the data tables display')
-                        ]),
-                        html.Hr(),
 
                         #####################################
                         # Isoform-level Event Plot Section
                         #####################################
-                        html.H3('Isoform Transcripts Plot', className='alignment-settings-section'),
+                        html.H2('Transcript Plots', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Plot Height'),
                             dcc.Slider(
                                 id='bar-height-slider',
                                 className='control-slider',
-                                min=100,
-                                max=300,
-                                step=25,
-                                value=250,
-                                marks={str(i): str(i) for i in range(100, 301, 50)}
+                                min=600,
+                                max=1200,
+                                step=100,
+                                value=600,
+                                marks={600: '600', 700: '700', 800: '800', 900: '900', 1000: '1000', 1100: '1100', 1200: '1200'}
                             ),
-                            html.Div(className='app-controls-desc', children='Adjust the height of both the isoform-level and junction-level event visualizations')
+                            html.Div(className='app-controls-desc', children='Adjust the height of both the isoform transcript and junction structure plots')
                         ]),
-                        html.Hr(),
 
                         #####################################
-                        # Isoform-level Heatmap Section
+                        # Clustergrams Section
                         #####################################
-                        html.H3('Heatmap', className='alignment-settings-section'),
+                        html.H2('Clustergram Plots', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             html.Div([
                                 html.Div('Isoform Heatmap Unit', className='app-controls-name', 
@@ -722,9 +804,18 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 options=[
                                     {'label': 'RdBu_r', 'value': 'RdBu_r'},
                                     {'label': 'Viridis', 'value': 'Viridis'},
-                                    {'label': 'Plasma', 'value': 'Plasma'}
+                                    {'label': 'Plasma', 'value': 'Plasma'},
+                                    {'label': 'Spectral', 'value': 'Spectral'},
+                                    {'label': 'Turbo', 'value': 'Turbo'},
+                                    {'label': 'Cividis', 'value': 'Cividis'},
+                                    {'label': 'Blues', 'value': 'Blues'},
+                                    {'label': 'Reds', 'value': 'Reds'},
+                                    {'label': 'YlOrRd', 'value': 'YlOrRd'},
+                                    {'label': 'RdYlBu', 'value': 'RdYlBu'},
+                                    {'label': 'Inferno', 'value': 'Inferno'},
+                                    {'label': 'Magma', 'value': 'Magma'}
                                 ],
-                                value='RdBu_r'
+                                value='Viridis'
                             ),
                             html.Div(className='app-controls-desc', children='Choose the color theme of the heatmaps')
                         ])
@@ -741,9 +832,10 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                 #####################################
                 # Data Panel 1: Isoform Data
                 #####################################
-                html.Div(id='left-panel', className='panel', children=[
-                    html.H2("ENCODE4 Bulk RNA-seq Long-Read Data"),
-                    html.Div(className='graph-wrapper', children=[
+                html.Div(className='panel-with-header', children=[
+                    html.H2("ENCODE4 Bulk RNA-seq Long-Read Data", className='panel-header'),
+                    html.Div(id='left-panel', className='panel', children=[
+                        html.Div(className='graph-wrapper', children=[
                         html.Div(id='isoform-event-plot-container', className='barplot-container', children=[
                             html.Div(className='loading-container', children=[
                                 dcc.Loading(
@@ -769,29 +861,18 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 ),
                                 html.Div(id="heatmap1-loading-message", className="custom-loading-message")
                             ])
-                        ]),
-                        html.Div(className='table-container', id='table1-container', children=[
-                            html.Div(className='table-header-controls', children=[
-                                dbc.Button(
-                                    "Clear Filters",
-                                    id='clear-left-filters',
-                                    color="secondary",
-                                    size="sm",
-                                    className="clear-filters-btn",
-                                    disabled=True
-                                )
-                            ]),
-                            left_data_table
                         ])
                     ])
+                ]),
                 ]),
                 
                 #####################################
                 # Data Panel 2: Junction Data
                 #####################################
-                html.Div(id='right-panel', className='panel', children=[
-                    html.H2("Tabula Sapiens 2.0 Pseudobulked Smart-seq2 Single-cell and Allen Brain Single Nuclei for Brain Data"),
-                    html.Div(className='graph-wrapper', children=[
+                html.Div(className='panel-with-header', children=[
+                    html.H2("Tabula Sapiens 2.0 Pseudobulked Smart-seq2 Single-cell and Allen Brain Single Nuclei for Brain Data", className='panel-header'),
+                    html.Div(id='right-panel', className='panel', children=[
+                        html.Div(className='graph-wrapper', children=[
                         html.Div(id='junction-event-plot-container', className='atse-container', children=[
                             html.Div(className='loading-container', children=[
                                 dcc.Loading(
@@ -840,22 +921,40 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 ),
                                 html.Div(id="heatmap2-loading-message", className="custom-loading-message")
                             ])
-                        ]),
-                    
-                        html.Div(className='table-container', id='table2-container', children=[
-                            html.Div(className='table-header-controls', children=[
-                                dbc.Button(
-                                    "Clear Filters",
-                                    id='clear-right-filters',
-                                    color="secondary",
-                                    size="sm",
-                                    className="clear-filters-btn",
-                                    disabled=True
-                                )
-                            ]),
-                            right_data_table
                         ])
                     ])
+                ]),
+                ])
+            ]),
+            #####################################
+            # Master Tables Section (Outside Panels)
+            #####################################
+            html.Div(className='tables-section', children=[
+                html.Div(className='table-container', id='table1-container', children=[
+                    html.Div(className='table-header-controls', children=[
+                        dbc.Button(
+                            "Clear Filters",
+                            id='clear-left-filters',
+                            color="secondary",
+                            size="sm",
+                            className="clear-filters-btn",
+                            disabled=True
+                        )
+                    ]),
+                    left_data_table
+                ]),
+                html.Div(className='table-container', id='table2-container', children=[
+                    html.Div(className='table-header-controls', children=[
+                        dbc.Button(
+                            "Clear Filters",
+                            id='clear-right-filters',
+                            color="secondary",
+                            size="sm",
+                            className="clear-filters-btn",
+                            disabled=True
+                        )
+                    ]),
+                    right_data_table
                 ])
             ])
         ])
@@ -867,32 +966,37 @@ app.layout.children.extend([
     dcc.Store(id='filtered-junction-store', data=[]),
     dcc.Store(id='isoform-full-data-store', data=[]),
     dcc.Store(id='junction-full-data-store', data=[]),
-    dcc.Store(id='table-callback-prevention', data=False)
+    dcc.Store(id='table-callback-prevention', data=False),
+    dcc.Store(id='initial-loading-complete', data=False)
 ])
 
 #######################################################################
 # CALLBACKS
 #######################################################################
 #######################################################################
+# INITIAL LOADING SCREEN CALLBACK
+#######################################################################
+@app.callback(
+    [dash.dependencies.Output('loading-overlay', 'className'),
+     dash.dependencies.Output('initial-loading-complete', 'data')],
+    [dash.dependencies.Input('isoform-full-data-store', 'data'),
+     dash.dependencies.Input('junction-full-data-store', 'data')],
+    [dash.dependencies.State('initial-loading-complete', 'data')]
+)
+def hide_loading_screen(isoform_data, junction_data, loading_complete):
+    """Hide the initial loading screen once initial data has loaded"""
+    if loading_complete:
+        return 'loading-overlay hidden', True
+    
+    if isoform_data and junction_data:
+        return 'loading-overlay hidden', True
+    
+    else:
+        return 'loading-overlay', False
+
+#######################################################################
 # MASTER TABLE FILTERING CALLBACKS
 #######################################################################
-# Avoid master table updates when the tables are hidden (unlikely, but possible)
-app.clientside_callback(
-    """
-    function(show_tables) {
-        // Return true to prevent callback execution when tables are hidden
-        if (show_tables === 'hide') {
-            return true;
-        }
-        return false;
-    }
-    """,
-    dash.dependencies.Output('table-callback-prevention', 'data'),
-    [dash.dependencies.Input('show-table-radio', 'value')],
-    prevent_initial_call=True
-)
-
-
 @app.callback(
     [dash.dependencies.Output('filtered-isoform-store', 'data'),
      dash.dependencies.Output('filtered-junction-store', 'data')],
@@ -997,34 +1101,12 @@ def update_gene_options(search_value, current_value):
      dash.dependencies.Input('left_data_table', 'page_size'),
      dash.dependencies.Input('left_data_table', 'sort_by'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('show-table-radio', 'value')]
+     dash.dependencies.Input('gene-search-dropdown', 'value')]
 )
-def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, show_tables):
-    if show_tables == 'hide':
-        filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
-        
-        _, total_count = query_master_table(
-            db_path,
-            table_name='isoforms',
-            page=0,
-            page_size=0,
-            sort_by=None,
-            filters=filters,
-            gene_filter=selected_gene
-        )
-        
-        full_data, _ = query_master_table(
-            db_path,
-            table_name='isoforms',
-            page=0,
-            page_size=total_count,
-            sort_by=sort_by,
-            filters=filters,
-            gene_filter=selected_gene
-        )
-        
-        return [], 0, full_data
+def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
     
     filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
     
@@ -1048,6 +1130,10 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
         gene_filter=selected_gene
     )
     
+    # Handle None values for pagination params
+    page_current = page_current or 0
+    page_size = page_size or 10
+    
     start_idx = page_current * page_size
     end_idx = (page_current + 1) * page_size
     paginated_data = full_data[start_idx:end_idx]
@@ -1064,34 +1150,12 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
      dash.dependencies.Input('right_data_table', 'page_size'),
      dash.dependencies.Input('right_data_table', 'sort_by'),
      dash.dependencies.Input('right_data_table', 'filter_query'),
-     dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('show-table-radio', 'value')]
+     dash.dependencies.Input('gene-search-dropdown', 'value')]
 )
-def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, show_tables):
-    if show_tables == 'hide':
-        filters = parse_filter_query(db_path, filter_query, table_name='junctions')
-        
-        _, total_count = query_master_table(
-            db_path,
-            table_name="junctions",
-            page=0,
-            page_size=0,
-            sort_by=None,
-            filters=filters,
-            gene_filter=selected_gene
-        )
-        
-        full_data, _ = query_master_table(
-            db_path,
-            table_name="junctions",
-            page=0,
-            page_size=total_count,
-            sort_by=sort_by,
-            filters=filters,
-            gene_filter=selected_gene
-        )
-        
-        return [], 0, full_data
+def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise PreventUpdate
     
     filters = parse_filter_query(db_path, filter_query, table_name='junctions')
     
@@ -1114,6 +1178,10 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
         filters=filters,
         gene_filter=selected_gene
     )
+    
+    # Handle None values for pagination params
+    page_current = page_current or 0
+    page_size = page_size or 10
     
     start_idx = page_current * page_size
     end_idx = (page_current + 1) * page_size
@@ -1140,13 +1208,10 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
 )
 def toggle_plot_visibility(overview_value):
     """Enhanced plot visibility toggle with proper container sizing"""
-    
-    # Base styles
     show_full = {'display': 'block', 'height': '100%', 'flex': '1 1 auto'}
     hide = {'display': 'none', 'height': '0', 'flex': '0 0 0'}
     show_normal = {'display': 'block', 'height': '100%'}
     
-    # Default panel classes
     panels_class = 'panels-container'
     left_panel_class = 'panel'
     right_panel_class = 'panel'
@@ -1154,21 +1219,54 @@ def toggle_plot_visibility(overview_value):
     if overview_value == 'both':
         return show_normal, show_normal, show_normal, show_normal, panels_class, left_panel_class, right_panel_class
     
-    # Show only event plots, hide clustergrams
+    # Show only structure plots, hide clustergrams
     elif overview_value == 'event-level':
         left_panel_class = 'panel full-panel-event'
         right_panel_class = 'panel full-panel-event'
         return show_full, hide, show_full, hide, panels_class, left_panel_class, right_panel_class
     
-    # Show only clustergrams, hide event plots
+    # Show only clustergrams, hide structure plots
     elif overview_value == 'clustergram':
         left_panel_class = 'panel full-panel-clustergram'
         right_panel_class = 'panel full-panel-clustergram'
         return hide, show_full, hide, show_full, panels_class, left_panel_class, right_panel_class
     
-    # Default: styles for both
     else:
         return show_normal, show_normal, show_normal, show_normal, panels_class, left_panel_class, right_panel_class
+
+
+######################################################################
+# DYNAMIC PANEL HEIGHT ADJUSTMENT
+######################################################################
+@app.callback(
+    [dash.dependencies.Output('left-panel', 'style'),
+     dash.dependencies.Output('right-panel', 'style'),
+     dash.dependencies.Output('isoform-event-plot-container', 'style', allow_duplicate=True),
+     dash.dependencies.Output('junction-event-plot-container', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('bar-height-slider', 'value')],
+    prevent_initial_call=True
+)
+def adjust_panel_heights(plot_height):
+    """Dynamically adjust panel heights based on transcript plot height slider"""
+    
+    # Calculate proportional panel height based on plot height
+    # Base calculation: clustergram (710px) + plot height + margins/padding (~100px)
+    base_panel_height = 710 + plot_height + 100
+    panel_height = max(base_panel_height, 1000)
+    
+    panel_style = {
+        'height': f'{panel_height}px',
+        'minHeight': f'{panel_height}px'
+    }
+    
+    # Update plot container heights to match slider value
+    plot_container_style = {
+        'height': f'{plot_height}px',
+        'minHeight': f'{max(plot_height - 50, 500)}px',
+        'maxHeight': f'{plot_height + 100}px'
+    }
+    
+    return panel_style, panel_style, plot_container_style, plot_container_style
 
 
 ######################################################################
@@ -1178,25 +1276,23 @@ def toggle_plot_visibility(overview_value):
     dash.dependencies.Output('heatmap2', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
-     dash.dependencies.Input('show-table-radio', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
      dash.dependencies.Input('overview-dropdown', 'value')]
 )
-def update_junction_clustergram(selected_gene, colorscale, show_tables, 
+def update_junction_clustergram(selected_gene, colorscale, 
                                 filtered_junction_ids, plots_dropdown_value):
     """Update junction visualization based on gene selection and filtering"""
     if plots_dropdown_value == 'event-level':                       
         return empty_fig() 
     elif plots_dropdown_value == 'clustergram': 
-        heatmap_height = min(800, int(0.85 * 800))
-    elif show_tables == 'show':
-        heatmap_height = 450
+        heatmap_height = min(1200, int(0.85 * 1200))
     else:
-        heatmap_height = 650
+        heatmap_height = 710
     
     if not selected_gene:
         try:
-            fig = create_summary_clustergram(db_path, height=heatmap_height, colorscale=colorscale, show_tables=show_tables)
+            fig = create_summary_clustergram(db_path, height=heatmap_height, colorscale=colorscale)
+            fig.update_layout(autosize=True, height=heatmap_height, transition_duration=200)
             return fig
         except Exception as e:
             print(f"Error creating summary clustergram: {e}")
@@ -1208,10 +1304,9 @@ def update_junction_clustergram(selected_gene, colorscale, show_tables,
             selected_gene, 
             height=heatmap_height, 
             colorscale=colorscale, 
-            show_tables=show_tables,
             filtered_junction_ids=filtered_junction_ids
         )
-
+        fig.update_layout(autosize=True, height=heatmap_height, transition_duration=200)
         return fig
     
     except Exception as e:
@@ -1220,117 +1315,16 @@ def update_junction_clustergram(selected_gene, colorscale, show_tables,
     
 
 @app.callback(
-    [dash.dependencies.Output('table1-container', 'style'), 
-     dash.dependencies.Output('table2-container', 'style'),
-     dash.dependencies.Output('heatmap1', 'style'),
-     dash.dependencies.Output('heatmap2', 'style')],
-    [dash.dependencies.Input('show-table-radio', 'value')]
-)
-def toggle_tables(show_tables):
-    if show_tables == 'show':
-        table_style = {
-            'display': 'block', 
-            'height': '40vh',  
-            'min-height': '250px', 
-            'overflow': 'auto',
-            'flex-shrink': 0,
-            'visibility': 'visible'
-        }
-        heatmap1_style = {'height': '30vh', 'width': '100%'} 
-        heatmap2_style = {'height': '35vh', 'width': '100%'} 
-    else:
-        table_style = {
-            'display': 'block',  
-            'height': '0',
-            'min-height': '0',
-            'max-height': '0',
-            'overflow': 'hidden',
-            'visibility': 'hidden', 
-            'margin': '0',
-            'padding': '0'
-        }
-        heatmap1_style = {'height': '45vh', 'width': '100%'}  
-        heatmap2_style = {'height': '60vh', 'width': '100%'}
-    
-    return table_style, table_style, heatmap1_style, heatmap2_style
-
-
-@app.callback(
-    [dash.dependencies.Output('left-panel-graph-wrapper', 'className'),
-     dash.dependencies.Output('right-panel-graph-wrapper', 'className')],
-    [dash.dependencies.Input('show-table-radio', 'value')]
-)
-def update_container_classes(show_tables):
-    """Update container classes based on table visibility"""
-    if show_tables == 'show':
-        return 'graph-wrapper', 'graph-wrapper'
-    else:
-        return 'graph-wrapper tables-hidden', 'graph-wrapper tables-hidden'
-
-
-app.clientside_callback(
-    """
-    function(n_clicks, show_tables) {
-        setTimeout(function() {
-            // Force resize of all Plotly graphs
-            var graphs = document.querySelectorAll('.js-plotly-plot');
-            graphs.forEach(function(graph) {
-                if (graph && graph.layout) {
-                    // Force Plotly to recalculate size
-                    Plotly.relayout(graph, {autosize: true});
-                    Plotly.Plots.resize(graph);
-                }
-            });
-        }, 200);
-        return window.dash_clientside.no_update;
-    }
-    """,
-    dash.dependencies.Output('heatmap1', 'className', allow_duplicate=True),
-    [dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('show-table-radio', 'value')],
-    prevent_initial_call=True
-)
-
-app.clientside_callback(
-    """
-    function(show_tables) {
-        setTimeout(function() {
-            // Use the correct Plotly method for resizing
-            if (window.Plotly) {
-                var graphs = document.querySelectorAll('.js-plotly-plot');
-                graphs.forEach(function(graph) {
-                    if (graph && graph.data) {
-                        try {
-                            // Use Plotly.relayout instead of Plots.resize
-                            window.Plotly.relayout(graph, {autosize: true});
-                        } catch (e) {
-                            console.log('Plotly relayout error:', e);
-                        }
-                    }
-                });
-            }
-        }, 200);
-        return window.dash_clientside.no_update;
-    }
-    """,
-    dash.dependencies.Output('gene-search-dropdown', 'style', allow_duplicate=True),
-    [dash.dependencies.Input('show-table-radio', 'value')],
-    prevent_initial_call=True
-)
-
-
-@app.callback(
     dash.dependencies.Output('heatmap1', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('isoform-data-type-switch', 'value'),
-     dash.dependencies.Input('show-table-radio', 'value'),
      dash.dependencies.Input('show-labels-toggle', 'value'),
      dash.dependencies.Input('collapse-tissue-toggle', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('overview-dropdown', 'value')]
 )
-def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_tables, 
+def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, 
                           show_labels, collapse_tissues, filtered_transcript_ids, 
                           plots_dropdown_value):
     """Update isoform clustergram with junction clustergram heights"""
@@ -1348,11 +1342,9 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
     if plots_dropdown_value == 'event-level':
         return empty_fig() 
     if plots_dropdown_value == 'clustergram': 
-        heatmap_height = min(800, int(0.85 * 800))
-    elif show_tables == 'show':
-        heatmap_height = 450
+        heatmap_height = min(1200, int(0.85 * 1200))
     else:
-        heatmap_height = 650
+        heatmap_height = 710
     
     try:
         filtered_data = current_data.copy()
@@ -1365,11 +1357,10 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
             height=heatmap_height,  
             colorscale=colorscale,
             data_type=data_type,
-            show_tables=show_tables,
             show_labels=show_labels,
             collapse_tissues=collapse_tissues
         )
-        fig.update_layout(autosize=True)
+        fig.update_layout(autosize=True, height=heatmap_height)
 
         return fig
     
@@ -1378,69 +1369,9 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, show_table
         return create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
 
 
-@app.callback(
-    dash.dependencies.Output('heatmap1', 'className'),
-    [dash.dependencies.Input('show-table-radio', 'value')]
-)
-def update_heatmap_container_class(show_tables):
-    """Add CSS class to manage container behavior"""
-    if show_tables == 'show':
-        return 'with-tables'
-    else:
-        return ''
-
-
 ######################################################################
 # STRUCTURE-LEVEL VISUALIZATIONS CALLBACKS
 ######################################################################
-app.clientside_callback(
-    """
-    function(overview_value) {
-        setTimeout(function() {
-            // Force plots to reset to default zoom when switching to event-level mode
-            var graphs = document.querySelectorAll('.js-plotly-plot');
-            graphs.forEach(function(graph) {
-                if (graph && graph.layout) {
-                    try {
-                        // Check if ranges exist before using them
-                        var xRange = graph.layout.xaxis && graph.layout.xaxis.range ? graph.layout.xaxis.range : null;
-                        var yRange = graph.layout.yaxis && graph.layout.yaxis.range ? graph.layout.yaxis.range : null;
-                        
-                        var relayoutData = {};
-                        
-                        if (xRange && Array.isArray(xRange) && xRange.length === 2) {
-                            relayoutData['xaxis.autorange'] = false;
-                            relayoutData['xaxis.range'] = xRange;
-                        } else {
-                            relayoutData['xaxis.autorange'] = true;
-                        }
-                        
-                        if (yRange && Array.isArray(yRange) && yRange.length === 2) {
-                            relayoutData['yaxis.autorange'] = false;
-                            relayoutData['yaxis.range'] = yRange;
-                        } else {
-                            relayoutData['yaxis.autorange'] = true;
-                        }
-                        
-                        // Only call relayout if we have valid data
-                        if (Object.keys(relayoutData).length > 0) {
-                            Plotly.relayout(graph, relayoutData);
-                        }
-                    } catch (e) {
-                        console.log('Plotly relayout error:', e);
-                    }
-                }
-            });
-        }, 500);
-        return window.dash_clientside.no_update;
-    }
-    """,
-    dash.dependencies.Output('gene-search-dropdown', 'style', allow_duplicate=True),
-    [dash.dependencies.Input('overview-dropdown', 'value')],
-    prevent_initial_call=True
-)
-
-
 @app.callback(
     dash.dependencies.Output('barplot1', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
@@ -1476,7 +1407,7 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_
         if plots_dropdown_value == 'clustergram':
             return empty_fig() 
         elif plots_dropdown_value == 'event-level': 
-            plot_height = min(800, int(0.8 * 800))
+            plot_height = min(1200, int(0.8 * 1200))
         
         show_labels = (plots_dropdown_value == 'event-level')
         
@@ -1515,7 +1446,7 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height,
         )
 
         if plots_dropdown_value == 'event-level': 
-            plot_height = min(800, int(0.8 * 800))
+            plot_height = min(1200, int(0.8 * 1200))
         
         show_labels = (plots_dropdown_value == 'event-level')
         
