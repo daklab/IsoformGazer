@@ -239,7 +239,8 @@ def create_transcript_structure_plot(db_path: str,
                                      transcript_data: pd.DataFrame, 
                                      gene_name: str, 
                                      height: int = 800,
-                                     show_y_labels: bool = False) -> go.Figure:
+                                     show_y_labels: bool = False,
+                                     exon_color: str = '#2E86C1') -> go.Figure:
     """Create transcript structure plot showing all transcripts with 50%+ speed improvement"""
     
     if transcript_data.empty:
@@ -286,7 +287,6 @@ def create_transcript_structure_plot(db_path: str,
     y_max = len(transcript_summary) + 1
     
     fig = go.Figure()
-    exon_color = '#2E86C1'
     intron_color = '#85929E'
     
     intron_x = []

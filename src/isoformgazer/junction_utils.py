@@ -575,7 +575,9 @@ def process_transcript_structure(psl_df: pd.DataFrame,
 @cached(cache_timeout=600)
 def create_junction_exon_visualization(gene_data: dict, 
                                        height: int = 250,
-                                       show_y_labels: bool = False) -> go.Figure:
+                                       show_y_labels: bool = False,
+                                       exon_color: str = '#2E86C1',
+                                       junction_color: str = '#85929E') -> go.Figure:
     """Create junction and exon structure plot for junction master table data"""
     if 'error' in gene_data:
         return create_empty_atse_message(gene_data['error'])
@@ -594,9 +596,7 @@ def create_junction_exon_visualization(gene_data: dict,
         return create_empty_atse_message(f"No transcript or junction data found for {gene_name}")
     
     fig = go.Figure()
-    exon_color = '#2E86C1'  
     intron_color = '#85929E' 
-    junction_color = '#85929E' 
     transcript_labels = []
     transcript_y_positions = []
     

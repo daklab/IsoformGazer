@@ -1623,3 +1623,27 @@ div[data-value="tab-3"]:hover {
         height: calc(100vh - 150px) !important;
     }
 }
+
+/* ######################################################################################
+   # Color Picker Styling - Remove borders and make full width
+   ###################################################################################### */
+.daq-ColorPicker {
+    width: 100% !important;
+    max-width: 100% !important;
+    display: block !important;
+}
+
+.app-controls-block .daq-ColorPicker {
+    margin: 10px 0 !important;
+    padding: 0 !important;
+}
+
+#exon-color-picker .daq-colorpicker--light__chromepicker {
+    border-radius: 0% !important;
+    border: none !important;
+}
+
+#junction-color-picker .daq-colorpicker--light__chromepicker {
+    border-radius: 0% !important;
+    border: none !important;
+}

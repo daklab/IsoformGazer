@@ -749,6 +749,32 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             ),
                             html.Div(className='app-controls-desc', children='Adjust the height of both the isoform transcript and junction structure plots')
                         ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='app-controls-name', children='Exon Color'),
+                            html.Div(style={'border': 'none', 'outline': 'none', 'boxShadow': 'none'}, children=[
+                                daq.ColorPicker(
+                                    id='exon-color-picker',
+                                    value={'hex': '#2E86C1'},
+                                    size=240,
+                                    theme=None,
+                                    style={'border': 'none', 'outline': 'none', 'boxShadow': 'none'}
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Customize default color of exons in the structure plots')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='app-controls-name', children='Junction Color'),
+                            html.Div(style={'border': 'none', 'outline': 'none', 'boxShadow': 'none'}, children=[
+                                daq.ColorPicker(
+                                    id='junction-color-picker',
+                                    value={'hex': '#85929E'},
+                                    size=240,
+                                    theme=None,
+                                    style={'border': 'none', 'outline': 'none', 'boxShadow': 'none'}
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Customize default color of junctions in the ATSE structure plot')
+                        ]),
 
                         #####################################
                         # Clustergrams Section
@@ -967,12 +993,36 @@ app.layout.children.extend([
     dcc.Store(id='isoform-full-data-store', data=[]),
     dcc.Store(id='junction-full-data-store', data=[]),
     dcc.Store(id='table-callback-prevention', data=False),
-    dcc.Store(id='initial-loading-complete', data=False)
+    dcc.Store(id='initial-loading-complete', data=False),
+    dcc.Store(id='exon-color-store', data='#2E86C1'),
+    dcc.Store(id='junction-color-store', data='#85929E')
 ])
 
 #######################################################################
 # CALLBACKS
 #######################################################################
+#######################################################################
+# EXON COLOR PICKER CALLBACK
+#######################################################################
+@app.callback(
+    dash.dependencies.Output('exon-color-store', 'data'),
+    [dash.dependencies.Input('exon-color-picker', 'value')]
+)
+def update_exon_color_store(color_value):
+    """Update exon color store when color picker changes"""
+    if color_value and 'hex' in color_value:
+        return color_value['hex']
+    return '#2E86C1'
+
+@app.callback(
+    dash.dependencies.Output('junction-color-store', 'data'),
+    [dash.dependencies.Input('junction-color-picker', 'value')]
+)
+def update_junction_color_store(color_value):
+    """Update junction color store when color picker changes"""
+    if color_value and 'hex' in color_value:
+        return color_value['hex']
+    return '#85929E'
 #######################################################################
 # INITIAL LOADING SCREEN CALLBACK
 #######################################################################
@@ -1377,9 +1427,10 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('bar-height-slider', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('overview-dropdown', 'value')]
+     dash.dependencies.Input('overview-dropdown', 'value'),
+     dash.dependencies.Input('exon-color-store', 'data')]
 )
-def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value):
+def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value, exon_color):
     """Update transcript structure plot based on gene selection"""
     if not selected_gene:
         fig = go.Figure()
@@ -1416,7 +1467,8 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_
             transcript_data, 
             selected_gene, 
             height=plot_height,
-            show_y_labels=show_labels 
+            show_y_labels=show_labels,
+            exon_color=exon_color
         )
         
         return fig
@@ -1431,9 +1483,11 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
      dash.dependencies.Input('bar-height-slider', 'value'),
-     dash.dependencies.Input('overview-dropdown', 'value')]
+     dash.dependencies.Input('overview-dropdown', 'value'),
+     dash.dependencies.Input('exon-color-store', 'data'),
+     dash.dependencies.Input('junction-color-store', 'data')]
 )
-def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height, plots_dropdown_value):
+def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height, plots_dropdown_value, exon_color, junction_color):
     """Update ATSE splice junction visualization with filtered data"""
     if not selected_gene:
         return create_empty_atse_message("Select a gene to view splice junctions and exons")
@@ -1453,7 +1507,9 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height,
         fig = create_junction_exon_visualization(
             gene_data, 
             height=plot_height,
-            show_y_labels=show_labels
+            show_y_labels=show_labels,
+            exon_color=exon_color,
+            junction_color=junction_color
         )
         return fig
     
