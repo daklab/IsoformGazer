@@ -936,7 +936,7 @@ def create_junction_exon_visualization(gene_data: dict,
         },
         xaxis=dict(
             title="Genomic Position",
-            range=[min_start - 1000, max_end + 1000],
+            range=[min_start, max_end + (max_end - min_start) * 0.3],
             showgrid=False,
             tickformat=',',
             rangeslider=dict(visible=True, range=[min_start, max_end]),
