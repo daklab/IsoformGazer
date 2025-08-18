@@ -412,6 +412,48 @@ def verify_database_schema(db_path):
 
 
 ###################################################################
+# HELPER FUNCTIONS
+###################################################################
+def create_loading_progress_figure():
+    """
+    Setup for white loading progress circle around pulsing logo in loading screen
+    """
+    radius = 1.5
+    theta = np.linspace(0, 2 * np.pi, 100)
+    x_circle = radius * np.cos(theta)
+    y_circle = radius * np.sin(theta)
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x_circle, y=y_circle,
+        mode='lines',
+        line=dict(color='rgba(255,255,255,0.5)', width=8),
+        showlegend=False,
+        hoverinfo='none'
+    ))
+    
+    fig.update_layout(
+        showlegend=False,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin={'l': 20, 'r': 20, 't': 20, 'b': 20},
+        xaxis={
+            'visible': False,
+            'range': [-2.0, 2.0],
+            'scaleanchor': 'y',
+            'scaleratio': 1
+        },
+        yaxis={
+            'visible': False,
+            'range': [-2.0, 2.0]
+        },
+        width=450,
+        height=450
+    )
+    
+    return fig
+
+###################################################################
 # APPLICATION SETUP
 ###################################################################
 db_path = setup_local_database()
@@ -638,7 +680,19 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
     #####################################
     html.Div(id='loading-overlay', className='loading-overlay', children=[
         html.Div(className='loading-content', children=[
-            html.Img(src='/assets/Isoform-Gazer-Logo.png', className='loading-logo pulsing')
+            html.Div(className='logo-progress-container', children=[
+                html.Img(src='/assets/Isoform-Gazer-Logo.png', className='loading-logo pulsing'),
+                html.Div(className='progress-ring', children=[
+                    html.Div([
+                        dcc.Graph(
+                            id='progress-circle',
+                            figure=create_loading_progress_figure(),
+                            config={'displayModeBar': False},
+                            style={'width': '100%', 'height': '100%'}
+                        )
+                    ])
+                ])
+            ])
         ]),
         # Transcript constellations!
         html.Div(className='constellation', children=[
@@ -1017,7 +1071,10 @@ app.layout.children.extend([
     dcc.Store(id='table-callback-prevention', data=False),
     dcc.Store(id='initial-loading-complete', data=False),
     dcc.Store(id='exon-color-store', data='#2E86C1'),
-    dcc.Store(id='junction-color-store', data='#85929E')
+    dcc.Store(id='junction-color-store', data='#85929E'),
+    dcc.Store(id='loading-progress-store', data=0),
+    dcc.Interval(id='loading-delay-interval', interval=1000, n_intervals=0, max_intervals=1, disabled=True),
+    dcc.Interval(id='progress-update-interval', interval=50, n_intervals=0, disabled=False)
 ])
 
 #######################################################################
@@ -1045,26 +1102,134 @@ def update_junction_color_store(color_value):
     if color_value and 'hex' in color_value:
         return color_value['hex']
     return '#85929E'
+
+
+#######################################################################
+# LOADING SCREEN PROGRESS BAR CALLBACKS
+#######################################################################
+@app.callback(
+    [dash.dependencies.Output('loading-progress-store', 'data'),
+     dash.dependencies.Output('progress-update-interval', 'disabled')],
+    [dash.dependencies.Input('progress-update-interval', 'n_intervals')],
+    [dash.dependencies.State('initial-loading-complete', 'data')]
+)
+def update_loading_progress(progress_intervals, loading_complete):
+    """
+    Updates white loading progress circle for loading screen with steady time-based progression.
+    Notes: 
+    - We are assuming it takes ~5.65 seconds to load the initial data based on testing
+    - Currently using 50ms interval updates, meaning 113 steps to reach 100% (~0.885% per timestep)
+    """
+    if loading_complete:
+        return 100, True
+    
+    new_progress = min(progress_intervals * 0.885, 100)
+    disable_interval = (new_progress >= 100)
+    
+    return new_progress, disable_interval
+
+
+@app.callback(
+    dash.dependencies.Output('progress-circle', 'figure'),
+    [dash.dependencies.Input('loading-progress-store', 'data')]
+)
+def update_progress_bar(progress):
+    """Updates loading screen circular progress bar based on 
+    timesteps defined in update_loading_progress() callback"""
+    radius = 1.5 
+    theta = np.linspace(0, 2 * np.pi, 100)
+    x_circle = radius * np.cos(theta)
+    y_circle = radius * np.sin(theta)
+    
+    # Progress arc (clockwise)
+    progress_theta = np.linspace(-np.pi/2, -np.pi/2 + 2 * np.pi * (progress / 100), max(int(progress), 2))
+    if len(progress_theta) > 0:
+        x_progress = radius * np.cos(progress_theta)
+        y_progress = radius * np.sin(progress_theta)
+    else:
+        x_progress = []
+        y_progress = []
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x_circle, y=y_circle,
+        mode='lines',
+        line=dict(color='rgba(255,255,255,0.5)', width=8),
+        showlegend=False,
+        hoverinfo='none'
+    ))
+    
+    if len(x_progress) > 0:
+        fig.add_trace(go.Scatter(
+            x=x_progress, y=y_progress,
+            mode='lines',
+            line=dict(
+                color='rgba(255,255,255,1.0)', 
+                width=10
+            ),
+            showlegend=False,
+            hoverinfo='none'
+        ))
+        
+        # Glow effect using slightly larger, more transparent line around original
+        fig.add_trace(go.Scatter(
+            x=x_progress, y=y_progress,
+            mode='lines',
+            line=dict(
+                color='rgba(255,255,255,0.4)', 
+                width=16
+            ),
+            showlegend=False,
+            hoverinfo='none'
+        ))
+    
+    fig.update_layout(
+        showlegend=False,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin={'l': 20, 'r': 20, 't': 20, 'b': 20},
+        xaxis={
+            'visible': False,
+            'range': [-2.0, 2.0],
+            'scaleanchor': 'y',
+            'scaleratio': 1
+        },
+        yaxis={
+            'visible': False,
+            'range': [-2.0, 2.0]
+        },
+        width=450,
+        height=450
+    )
+    
+    return fig
+
 #######################################################################
 # INITIAL LOADING SCREEN CALLBACK
 #######################################################################
 @app.callback(
     [dash.dependencies.Output('loading-overlay', 'className'),
-     dash.dependencies.Output('initial-loading-complete', 'data')],
+     dash.dependencies.Output('initial-loading-complete', 'data'),
+     dash.dependencies.Output('loading-delay-interval', 'disabled')],
     [dash.dependencies.Input('isoform-full-data-store', 'data'),
-     dash.dependencies.Input('junction-full-data-store', 'data')],
+     dash.dependencies.Input('junction-full-data-store', 'data'),
+     dash.dependencies.Input('loading-delay-interval', 'n_intervals')],
     [dash.dependencies.State('initial-loading-complete', 'data')]
 )
-def hide_loading_screen(isoform_data, junction_data, loading_complete):
-    """Hide the initial loading screen once initial data has loaded"""
+def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_complete):
+    """Hide the initial loading screen with a 2-second delay after initial data has loaded"""
     if loading_complete:
-        return 'loading-overlay hidden', True
+        return 'loading-overlay hidden', True, True
     
-    if isoform_data and junction_data:
-        return 'loading-overlay hidden', True
+    data_loaded = bool(isoform_data and junction_data)
+    if data_loaded and timer_intervals == 0:
+        return 'loading-overlay', False, False 
     
-    else:
-        return 'loading-overlay', False
+    if data_loaded and timer_intervals > 0:
+        return 'loading-overlay hidden', True, True
+    
+    # Data not loaded yet so keep showing loading screen
+    return 'loading-overlay', False, True
 
 #######################################################################
 # MASTER TABLE FILTERING CALLBACKS
