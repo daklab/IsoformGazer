@@ -18,7 +18,7 @@ from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
-from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner
+from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner, validate_filter_input
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
     load_atse_data, process_gene_atse_data, create_empty_atse_message, 
@@ -1043,6 +1043,13 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             disabled=True
                         )
                     ]),
+                    # Isoform table filter error popup
+                    html.Div(
+                        id='left-table-error-popup',
+                        className='filter-error-popup',
+                        style={'display': 'none'},
+                        children=[]
+                    ),
                     left_data_table
                 ]),
                 html.Div(className='table-container', id='table2-container', children=[
@@ -1056,6 +1063,13 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             disabled=True
                         )
                     ]),
+                    # Junction table filter error popup
+                    html.Div(
+                        id='right-table-error-popup',
+                        className='filter-error-popup',
+                        style={'display': 'none'},
+                        children=[]
+                    ),
                     right_data_table
                 ])
             ])
@@ -1073,6 +1087,8 @@ app.layout.children.extend([
     dcc.Store(id='exon-color-store', data='#2E86C1'),
     dcc.Store(id='junction-color-store', data='#85929E'),
     dcc.Store(id='loading-progress-store', data=0),
+    dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
+    dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Interval(id='loading-delay-interval', interval=1000, n_intervals=0, max_intervals=1, disabled=True),
     dcc.Interval(id='progress-update-interval', interval=50, n_intervals=0, disabled=False)
 ])
@@ -1205,6 +1221,62 @@ def update_progress_bar(progress):
     return fig
 
 #######################################################################
+# FILTER VALIDATION CALLBACKS
+#######################################################################
+@app.callback(
+    [dash.dependencies.Output('left-table-error-popup', 'style'),
+     dash.dependencies.Output('left-table-error-popup', 'children'),
+     dash.dependencies.Output('left-table-validation-store', 'data')],
+    [dash.dependencies.Input('left_data_table', 'filter_query')]
+)
+def validate_left_table_filters(current_filter_query):
+    """Validate isoform table filters and store validation results"""
+    if not current_filter_query:
+        return {'display': 'none'}, [], {'valid': True, 'errors': {}, 'query': ''}
+    
+    is_valid, errors = validate_filter_input(db_path, 'isoforms', current_filter_query)
+    
+    if not is_valid:
+        error_messages = []
+        for column, message in errors.items():
+            error_messages.append(html.Div([
+                html.Strong(f"{column.replace('_', ' ').title()}: "),
+                message
+            ], className='error-message'))
+        
+        return {'display': 'block'}, error_messages, {'valid': False, 'errors': errors, 'query': current_filter_query}
+    
+    else:
+        return {'display': 'none'}, [], {'valid': True, 'errors': {}, 'query': current_filter_query}
+
+
+@app.callback(
+    [dash.dependencies.Output('right-table-error-popup', 'style'),
+     dash.dependencies.Output('right-table-error-popup', 'children'),
+     dash.dependencies.Output('right-table-validation-store', 'data')],
+    [dash.dependencies.Input('right_data_table', 'filter_query')]
+)
+def validate_right_table_filters(current_filter_query):
+    """Validate junction table filters and store validation results"""
+    if not current_filter_query:
+        return {'display': 'none'}, [], {'valid': True, 'errors': {}, 'query': ''}
+    
+    is_valid, errors = validate_filter_input(db_path, 'junctions', current_filter_query)
+    
+    if not is_valid:
+        error_messages = []
+        for column, message in errors.items():
+            error_messages.append(html.Div([
+                html.Strong(f"{column.replace('_', ' ').title()}: "),
+                message
+            ], className='error-message'))
+        
+        return {'display': 'block'}, error_messages, {'valid': False, 'errors': errors, 'query': current_filter_query}
+    
+    else:
+        return {'display': 'none'}, [], {'valid': True, 'errors': {}, 'query': current_filter_query}
+
+#######################################################################
 # INITIAL LOADING SCREEN CALLBACK
 #######################################################################
 @app.callback(
@@ -1241,10 +1313,17 @@ def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_co
      dash.dependencies.Input('junction-full-data-store', 'data'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('right_data_table', 'filter_query')]
+     dash.dependencies.Input('right_data_table', 'filter_query'),
+     dash.dependencies.Input('left-table-validation-store', 'data'),
+     dash.dependencies.Input('right-table-validation-store', 'data')]
 )
-def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query):
+def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, left_validation, right_validation):
     """Store ALL filtered transcript/junction IDs from FULL datasets with transcript-based junction filtering"""
+    # Check if either filter is invalid: if so, don't update filtered stores since user will need to fix errors before query proceeds
+    if ((isoform_filter_query and left_validation and not left_validation.get('valid', True)) or
+        (junction_filter_query and right_validation and not right_validation.get('valid', True))):
+        raise PreventUpdate
+    
     try:
         has_isoform_filters = bool(isoform_filter_query and isoform_filter_query.strip())
         has_junction_filters = bool(junction_filter_query and junction_filter_query.strip())
@@ -1395,11 +1474,16 @@ def update_gene_options(search_value, current_value):
      dash.dependencies.Input('left_data_table', 'page_size'),
      dash.dependencies.Input('left_data_table', 'sort_by'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('gene-search-dropdown', 'value')]
+     dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('left-table-validation-store', 'data')]
 )
-def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene):
+def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data):
     ctx = dash.callback_context
     if not ctx.triggered:
+        raise PreventUpdate
+    
+    # Check if current filter is valid before processing
+    if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
     
     filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
@@ -1444,11 +1528,16 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
      dash.dependencies.Input('right_data_table', 'page_size'),
      dash.dependencies.Input('right_data_table', 'sort_by'),
      dash.dependencies.Input('right_data_table', 'filter_query'),
-     dash.dependencies.Input('gene-search-dropdown', 'value')]
+     dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('right-table-validation-store', 'data')]
 )
-def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene):
+def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data):
     ctx = dash.callback_context
     if not ctx.triggered:
+        raise PreventUpdate
+    
+    # Check if current filter is valid before processing
+    if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
     
     filters = parse_filter_query(db_path, filter_query, table_name='junctions')
@@ -1673,10 +1762,15 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('overview-dropdown', 'value'),
      dash.dependencies.Input('exon-color-store', 'data'),
-     dash.dependencies.Input('left_data_table', 'filter_query')]
+     dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('left-table-validation-store', 'data')]
 )
-def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value, exon_color, filter_query):
+def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value, exon_color, filter_query, validation_data):
     """Update transcript structure plot based on gene selection"""
+    # Check if current filter is valid: if not, don't update plot
+    if filter_query and validation_data and not validation_data.get('valid', True):
+        raise PreventUpdate
+    
     if not selected_gene:
         fig = go.Figure()
         fig.add_annotation(
@@ -1734,10 +1828,15 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_
      dash.dependencies.Input('overview-dropdown', 'value'),
      dash.dependencies.Input('exon-color-store', 'data'),
      dash.dependencies.Input('junction-color-store', 'data'),
-     dash.dependencies.Input('left_data_table', 'filter_query')]
+     dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('left-table-validation-store', 'data')]
 )
-def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, plot_height, plots_dropdown_value, exon_color, junction_color, isoform_filter_query):
+def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, plot_height, plots_dropdown_value, exon_color, junction_color, isoform_filter_query, validation_data):
     """Update ATSE splice junction visualization with filtered data"""
+    # Check if current filter is valid: if not, don't update plot
+    if isoform_filter_query and validation_data and not validation_data.get('valid', True):
+        raise PreventUpdate
+    
     has_isoform_filter = bool(isoform_filter_query and isoform_filter_query.strip())
     actual_filtered_transcript_ids = filtered_transcript_ids if has_isoform_filter else None
     

@@ -250,6 +250,192 @@ def parse_filter_query(db_path, filter_query, table_name=None):
     return filters
 
 
+def validate_value(column, value, operator, rules):
+    """Validate a single value against column rules"""
+    if column not in rules:
+        return None 
+            
+    rule = rules[column]
+    val_type = rule['type']
+    validation_rule = rule['rule']
+    
+    if val_type == 'integer':
+        try:
+            int_val = int(value)
+        except ValueError:
+            return f"Column '{column.replace('_', ' ').title()}' accepts integer values only."
+        
+    elif val_type == 'float':
+        try:
+            float_val = float(value)
+        except ValueError:
+            return f"Column '{column.replace('_', ' ').title()}' accepts numeric values only."
+    
+    # Rule-specific validation cases
+    if validation_rule == 'any':
+        return None
+    
+    elif validation_rule == 'numeric':
+        return None
+    
+    elif validation_rule == 'no_numeric':
+        if value.replace('.', '').replace('-', '').isdigit():
+            return f"Column '{column.replace('_', ' ').title()}' does not accept numeric values."
+        
+    elif validation_rule == 'starts_with':
+        if operator in ('eq', 'contains') and not value.startswith(rule['value']):
+            return f"Column '{column.replace('_', ' ').title()}' values should begin with '{rule['value']}'."
+        
+    elif validation_rule == 'in_list':
+        if operator == 'eq':
+            if val_type == 'integer':
+                if int(value) not in rule['values']:
+                    return f"Column '{column.replace('_', ' ').title()}' only accepts values: {', '.join(map(str, rule['values']))}."
+            elif val_type == 'string':
+                if value not in rule['values']:
+                    return f"Column '{column.replace('_', ' ').title()}' only accepts values: {', '.join(rule['values'])}."
+                
+    elif validation_rule == 'range':
+        if val_type in ('float', 'integer'):
+            num_val = float(value) if val_type == 'float' else int(value)
+            min_val = rule.get('min', float('-inf'))
+            max_val = rule.get('max', float('inf'))
+            if not (min_val <= num_val <= max_val):
+                return f"Column '{column.replace('_', ' ').title()}' values must be between {min_val} and {max_val}."
+            
+    elif validation_rule == 'min_value':
+        if val_type in ('float', 'integer'):
+            num_val = float(value) if val_type == 'float' else int(value)
+            min_val = rule.get('min', float('-inf'))
+            exclusive = rule.get('exclusive', False)
+            if exclusive and num_val <= min_val:
+                return f"Column '{column.replace('_', ' ').title()}' values must be greater than {min_val}."
+            elif not exclusive and num_val < min_val:
+                return f"Column '{column.replace('_', ' ').title()}' values must be greater than or equal to {min_val}."
+    
+    return None
+
+
+def validate_filter_input(db_path, table_name, filter_query):
+    """
+    Validate user filter query input with specific column validation rules.
+    Returns: (is_valid, errors_dict)
+    """
+    if not filter_query:
+        return True, {}
+    
+    validation_rules = {
+        'isoforms': {
+            'gene': {'type': 'string', 'rule': 'starts_with', 'value': 'ENSG'},
+            'transcript': {'type': 'string', 'rule': 'any'},
+            'isoform_category': {'type': 'string', 'rule': 'in_list', 'values': ['NMD', 'RI', 'noORF', 'protein_coding']},
+            'isoform_canonical': {'type': 'integer', 'rule': 'in_list', 'values': [0, 1]},
+            'isoform_annotated': {'type': 'integer', 'rule': 'in_list', 'values': [0, 1]},
+            'isoform_max_ratio': {'type': 'float', 'rule': 'range', 'min': 0.0, 'max': 1.0},
+            'isoform_min_ratio': {'type': 'float', 'rule': 'range', 'min': 0.0, 'max': 1.0},
+            'isoform_prob': {'type': 'float', 'rule': 'range', 'min': 0.0, 'max': 1.0},
+            'gene_potential': {'type': 'integer', 'rule': 'numeric'},
+            'gene_perplexity': {'type': 'float', 'rule': 'min_value', 'min': 0.0, 'exclusive': True},
+            'gene_protein_category': {'type': 'string', 'rule': 'any'},
+            'gene_gencode_v46_basic_transcript_counts': {'type': 'integer', 'rule': 'numeric'},
+            'gene_average_tpm': {'type': 'float', 'rule': 'numeric'},
+            'gene_total_tpm': {'type': 'float', 'rule': 'numeric'},
+            'isoform_average_tpm': {'type': 'float', 'rule': 'numeric'},
+            'isoform_total_tpm': {'type': 'float', 'rule': 'numeric'},
+            'isoform_number_of_exons': {'type': 'integer', 'rule': 'numeric'},
+            'isoform_ranking_within_gene': {'type': 'integer', 'rule': 'numeric'},
+            'isoform_effective': {'type': 'integer', 'rule': 'in_list', 'values': [0, 1]},
+            'ptc_potential': {'type': 'integer', 'rule': 'numeric'},
+            'ptc_perplexity': {'type': 'float', 'rule': 'numeric'},
+            'orf_id': {'type': 'string', 'rule': 'any'},
+            'orf_prob': {'type': 'float', 'rule': 'range', 'min': 0.0, 'max': 1.0},
+            'orf_potential': {'type': 'integer', 'rule': 'numeric'},
+            'orf_perplexity': {'type': 'float', 'rule': 'numeric'},
+            'orf_effective_tissue_count': {'type': 'integer', 'rule': 'numeric'},
+            'orf_expressed_samples': {'type': 'integer', 'rule': 'numeric'},
+            'orf_percent_effective_tissue_count': {'type': 'float', 'rule': 'numeric'},
+            'orf_ratio_sd': {'type': 'float', 'rule': 'range', 'min': 0.0, 'max': 1.0},
+            'gene_expressed_samples': {'type': 'integer', 'rule': 'numeric'},
+            'isoform_ratio_sd': {'type': 'float', 'rule': 'range', 'min': 0.0, 'max': 1.0},
+            'orf_quadrant': {'type': 'string', 'rule': 'in_list', 'values': ['I', 'II', 'III', 'IV']},
+            'orf_ranking_within_gene': {'type': 'integer', 'rule': 'numeric'},
+            'orf_effective': {'type': 'integer', 'rule': 'in_list', 'values': [0, 1]},
+            'gene_name': {'type': 'string', 'rule': 'any'},
+            'transcript_name': {'type': 'string', 'rule': 'any'},
+            'novel_junction': {'type': 'integer', 'rule': 'in_list', 'values': [0, 1]},
+            'gene_id': {'type': 'string', 'rule': 'starts_with', 'value': 'ENSG'}
+        },
+        'junctions': {
+            'gene_name': {'type': 'string', 'rule': 'any'},
+            'gene_id': {'type': 'string', 'rule': 'starts_with', 'value': 'ENSG'},
+            'event_id': {'type': 'string', 'rule': 'starts_with', 'value': 'ENSG'},
+            'junction_id': {'type': 'string', 'rule': 'any'},
+            'junction_id_index': {'type': 'integer', 'rule': 'numeric'},
+            'atse_count': {'type': 'integer', 'rule': 'numeric'},
+            'junction_count': {'type': 'integer', 'rule': 'numeric'},
+            'cell_type': {'type': 'string', 'rule': 'no_numeric'},
+            'n_cells': {'type': 'integer', 'rule': 'numeric'},
+            'psi': {'type': 'float', 'rule': 'numeric'}
+        }
+    }
+    
+    errors = {}
+    expressions = filter_query.split(' && ')
+    table_rules = validation_rules.get(table_name, {})
+    
+    for expression in expressions:
+        if not expression or expression.isspace():
+            continue
+        
+        try:
+            col = None
+            val = None
+            operator = None
+            
+            if ' scontains ' in expression:
+                col, val = expression.split(' scontains ')
+                operator = 'contains'
+
+            elif ' s< ' in expression:
+                col, val = expression.split(' s< ')
+                operator = 'lt'
+
+            elif ' s> ' in expression:
+                col, val = expression.split(' s> ')
+                operator = 'gt'
+
+            elif ' s<= ' in expression:
+                col, val = expression.split(' s<= ')
+                operator = 'le'
+
+            elif ' s>= ' in expression:
+                col, val = expression.split(' s>= ')
+                operator = 'ge'
+
+            elif ' s= ' in expression:
+                col, val = expression.split(' s= ')
+                operator = 'eq'
+
+            elif ' s!= ' in expression:
+                col, val = expression.split(' s!= ')
+                operator = 'ne'
+
+            else:
+                continue
+            
+            col = col.strip('{} ')
+            val = val.strip('" ')
+            
+            error_msg = validate_value(col, val, operator, table_rules)
+            if error_msg:
+                errors[col] = error_msg
+        
+        except Exception:
+            continue
+    
+    return len(errors) == 0, errors
+
+
 def create_custom_spinner(message):
     """Create custom spinner with both animation and text message"""
     return html.Div(
