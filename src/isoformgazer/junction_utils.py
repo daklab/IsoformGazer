@@ -12,7 +12,7 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
-from isoform_utils import load_psl_data, get_gene_id_for_gene_name
+from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name
 from isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
 ###################################################################
@@ -361,6 +361,181 @@ def get_gene_id_from_atse(db_path: str, gene_name: str) -> str:
     return None
 
 
+def filter_junctions_by_transcripts(db_path: str, gene_name: str, filtered_transcript_ids: list) -> list:
+    """
+    Filter junction IDs based on transcript overlap using perfect_match_5_prime and perfect_match_3_prime columns.
+    Returns a list of junction IDs that align with any of the filtered transcripts.
+    """
+    if not filtered_transcript_ids:
+        return []
+    
+    conn = sqlite3.connect(db_path)
+    transcript_id_placeholders = ','.join(['?'] * len(filtered_transcript_ids))
+    transcript_query = f"""
+    SELECT DISTINCT transcript 
+    FROM isoforms 
+    WHERE id IN ({transcript_id_placeholders})
+    """
+    transcript_result = pd.read_sql_query(transcript_query, conn, params=filtered_transcript_ids)
+    
+    if transcript_result.empty:
+        conn.close()
+        return []
+    
+    transcript_names = transcript_result['transcript'].tolist()
+    
+    # Get gene_id for the gene_name
+    gene_id_query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = ? LIMIT 1"
+    gene_result = pd.read_sql_query(gene_id_query, conn, params=[gene_name])
+    
+    if gene_result.empty:
+        conn.close()
+        return []
+    
+    gene_id_base = gene_result.iloc[0]['gene_id'].split('.')[0]
+    
+    # Query ATSE data for junctions that match the transcripts
+    atse_query = """
+    SELECT junction_id, perfect_match_3_prime, perfect_match_5_prime
+    FROM atse_data 
+    WHERE (gene_id_clean = ? OR gene_name = ?)
+    AND junction_id IS NOT NULL
+    """
+    atse_data = pd.read_sql_query(atse_query, conn, params=[gene_id_base, gene_name])
+    conn.close()
+    
+    if atse_data.empty:
+        return []
+    
+    matching_junction_ids = []
+    
+    for _, row in atse_data.iterrows():
+        junction_id = row['junction_id']
+        perfect_match_5_prime = row['perfect_match_5_prime'] 
+        perfect_match_3_prime = row['perfect_match_3_prime']
+        junction_matches = False
+        
+        transcript_names_full = set(transcript_names)
+        transcript_names_abbreviated = set()
+        for name in transcript_names:
+            if ':' in name:
+                abbreviated = abbreviate_transcript_name(name)
+                transcript_names_abbreviated.add(abbreviated)
+
+            transcript_names_abbreviated.add(name)
+        
+        # 5' perfect matches
+        if pd.notna(perfect_match_5_prime):
+            transcripts_5_prime = str(perfect_match_5_prime).split(',')
+            transcripts_5_prime = [t.strip() for t in transcripts_5_prime if t.strip()]
+            
+            for transcript_in_junction in transcripts_5_prime:
+                # Exact match
+                if transcript_in_junction in transcript_names_full:
+                    junction_matches = True
+                    break
+                # Abbreviated transcript name match 
+                if transcript_in_junction in transcript_names_abbreviated:
+                    junction_matches = True
+                    break
+                # Check if junction transcript matches any filtered transcript
+                for filtered_transcript in transcript_names_full:
+                    if (':' in filtered_transcript and abbreviate_transcript_name(filtered_transcript) == transcript_in_junction):
+                        junction_matches = True
+                        break
+
+                if junction_matches:
+                    break
+        
+        # 3' perfect matches
+        if not junction_matches and pd.notna(perfect_match_3_prime):
+            transcripts_3_prime = str(perfect_match_3_prime).split(',')
+            transcripts_3_prime = [t.strip() for t in transcripts_3_prime if t.strip()]
+            
+            for transcript_in_junction in transcripts_3_prime:
+                # Exact match
+                if transcript_in_junction in transcript_names_full:
+                    junction_matches = True
+                    break
+
+                # Abbreviated transcript name match 
+                if transcript_in_junction in transcript_names_abbreviated:
+                    junction_matches = True
+                    break
+
+                # Check if junction transcript matches any filtered transcript
+                for filtered_transcript in transcript_names_full:
+                    if (':' in filtered_transcript and 
+                        abbreviate_transcript_name(filtered_transcript) == transcript_in_junction):
+                        junction_matches = True
+                        break
+
+                if junction_matches:
+                    break
+        
+        if junction_matches:
+            matching_junction_ids.append(junction_id)
+    
+    return list(set(matching_junction_ids))
+
+
+def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list) -> list:
+    """
+    Filter transcript IDs based on junction overlap using matched_transcript_ids column.
+    Returns a list of transcript IDs (from isoforms table) that align with the filtered junctions.
+    """
+    if not filtered_junction_ids:
+        return []
+    
+    conn = sqlite3.connect(db_path)
+    junction_id_placeholders = ','.join(['?'] * len(filtered_junction_ids))
+    junction_query = f"""
+    SELECT DISTINCT matched_transcript_ids 
+    FROM junctions 
+    WHERE junction_id IN ({junction_id_placeholders})
+    AND matched_transcript_ids IS NOT NULL
+    """
+    junction_result = pd.read_sql_query(junction_query, conn, params=filtered_junction_ids)
+    
+    if junction_result.empty:
+        conn.close()
+        return []
+    
+    # Get all transcript names
+    all_transcript_names = set()
+    for _, row in junction_result.iterrows():
+        transcript_ids_str = str(row['matched_transcript_ids'])
+
+        if pd.notna(transcript_ids_str) and transcript_ids_str not in ('nan', 'None', ''):
+            transcript_names = transcript_ids_str.split(',')
+
+            for name in transcript_names:
+                name = name.strip()
+
+                if name:
+                    all_transcript_names.add(name)
+    
+    if not all_transcript_names:
+        conn.close()
+        return []
+    
+    # Get transcript IDs that match the transcript names
+    transcript_names_list = list(all_transcript_names)
+    name_placeholders = ','.join(['?'] * len(transcript_names_list))
+    transcript_query = f"""
+    SELECT DISTINCT id 
+    FROM isoforms 
+    WHERE transcript IN ({name_placeholders})
+    """
+    transcript_result = pd.read_sql_query(transcript_query, conn, params=transcript_names_list)
+    conn.close()
+    
+    if transcript_result.empty:
+        return []
+    
+    return transcript_result['id'].tolist()
+
+
 @cached(cache_timeout=300)
 def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=None) -> dict:
     """Process ATSE data for a specific gene with caching and performance optimization"""
@@ -577,7 +752,8 @@ def create_junction_exon_visualization(gene_data: dict,
                                        height: int = 250,
                                        show_y_labels: bool = False,
                                        exon_color: str = '#2E86C1',
-                                       junction_color: str = '#85929E') -> go.Figure:
+                                       junction_color: str = '#85929E',
+                                       filtered_transcript_ids: list = None) -> go.Figure:
     """Create junction and exon structure plot for junction master table data"""
     if 'error' in gene_data:
         return create_empty_atse_message(gene_data['error'])
@@ -591,7 +767,7 @@ def create_junction_exon_visualization(gene_data: dict,
     base_dir = os.path.dirname(os.path.abspath(__file__))
     db_path = os.path.join(base_dir, "data", "isoformgazer.db")
 
-    transcript_data = cached_transcript_structure_processing(db_path, gene_name, [])    
+    transcript_data = cached_transcript_structure_processing(db_path, gene_name, filtered_transcript_ids or [])    
     if transcript_data.empty and not junctions:
         return create_empty_atse_message(f"No transcript or junction data found for {gene_name}")
     
@@ -602,7 +778,8 @@ def create_junction_exon_visualization(gene_data: dict,
     
     if not transcript_data.empty:
         transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
-        transcript_summary = transcript_data_opt.groupby('trans_id', as_index=False).agg({
+        transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
+            'trans_id': 'first',
             'transcript_start': 'min',
             'transcript_end': 'max'
         })
@@ -611,13 +788,13 @@ def create_junction_exon_visualization(gene_data: dict,
         transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
         
-        plot_data = transcript_data_opt.merge(transcript_summary[['trans_id', 'trans_order']], on='trans_id')
+        plot_data = transcript_data_opt.merge(transcript_summary[['id', 'trans_order']], on='id')
         
         min_start = plot_data['transcript_start'].min()
         max_end = plot_data['transcript_end'].max()
         y_max = len(transcript_summary) + 1
         
-        transcript_labels = transcript_summary['trans_id'].tolist()
+        transcript_labels = [abbreviate_transcript_name(trans_id) for trans_id in transcript_summary['trans_id'].tolist()]
         transcript_y_positions = transcript_summary['trans_order'].tolist()
         
         intron_x = []
@@ -627,7 +804,7 @@ def create_junction_exon_visualization(gene_data: dict,
         for _, transcript in transcript_summary.iterrows():
             intron_x.extend([transcript['transcript_start'], transcript['transcript_end'], None])
             intron_y.extend([transcript['trans_order'], transcript['trans_order'], None])
-            intron_text.extend([f"Transcript: {transcript['trans_id']}<br>Length: {transcript['transcript_length']:,} bp", "", ""])
+            intron_text.extend([f"Isoform ID: {transcript['id']}<br>Transcript: {abbreviate_transcript_name(transcript['trans_id'])}<br>Length: {transcript['transcript_length']:,} bp", "", ""])
         
         fig.add_trace(go.Scatter(
             x=intron_x,
@@ -646,10 +823,11 @@ def create_junction_exon_visualization(gene_data: dict,
         exon_hover_text = []
         
         for _, transcript in transcript_summary.iterrows():
+            isoform_id = transcript['id']
             trans_id = transcript['trans_id']
             trans_order = transcript['trans_order']
             
-            trans_exons = plot_data[plot_data['trans_id'] == trans_id].sort_values('exon_start')
+            trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
             
             for _, exon in trans_exons.iterrows():
                 exon_shapes.append({
@@ -664,7 +842,7 @@ def create_junction_exon_visualization(gene_data: dict,
                 exon_hover_x.append((exon['exon_start'] + exon['exon_end']) / 2)
                 exon_hover_y.append(trans_order)
                 exon_hover_text.append(
-                    f"Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>"
+                    f"Isoform ID: {isoform_id}<br>Transcript ID: {abbreviate_transcript_name(trans_id)}<br>Exon: {exon['exon_number']}<br>"
                     f"Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
                 )
         

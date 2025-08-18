@@ -497,7 +497,7 @@ def precompute_plot_layout_data(transcript_data, junctions=None):
         # Precompute transcript bounds
         layout_data['min_start'] = transcript_data['transcript_start'].min()
         layout_data['max_end'] = transcript_data['transcript_end'].max()
-        layout_data['transcript_count'] = transcript_data['trans_id'].nunique()
+        layout_data['transcript_count'] = transcript_data['id'].nunique()
     
     if junctions:
         # Precompute junction bounds

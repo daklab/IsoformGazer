@@ -21,8 +21,9 @@ logging.getLogger('dash.dash').setLevel(logging.WARNING)
 from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
-    load_atse_data, process_gene_atse_data, create_junction_exon_visualization,
-    create_empty_atse_message, create_empty_clustergram_message
+    load_atse_data, process_gene_atse_data, create_empty_atse_message, 
+    create_junction_exon_visualization, create_empty_clustergram_message, 
+    filter_junctions_by_transcripts, filter_transcripts_by_junctions
 )
 from isoform_utils import (
     load_expression_data, process_transcript_structure,
@@ -148,12 +149,20 @@ def setup_local_database(force_rebuild=False):
             chunk['id'] = range(start_idx, start_idx + len(chunk))
             
             # Extract transcript/gene IDs from qName
-            #split_qname = chunk['qName'].str.split('_')
-            #chunk['trans_id'] = split_qname.str[0]
-            #chunk['gene_id'] = split_qname.str[1].split('.').str[0]
-            split_result = chunk['qName'].str.split(r'[:_]', n=1, expand=True)  # Split on : or _
-            chunk['trans_id'] = split_result[0].str.split('.').str[0]
-            chunk['gene_id'] = split_result[1].str.split('.').str[0]
+            split_qname = chunk['qName'].str.split('_', n=1, expand=True)
+            if split_qname.shape[1] >= 2:
+                # Format: transcript_gene (e.g. s-6373022524934343100:e2226920842648636318_ENSG00000223972.5)
+                chunk['trans_id'] = split_qname[0]  # Keep full transcript name
+                chunk['gene_id'] = split_qname[1].str.split('.').str[0]
+            else:
+                split_result = chunk['qName'].str.split(':', n=1, expand=True)
+                if split_result.shape[1] >= 2:
+                    chunk['trans_id'] = split_result[0]
+                    chunk['gene_id'] = split_result[1].str.split('.').str[0]
+                else:
+                    # fallback: use entire qName as transcript
+                    chunk['trans_id'] = chunk['qName']
+                    chunk['gene_id'] = 'unknown'
             chunk['transcript_length'] = chunk['tEnd'] - chunk['tStart']
             
             if 'index' in chunk.columns:
@@ -174,6 +183,20 @@ def setup_local_database(force_rebuild=False):
     ratio_df['id'] = ratio_df.index
     ratio_df.to_sql('ratio_data', conn, if_exists='replace')
 
+    print("Updating isoform transcript names with full names from PSL data...")
+    conn.execute("""
+        UPDATE isoforms 
+        SET transcript = (
+            SELECT psl.trans_id 
+            FROM psl_data psl 
+            WHERE psl.id = isoforms.id
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM psl_data psl WHERE psl.id = isoforms.id
+        )
+    """)
+    conn.commit()
+
     print("Creating isoform indexes...")
     conn.execute("CREATE INDEX idx_psl_gene ON psl_data(id)")
     conn.execute("CREATE INDEX idx_iso_gene ON isoforms(gene_name, id)")
@@ -182,7 +205,7 @@ def setup_local_database(force_rebuild=False):
     ########################################################
     # Load junction master table data
     ########################################################
-    junction_file = os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250623_171456.csv")
+    junction_file = os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250623_171456_withmappings.csv")
     
     # Need to count total lines (minus header) to estimate progress
     with open(junction_file, 'r') as f:
@@ -205,8 +228,8 @@ def setup_local_database(force_rebuild=False):
         'junction_count',
         'cell_type',
         'n_cells',
-        'psi'#,
-#        'matched_transcript_ids'
+        'psi',
+        'matched_transcript_ids'
     ]
     
     with tqdm(desc="Writing junction master table data to local database", 
@@ -524,8 +547,7 @@ left_data_table = dash_table.DataTable(
 right_data_table = dash_table.DataTable(
     id='right_data_table',
     columns=get_master_table_columns(db_path, table_name='junctions'),
-    #hidden_columns=['id', 'matched_transcript_ids'],
-    hidden_columns=['id'],
+    hidden_columns=['id', 'matched_transcript_ids'],
     data=[],
     editable=False,
     filter_action="custom",
@@ -1051,11 +1073,17 @@ def hide_loading_screen(isoform_data, junction_data, loading_complete):
     [dash.dependencies.Output('filtered-isoform-store', 'data'),
      dash.dependencies.Output('filtered-junction-store', 'data')],
     [dash.dependencies.Input('isoform-full-data-store', 'data'),
-     dash.dependencies.Input('junction-full-data-store', 'data')]
+     dash.dependencies.Input('junction-full-data-store', 'data'),
+     dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('right_data_table', 'filter_query')]
 )
-def update_filtered_data_stores(isoform_full_data, junction_full_data):
-    """Store ALL filtered transcript/junction IDs from FULL datasets with error handling"""
+def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query):
+    """Store ALL filtered transcript/junction IDs from FULL datasets with transcript-based junction filtering"""
     try:
+        has_isoform_filters = bool(isoform_filter_query and isoform_filter_query.strip())
+        has_junction_filters = bool(junction_filter_query and junction_filter_query.strip())
+        
         filtered_transcript_ids = []
         if isoform_full_data:
             filtered_transcript_ids = [row.get('id', '') for row in isoform_full_data if row.get('id')]
@@ -1063,6 +1091,49 @@ def update_filtered_data_stores(isoform_full_data, junction_full_data):
         filtered_junction_ids = []
         if junction_full_data:
             filtered_junction_ids = [row.get('junction_id', '') for row in junction_full_data if row.get('junction_id')]
+        
+        # Handle bidirectional filtering between transcripts and junctions when filters are applied        
+        if has_isoform_filters or has_junction_filters:
+            transcript_based_junction_ids = []
+            junction_based_transcript_ids = []
+            
+            # Isoform filtering → Junction filtering
+            if selected_gene and has_isoform_filters and filtered_transcript_ids:
+                try:
+                    transcript_based_junction_ids = filter_junctions_by_transcripts(
+                        db_path, selected_gene, filtered_transcript_ids
+                    )
+                except Exception as e:
+                    print(f"Error in transcript-based junction filtering: {e}")
+            
+            # Junction filtering → Isoform filtering
+            if has_junction_filters and filtered_junction_ids:
+                try:
+                    junction_based_transcript_ids = filter_transcripts_by_junctions(
+                        db_path, filtered_junction_ids
+                    )
+                except Exception as e:
+                    print(f"Error in junction-based transcript filtering: {e}")
+            
+            # Intersect filters from both master tables for joint filtering
+            if has_isoform_filters and has_junction_filters:
+                final_transcript_ids = list(set(filtered_transcript_ids) & set(junction_based_transcript_ids)) if junction_based_transcript_ids else filtered_transcript_ids
+                final_junction_ids = list(set(filtered_junction_ids) & set(transcript_based_junction_ids)) if transcript_based_junction_ids else filtered_junction_ids
+
+            elif has_isoform_filters:
+                final_transcript_ids = filtered_transcript_ids
+                final_junction_ids = transcript_based_junction_ids
+
+            elif has_junction_filters:
+                final_transcript_ids = junction_based_transcript_ids
+                final_junction_ids = filtered_junction_ids
+
+            else:
+                final_transcript_ids = filtered_transcript_ids
+                final_junction_ids = filtered_junction_ids
+            
+            filtered_transcript_ids = final_transcript_ids
+            filtered_junction_ids = final_junction_ids
         
         return filtered_transcript_ids, filtered_junction_ids
     
@@ -1075,21 +1146,29 @@ def update_filtered_data_stores(isoform_full_data, junction_full_data):
     [dash.dependencies.Output('left_data_table', 'filter_query'),
      dash.dependencies.Output('right_data_table', 'filter_query')],
     [dash.dependencies.Input('clear-left-filters', 'n_clicks'),
-     dash.dependencies.Input('clear-right-filters', 'n_clicks')],
+     dash.dependencies.Input('clear-right-filters', 'n_clicks'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')],
     [dash.dependencies.State('left_data_table', 'filter_query'),
      dash.dependencies.State('right_data_table', 'filter_query')]
 )
-def clear_filters(left_clicks, right_clicks, left_filter, right_filter):
+def clear_filters(left_clicks, right_clicks, selected_gene, left_filter, right_filter):
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
+    # Clear filters if Clear All buttons are clicked
     if button_id == 'clear-left-filters':
         return '', right_filter
+    
     elif button_id == 'clear-right-filters':
         return left_filter, ''
+    
+    # Also clear all filters when gene changes
+    elif button_id == 'gene-search-dropdown':
+        return '', ''
+
     return left_filter, right_filter
 
 
@@ -1428,9 +1507,10 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
      dash.dependencies.Input('bar-height-slider', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('overview-dropdown', 'value'),
-     dash.dependencies.Input('exon-color-store', 'data')]
+     dash.dependencies.Input('exon-color-store', 'data'),
+     dash.dependencies.Input('left_data_table', 'filter_query')]
 )
-def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value, exon_color):
+def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value, exon_color, filter_query):
     """Update transcript structure plot based on gene selection"""
     if not selected_gene:
         fig = go.Figure()
@@ -1449,7 +1529,9 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_
         return fig
 
     try:
-        filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
+        has_filter = bool(filter_query and filter_query.strip())
+        filtered_ids = [int(id) for id in filtered_ids] if (filtered_ids and has_filter) else []
+        
         transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
 
         if filtered_ids and not transcript_data.empty:
@@ -1482,13 +1564,18 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_
     dash.dependencies.Output('atse-map', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
+     dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('bar-height-slider', 'value'),
      dash.dependencies.Input('overview-dropdown', 'value'),
      dash.dependencies.Input('exon-color-store', 'data'),
-     dash.dependencies.Input('junction-color-store', 'data')]
+     dash.dependencies.Input('junction-color-store', 'data'),
+     dash.dependencies.Input('left_data_table', 'filter_query')]
 )
-def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height, plots_dropdown_value, exon_color, junction_color):
+def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, plot_height, plots_dropdown_value, exon_color, junction_color, isoform_filter_query):
     """Update ATSE splice junction visualization with filtered data"""
+    has_isoform_filter = bool(isoform_filter_query and isoform_filter_query.strip())
+    actual_filtered_transcript_ids = filtered_transcript_ids if has_isoform_filter else None
+    
     if not selected_gene:
         return create_empty_atse_message("Select a gene to view splice junctions and exons")
     
@@ -1509,7 +1596,8 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, plot_height,
             height=plot_height,
             show_y_labels=show_labels,
             exon_color=exon_color,
-            junction_color=junction_color
+            junction_color=junction_color,
+            filtered_transcript_ids=actual_filtered_transcript_ids
         )
         return fig
     

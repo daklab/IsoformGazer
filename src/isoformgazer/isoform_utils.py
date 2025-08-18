@@ -10,6 +10,34 @@ from plotly.subplots import make_subplots
 from typing import Dict, List, Tuple
 from performance_utils import cached, memory_tracker, plot_optimizer
 
+
+def abbreviate_transcript_name(transcript_name: str) -> str:
+    """
+    Abbreviate transcript names for plotting display.
+    
+    Examples:
+    - "s-6373022524934343100:e2226920842648636318" -> "s-6373022524934343100:e2226"
+    - "s-6373022524934343100:e-7666537037463561649" -> "s-6373022524934343100:e-7666"
+    """
+    if ':' not in transcript_name:
+        return transcript_name
+    
+    prefix, suffix = transcript_name.split(':', 1)
+    
+    if suffix.startswith('e-'):
+        abbreviated_suffix = 'e-' + suffix[2:6] if len(suffix) > 6 else suffix
+    elif suffix.startswith('e'):
+        abbreviated_suffix = 'e' + suffix[1:5] if len(suffix) > 5 else suffix
+    else:
+        abbreviated_suffix = suffix[:4]
+    
+    return f"{prefix}:{abbreviated_suffix}"
+
+
+def abbreviate_transcript_names(transcript_names: List[str]) -> List[str]:
+    """Apply abbreviation to a list of transcript names"""
+    return [abbreviate_transcript_name(name) for name in transcript_names]
+
 ###################################################################
 # VISUALIZATION METHODS
 ###################################################################
@@ -266,8 +294,9 @@ def create_transcript_structure_plot(db_path: str,
     strand = transcript_data['strand'].iloc[0] if not transcript_data.empty else ""
     
     transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
-    transcript_summary = transcript_data_opt.groupby('trans_id', as_index=False).agg({
-        'id': 'first',
+    
+    transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
+        'trans_id': 'first',
         'transcript_start': 'min', 
         'transcript_end': 'max'
     })
@@ -278,7 +307,7 @@ def create_transcript_structure_plot(db_path: str,
     transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
     
-    plot_data = transcript_data_opt.merge(transcript_summary[['trans_id', 'trans_order']], on='trans_id', how='inner')
+    plot_data = transcript_data_opt.merge(transcript_summary[['id', 'trans_order']], on='id', how='inner')
     
     memory_tracker.measure("after_data_prep")
     
@@ -296,7 +325,7 @@ def create_transcript_structure_plot(db_path: str,
     for _, transcript in transcript_summary.iterrows():
         intron_x.extend([transcript['transcript_start'], transcript['transcript_end'], None])
         intron_y.extend([transcript['trans_order'], transcript['trans_order'], None])
-        intron_text.extend([f"Transcript: {transcript['trans_id']}<br>Length: {transcript['transcript_length']:,} bp", "", ""])
+        intron_text.extend([f"Isoform ID: {transcript['id']}<br>Transcript: {transcript['trans_id']}<br>Length: {transcript['transcript_length']:,} bp", "", ""])
     
     fig.add_trace(go.Scatter(
         x=intron_x,
@@ -315,9 +344,10 @@ def create_transcript_structure_plot(db_path: str,
     hover_traces_text = []
     
     for _, transcript in transcript_summary.iterrows():
+        isoform_id = transcript['id']
         trans_id = transcript['trans_id']
         trans_order = transcript['trans_order']
-        trans_exons = plot_data[plot_data['trans_id'] == trans_id].sort_values('exon_start')
+        trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
         
         for _, exon in trans_exons.iterrows():
             # Batch add shapes (way faster than individual add_shape calls)
@@ -334,7 +364,7 @@ def create_transcript_structure_plot(db_path: str,
             hover_traces_x.append((exon['exon_start'] + exon['exon_end']) / 2)
             hover_traces_y.append(trans_order)
             hover_traces_text.append(
-                f"Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>"
+                f"Isoform ID: {isoform_id}<br>Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>"
                 f"Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
             )
     
@@ -393,7 +423,7 @@ def create_transcript_structure_plot(db_path: str,
         fig.add_annotation(
             x=max_end + (max_end - min_start) * 0.02,
             y=transcript['trans_order'],
-            text=transcript['trans_id'],
+            text=abbreviate_transcript_name(transcript['trans_id']),
             showarrow=False,
             xanchor='left',
             yanchor='middle',
@@ -454,6 +484,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
     tissue_cols = [col for col in tpm_data.columns if col not in metadata_cols]
     
     transcript_names = tpm_data['transcript'].tolist() if 'transcript' in tpm_data.columns else tpm_data.index.tolist()
+    transcript_names_abbreviated = abbreviate_transcript_names(transcript_names)
 
     if collapse_tissues:
         heatmap_data, tissue_display_names, tissue_categories = collapse_tissues_by_average(tpm_data, tissue_cols)
@@ -464,7 +495,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
     num_tissues = len(tissue_display_names)
     num_transcripts = len(transcript_names)
     
-    calculated_height = calculate_optimal_height(transcript_names, num_tissues, show_tables, height)
+    calculated_height = calculate_optimal_height(transcript_names_abbreviated, num_tissues, show_tables, height)
     
     if show_labels and show_tables != 'show':
         max_tissue_name_length = max([len(name) for name in tissue_display_names]) if tissue_display_names else 10
@@ -472,7 +503,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
     else:
         left_margin = 40
     
-    max_transcript_length = max([len(str(name)) for name in transcript_names]) if transcript_names else 10
+    max_transcript_length = max([len(str(name)) for name in transcript_names_abbreviated]) if transcript_names_abbreviated else 10
     bottom_margin = max(100, min(180, max_transcript_length * 7))
     
     right_margin = 100
@@ -514,7 +545,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             go.Heatmap(
                 z=heatmap_data,
                 y=tissue_display_names,
-                x=transcript_names,
+                x=transcript_names_abbreviated,
                 colorscale=colorscale,
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
                 colorbar=dict(title=data_type, x=1.02)
@@ -534,7 +565,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             go.Heatmap(
                 z=heatmap_data,
                 y=tissue_display_names, 
-                x=transcript_names,
+                x=transcript_names_abbreviated,
                 colorscale=colorscale,
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
                 colorbar=dict(title=data_type)
@@ -560,7 +591,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             automargin=True,
             tickmode='array',
             tickvals=list(range(len(transcript_names))),
-            ticktext=transcript_names
+            ticktext=transcript_names_abbreviated
         )
     
     if collapse_tissues: 
@@ -626,6 +657,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     tissue_cols = [col for col in tpm_data.columns if col not in metadata_cols]
     
     transcript_names = tpm_data['transcript'].tolist() if 'transcript' in tpm_data.columns else tpm_data.index.tolist()
+    transcript_names_abbreviated = abbreviate_transcript_names(transcript_names)
     num_transcripts = len(transcript_names)
 
     if collapse_tissues:
@@ -652,7 +684,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         left_margin = 2  # Minimum left margin, just enough to prevent figure overflow
     else:
         # Calculate pixel width for longest label
-        max_label_len = max((len(str(name)) for name in transcript_names), default=10)
+        max_label_len = max((len(str(name)) for name in transcript_names_abbreviated), default=10)
         # Approximate: 7px per character, add 10px for a buffer
         left_margin = min(70, max(20, 7 * max_label_len + 10))
     
@@ -677,7 +709,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     if num_transcripts == 1:
         return create_single_transcript_heatmap(
             heatmap_data=heatmap_data,
-            transcript_names=transcript_names,
+            transcript_names=transcript_names_abbreviated,
             tissue_display_names=tissue_display_names,
             gene_name=gene_name,
             height=height,
@@ -689,7 +721,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         clustergram, computed_traces = dash_bio.Clustergram(
             data=clustergram_data_processed.values,
             column_labels=clean_tissue_names,
-            row_labels=transcript_names,
+            row_labels=transcript_names_abbreviated,
             column_colors=color_list,
             height=actual_clustergram_height,
             width=width,
@@ -819,7 +851,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                 l=min(20, left_margin + 50), 
                 r=150, 
                 t=90, 
-                b=calculate_bottom_margin(show_labels, transcript_names)
+                b=calculate_bottom_margin(show_labels, transcript_names_abbreviated)
             ),
         autosize=True,
         height=height,
