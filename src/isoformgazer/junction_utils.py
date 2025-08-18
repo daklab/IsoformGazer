@@ -12,7 +12,7 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
-from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name
+from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height
 from isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
 ###################################################################
@@ -749,7 +749,7 @@ def process_transcript_structure(psl_df: pd.DataFrame,
 
 @cached(cache_timeout=600)
 def create_junction_exon_visualization(gene_data: dict, 
-                                       height: int = 250,
+                                       height: int = 600,
                                        show_y_labels: bool = False,
                                        exon_color: str = '#2E86C1',
                                        junction_color: str = '#85929E',
@@ -787,6 +787,11 @@ def create_junction_exon_visualization(gene_data: dict,
         transcript_summary['transcript_length'] = transcript_summary['transcript_end'] - transcript_summary['transcript_start']
         transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
+        
+        # Calculate dynamic height if not provided or if using default slider value
+        if height is None or height == 600:
+            num_transcripts = len(transcript_summary)
+            height = calculate_dynamic_structure_plot_height(num_transcripts, base_height=600)
         
         plot_data = transcript_data_opt.merge(transcript_summary[['id', 'trans_order']], on='id')
         
@@ -849,6 +854,10 @@ def create_junction_exon_visualization(gene_data: dict,
         junction_y_start = y_max + 0.5
         
     else:
+        # Calculate dynamic height if not provided or if using default slider value (no transcript data case)
+        if height is None or height == 600:
+            height = calculate_dynamic_structure_plot_height(0, base_height=600)
+        
         if junctions:
             all_coords = []
             for j in junctions:

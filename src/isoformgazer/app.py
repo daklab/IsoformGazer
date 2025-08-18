@@ -28,7 +28,7 @@ from junction_utils import (
 from isoform_utils import (
     load_expression_data, process_transcript_structure,
     create_transcript_structure_plot, create_isoform_expression_clustergram, 
-    create_empty_isoform_message
+    create_empty_isoform_message, calculate_unified_plot_height
 )
 
 RANDOM_SEED = 18
@@ -818,10 +818,10 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 id='bar-height-slider',
                                 className='control-slider',
                                 min=600,
-                                max=1200,
+                                max=1600,
                                 step=100,
                                 value=600,
-                                marks={600: '600', 700: '700', 800: '800', 900: '900', 1000: '1000', 1100: '1100', 1200: '1200'}
+                                marks={600: '600', 700: '', 800: '800', 900: '', 1000: '1000', 1100: '', 1200: '1200', 1300: '', 1400: '1400', 1500: '', 1600: '1600'}
                             ),
                             html.Div(className='app-controls-desc', children='Adjust the height of both the isoform transcript and junction structure plots')
                         ]),
@@ -1619,7 +1619,68 @@ def toggle_plot_visibility(overview_value):
 
 
 ######################################################################
-# DYNAMIC PANEL HEIGHT ADJUSTMENT
+# DYNAMIC HEIGHT CALCULATION AND PANEL ADJUSTMENT
+######################################################################
+@app.callback(
+    [dash.dependencies.Output('bar-height-slider', 'value'),
+     dash.dependencies.Output('left-panel', 'style', allow_duplicate=True),
+     dash.dependencies.Output('right-panel', 'style', allow_duplicate=True),
+     dash.dependencies.Output('isoform-event-plot-container', 'style', allow_duplicate=True),
+     dash.dependencies.Output('junction-event-plot-container', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('filtered-isoform-store', 'data'),
+     dash.dependencies.Input('filtered-junction-store', 'data')],
+    [dash.dependencies.State('bar-height-slider', 'value')],
+    prevent_initial_call=True
+)
+def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filtered_junction_ids, current_height):
+    """Calculate unified height for both plots and update slider and panels when gene changes"""
+    if not selected_gene:
+        # Return current values if no gene selected
+        panel_style = {'height': '1000px', 'minHeight': '1000px'}
+        plot_container_style = {'height': f'{current_height}px', 'minHeight': f'{max(current_height - 50, 500)}px', 'maxHeight': f'{current_height + 100}px'}
+        return current_height, panel_style, panel_style, plot_container_style, plot_container_style
+    
+    try:
+        filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+        gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+        
+        # Calculate unified height for structure plots based on both transcript and junction data: use max height from either
+        calculated_height = calculate_unified_plot_height(transcript_data, gene_data)
+        
+        if abs(calculated_height - current_height) < 100:
+            calculated_height = current_height
+        
+        # Calculate panel heights
+        base_panel_height = 710 + calculated_height + 100
+        panel_height = max(base_panel_height, 1000)
+        
+        panel_style = {
+            'height': f'{panel_height}px',
+            'minHeight': f'{panel_height}px'
+        }
+        
+        plot_container_style = {
+            'height': f'{calculated_height}px',
+            'minHeight': f'{max(calculated_height - 50, 500)}px',
+            'maxHeight': f'{calculated_height + 100}px'
+        }
+        
+        return calculated_height, panel_style, panel_style, plot_container_style, plot_container_style
+        
+    except Exception as e:
+        print(f"Error calculating dynamic height: {e}")
+
+        # Return current values on error to avoid breaking layout
+        panel_style = {'height': '1000px', 'minHeight': '1000px'}
+        plot_container_style = {'height': f'{current_height}px', 'minHeight': f'{max(current_height - 50, 500)}px', 'maxHeight': f'{current_height + 100}px'}
+
+        return current_height, panel_style, panel_style, plot_container_style, plot_container_style
+
+
+######################################################################
+# DYNAMIC PANEL HEIGHT ADJUSTMENT (Manual Slider Changes)
 ######################################################################
 @app.callback(
     [dash.dependencies.Output('left-panel', 'style'),
@@ -1667,8 +1728,10 @@ def update_junction_clustergram(selected_gene, colorscale,
     """Update junction visualization based on gene selection and filtering"""
     if plots_dropdown_value == 'event-level':                       
         return empty_fig() 
+    
     elif plots_dropdown_value == 'clustergram': 
-        heatmap_height = min(1200, int(0.85 * 1200))
+        heatmap_height = min(1600, int(0.85 * 1600))
+
     else:
         heatmap_height = 710
     
@@ -1724,8 +1787,10 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
 
     if plots_dropdown_value == 'event-level':
         return empty_fig() 
+    
     if plots_dropdown_value == 'clustergram': 
-        heatmap_height = min(1200, int(0.85 * 1200))
+        heatmap_height = min(1500, int(0.85 * 1500))
+
     else:
         heatmap_height = 710
     
@@ -1798,8 +1863,9 @@ def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_
 
         if plots_dropdown_value == 'clustergram':
             return empty_fig() 
+        
         elif plots_dropdown_value == 'event-level': 
-            plot_height = min(1200, int(0.8 * 1200))
+            plot_height = min(1500, int(0.8 * 1500))
         
         show_labels = (plots_dropdown_value == 'event-level')
         
@@ -1851,7 +1917,7 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
         )
 
         if plots_dropdown_value == 'event-level': 
-            plot_height = min(1200, int(0.8 * 1200))
+            plot_height = min(1500, int(0.8 * 1500))
         
         show_labels = (plots_dropdown_value == 'event-level')
         

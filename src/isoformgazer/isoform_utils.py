@@ -38,6 +38,38 @@ def abbreviate_transcript_names(transcript_names: List[str]) -> List[str]:
     """Apply abbreviation to a list of transcript names"""
     return [abbreviate_transcript_name(name) for name in transcript_names]
 
+
+def calculate_dynamic_structure_plot_height(num_transcripts: int, base_height: int = 600) -> int:
+    """Calculate dynamic height for structure plots based on number of transcripts"""
+    calculated_height = base_height + (num_transcripts * 10)
+    # Round to nearest hundred (to align with slider values)
+    return round(calculated_height / 100) * 100
+
+
+def calculate_unified_plot_height(transcript_data: pd.DataFrame, gene_data: dict = None, base_height: int = 600) -> int:
+    """Calculate unified height for both transcript and junction plots based on available data"""
+    num_transcripts = 0
+    
+    # Count transcripts from transcript data and junctions from junction ATSE plot
+    if not transcript_data.empty:
+        if 'id' in transcript_data.columns:
+            num_transcripts = transcript_data['id'].nunique()
+        elif 'trans_id' in transcript_data.columns:
+            num_transcripts = transcript_data['trans_id'].nunique()
+    
+    num_junctions = 0
+    if gene_data and 'junctions' in gene_data:
+        num_junctions = len(gene_data['junctions'])
+    
+    # Use maximum required height
+    max_elements = max(num_transcripts, num_junctions)
+    calculated_height = base_height + (max_elements * 20)
+    
+    # Round to nearest hundred and cap at maximum slider value
+    calculated_height = round(calculated_height / 100) * 100
+
+    return min(calculated_height, 1600)
+
 ###################################################################
 # VISUALIZATION METHODS
 ###################################################################
@@ -266,7 +298,7 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
 def create_transcript_structure_plot(db_path: str, 
                                      transcript_data: pd.DataFrame, 
                                      gene_name: str, 
-                                     height: int = 800,
+                                     height: int = 600,
                                      show_y_labels: bool = False,
                                      exon_color: str = '#2E86C1') -> go.Figure:
     """Create transcript structure plot showing all transcripts with 50%+ speed improvement"""
@@ -306,6 +338,11 @@ def create_transcript_structure_plot(db_path: str,
     
     transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
+    
+    # Calculate dynamic height if not provided or if using default slider value
+    if height is None or height == 600:
+        num_transcripts = len(transcript_summary)
+        height = calculate_dynamic_structure_plot_height(num_transcripts)
     
     plot_data = transcript_data_opt.merge(transcript_summary[['id', 'trans_order']], on='id', how='inner')
     
