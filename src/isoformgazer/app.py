@@ -858,7 +858,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         html.H2('Clustergram Plots', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             html.Div([
-                                html.Div('Isoform Heatmap Unit', className='app-controls-name', 
+                                html.Div('Isoform Clustergram Unit', className='app-controls-name', 
                                         style={'display': 'inline-block', 'marginRight': '15px'}),
                                 daq.ToggleSwitch(
                                     id='isoform-data-type-switch',
@@ -868,21 +868,26 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                     style={'display': 'inline-block'}
                                 )
                             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
-                            html.Div(className='app-controls-desc', children='Toggle whether isoform heatmap shows TPM values or ratio values across all tissues')
+                            html.Div(className='app-controls-desc', children='Toggle whether isoform clustergram shows TPM values or ratio values across all tissues')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div([
-                                html.Div('Average by Tissue', className='app-controls-name', 
+                                html.Div('Isoform Clustermap Sample Resolution', className='app-controls-name', 
                                         style={'display': 'inline-block', 'marginRight': '15px'}),
-                                daq.ToggleSwitch(
+                                dcc.RadioItems(
                                     id='collapse-tissue-toggle',
-                                    value=True,  # Default to average by tissue (a lot cleaner looking for most genes)
-                                    label={'label': 'Show All / Average', 'style': {'fontSize': '12px', 'color': '#506784'}},
-                                    labelPosition='right',
-                                    style={'display': 'inline-block'}
+                                    options=[
+                                        {'label': 'All Samples', 'value': 'all'},
+                                        {'label': 'Average by Replicate', 'value': 'replicate'},
+                                        {'label': 'Average by Tissue', 'value': 'tissue'}
+                                    ],
+                                    value='replicate',  # Default to average by tissue
+                                    labelStyle={'display': 'inline-block', 'marginRight': '10px'},
+                                    style={'display': 'inline-block', 'fontSize': '12px'}
                                 )
                             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
-                            html.Div(className='app-controls-desc', children='Toggle whether heatmap shows average values across experiments grouped by tissue')
+                            html.Div(className='app-controls-desc', children='Select whether isoform clustergram shows all individual samples, averages across replicates, '
+                            'or averages across tissues. Averaging across replicates is recommended to reduce technical noise while preserving true biological variation')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div([
@@ -896,7 +901,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                     style={'display': 'inline-block'}
                                 )
                             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
-                            html.Div(className='app-controls-desc', children='Toggle tissue name visibility on isoform heatmap when master tables are hidden')
+                            html.Div(className='app-controls-desc', children='Toggle tissue name visibility on isoform clustergram')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Colorscale'),
@@ -1771,7 +1776,7 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('overview-dropdown', 'value')]
 )
 def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, 
-                          show_labels, collapse_tissues, filtered_transcript_ids, 
+                          show_labels, collapse_mode, filtered_transcript_ids, 
                           plots_dropdown_value):
     """Update isoform clustergram with junction clustergram heights"""
     if use_ratio_data: 
@@ -1806,7 +1811,7 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
             colorscale=colorscale,
             data_type=data_type,
             show_labels=show_labels,
-            collapse_tissues=collapse_tissues
+            collapse_mode=collapse_mode
         )
         fig.update_layout(autosize=True, height=heatmap_height)
 
