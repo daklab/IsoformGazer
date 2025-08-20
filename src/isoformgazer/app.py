@@ -872,22 +872,23 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div([
-                                html.Div('Isoform Clustermap Sample Resolution', className='app-controls-name', 
+                                html.Div('Isoform Clustermap Sample Averaging', className='app-controls-name', 
                                         style={'display': 'inline-block', 'marginRight': '15px'}),
                                 dcc.RadioItems(
                                     id='collapse-tissue-toggle',
                                     options=[
-                                        {'label': 'All Samples', 'value': 'all'},
-                                        {'label': 'Average by Replicate', 'value': 'replicate'},
-                                        {'label': 'Average by Tissue', 'value': 'tissue'}
+                                        {'label': 'By Replicate', 'value': 'replicate'},
+                                        {'label': 'By Tissue', 'value': 'tissue'},
+                                        {'label': 'None', 'value': 'all'}
                                     ],
-                                    value='replicate',  # Default to average by tissue
-                                    labelStyle={'display': 'inline-block', 'marginRight': '10px'},
-                                    style={'display': 'inline-block', 'fontSize': '12px'}
+                                    value='replicate',
+                                    labelStyle={'display': 'inline-block', 'marginRight': '5px'},
+                                    style={'display': 'inline-block', 'fontSize': '12px', 'marginLeft': '-10px'}
                                 )
                             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
-                            html.Div(className='app-controls-desc', children='Select whether isoform clustergram shows all individual samples, averages across replicates, '
-                            'or averages across tissues. Averaging across replicates is recommended to reduce technical noise while preserving true biological variation')
+                            html.Div(className='app-controls-desc', children='Select whether isoform clustergram samples are averaged across replicates, '
+                            'averaged across tissues, or not averaged (shows all samples). Averaging across replicates is recommended to reduce technical ' \
+                            'noise while preserving true biological variation')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div([
@@ -964,7 +965,11 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                     color='#EDAE49',
                                     delay_show=500,
                                     delay_hide=200,
-                                    children=[dcc.Graph(id='heatmap1')]
+                                    children=[dcc.Graph(
+                                        id='heatmap1',
+                                        style={'width': '100%', 'height': '100%'},
+                                        config={'responsive': True}
+                                    )]
                                 ),
                                 html.Div(id="heatmap1-loading-message", className="custom-loading-message")
                             ])
@@ -1658,7 +1663,7 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
             calculated_height = current_height
         
         # Calculate panel heights
-        base_panel_height = 710 + calculated_height + 100
+        base_panel_height = 710 + calculated_height + 10
         panel_height = max(base_panel_height, 1000)
         
         panel_style = {
@@ -1700,7 +1705,7 @@ def adjust_panel_heights(plot_height):
     
     # Calculate proportional panel height based on plot height
     # Base calculation: clustergram (710px) + plot height + margins/padding (~100px)
-    base_panel_height = 710 + plot_height + 100
+    base_panel_height = 710 + plot_height + 10
     panel_height = max(base_panel_height, 1000)
     
     panel_style = {
@@ -1743,7 +1748,12 @@ def update_junction_clustergram(selected_gene, colorscale,
     if not selected_gene:
         try:
             fig = create_summary_clustergram(db_path, height=heatmap_height, colorscale=colorscale)
-            fig.update_layout(autosize=True, height=heatmap_height, transition_duration=200)
+            fig.update_layout(
+                autosize=True, 
+                height=heatmap_height,
+                width=None,
+                transition_duration=200
+            )
             return fig
         except Exception as e:
             print(f"Error creating summary clustergram: {e}")
@@ -1757,7 +1767,12 @@ def update_junction_clustergram(selected_gene, colorscale,
             colorscale=colorscale, 
             filtered_junction_ids=filtered_junction_ids
         )
-        fig.update_layout(autosize=True, height=heatmap_height, transition_duration=200)
+        fig.update_layout(
+            autosize=True, 
+            height=heatmap_height,
+            width=None,
+            transition_duration=200
+        )
         return fig
     
     except Exception as e:
@@ -1813,7 +1828,11 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
             show_labels=show_labels,
             collapse_mode=collapse_mode
         )
-        fig.update_layout(autosize=True, height=heatmap_height)
+        fig.update_layout(
+            autosize=True, 
+            height=heatmap_height,
+            width=None
+        )
 
         return fig
     

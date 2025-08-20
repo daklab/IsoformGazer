@@ -832,12 +832,6 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     else:
         bottom_margin = max(200, int(height * 0.35)) 
         actual_clustergram_height = height - 80
-    
-    # Calculate width based on number of tissues
-    base_width = 350
-    width_per_tissue = 12 
-    calculated_width = base_width + (num_tissues * width_per_tissue)
-    width = min(calculated_width, 850)
 
     clustergram_data_processed = pd.DataFrame(clustergram_data).copy()
     clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], 0)
@@ -862,7 +856,6 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             row_labels=transcript_names_abbreviated,
             column_colors=color_list,
             height=actual_clustergram_height,
-            width=width,
             color_threshold={'row': 0.7, 'col': 0.7},
             hidden_labels='col' if not show_labels else None,
             cluster='all',
@@ -921,53 +914,57 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             unique_organs.append(organ)
             unique_colors.append(color)
 
-    # Adjust positioning to prevent cutoff on right and place legend correctly
-    colorbar_x = -0.87
-    legend_x = -0.34
-    legend_y_start = 1.04
+    if show_labels and not (num_transcripts > 30):
+        # Calculate approximate width needed for y-axis labels (transcript names)
+        max_transcript_label_len = max((len(str(name)) for name in transcript_names_abbreviated), default=10)
+        yaxis_label_width_approx = max_transcript_label_len * 7
+    else:
+        yaxis_label_width_approx = 0
+
+    left_margin_paper = max(0.15, (yaxis_label_width_approx + 60) / 800)
+    num_tissues = len(tissue_cols_for_organs) if 'tissue_cols_for_organs' in locals() else len(tissue_cols)
+    
+    # Scale positions based on number of tissues - more tissues = legends closer to plot
+    #width_scale = min(1.0, 20 / max(num_tissues, 20))
+    
+    colorbar_x_paper = 1.20 
+    #print(f"ORIGINAL WIDTH SCALE: {width_scale}")
+    legend_x_paper = 1.65 #- min(0.80 * width_scale, 0.20776)    # Between 1.02 and 1.65
+    
+    legend_y_start = 0.995
     legend_y_step = 0.04
 
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
             if hasattr(heatmap_trace, 'colorbar'):
-                heatmap_trace.colorbar.x = colorbar_x
+                heatmap_trace.colorbar.x = colorbar_x_paper
                 heatmap_trace.colorbar.y = 1.005
                 heatmap_trace.colorbar.yanchor = 'top'
                 heatmap_trace.colorbar.len = 0.3    
                 heatmap_trace.colorbar.thickness = 20
+                heatmap_trace.colorbar.title = data_type 
     except Exception as e:
         print(f"Warning: Could not update colorbar position: {e}")
     
-    # Colorscale bar title
-    clustergram.add_annotation(
-        x=-0.54,
-        y=1.04,
-        xref="paper",
-        yref="paper",
-        text=f"<b>{data_type}</b>",
-        showarrow=False,
-        font={"size": 13},
-        xanchor="left",
-        yanchor="top"
-    )
+    # Title is now added directly to the colorbar above
 
-    # Add organ legend annotations (to the right of TPM / ratio abundance colorscale)
+    # Add organ legend annotations (positioned at calculated location)
     clustergram.add_annotation(
-        x=legend_x,                 
+        x=legend_x_paper,                 
         y=legend_y_start,                    
         xref="paper",
         yref="paper",
-        text="<b>Organ Legend</b>",
+        text="Organ Legend",
         showarrow=False,
         xanchor="left",
         yanchor="top",
-        font=dict(size=12)
+        font=dict(size=14, family="Open Sans, verdana, arial, sans-serif")
     )
 
     for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
         clustergram.add_annotation(
-            x=legend_x,  # note: positioned to the right of colorbar
+            x=legend_x_paper,
             y=legend_y_start - 0.04 - (i * legend_y_step),
             xref='paper',
             yref='paper',
@@ -987,12 +984,14 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         },
         margin=dict(
                 l=min(20, left_margin + 50), 
-                r=150, 
+                r=350,  # Further increased right margin for legends positioned at 25%+ to the right
                 t=90, 
                 b=calculate_bottom_margin(show_labels, transcript_names_abbreviated)
             ),
-        autosize=True,
+        autosize=True,  # This enables responsive width
+        width=None,  # Explicitly remove width constraints  
         height=height,
+        uirevision='constant',  # Helps maintain responsive behavior on updates
         yaxis=dict(
             automargin=True,
             tickangle=0,

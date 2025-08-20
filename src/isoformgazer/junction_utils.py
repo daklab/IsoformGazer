@@ -18,7 +18,7 @@ from isoformgazer.performance_utils import cached, cached_transcript_structure_p
 ###################################################################
 # MARGIN PRESETS FOR FIGURES
 ###################################################################
-MIN_MARGIN = 18 
+MIN_MARGIN = 8 
 MAX_MARGIN = 55
 MAX_MARGIN_LABELS = 65
 
@@ -68,7 +68,6 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
         column_labels=list(psi_matrix_filtered.columns),
         row_labels=list(psi_matrix_filtered.index),
         height=height,
-        width=min(900, int(height * 1.4)),  
         color_threshold={
             'row': 0.5,
             'col': 0.5
@@ -101,7 +100,9 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
                     t=MAX_MARGIN, 
                     b=bottom_margin),
         autosize=True,
+        width=None,  
         height=height,
+        uirevision='constant', 
         yaxis=dict(automargin=True),  
         xaxis=dict(automargin=True)   
     )
@@ -215,15 +216,13 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         bottom_margin = max(200, int(height * 0.35)) 
         actual_clustergram_height = height - 80
     
-    width = min(1000, max(800, len(cell_type_labels) * 12, int(height * 1.2)))
-    
     try:
         clustergram, computed_traces = dash_bio.Clustergram(
             data=psi_matrix_processed.values,
             row_labels=junction_labels,        
             column_labels=cell_type_labels,
             height=actual_clustergram_height, 
-            width=width,
+            # Remove width parameter to make it responsive
             color_threshold={'row': 0.7, 'col': 0.7},
             hidden_labels='col' if hide_junction_labels else None,
             cluster='all',
@@ -263,8 +262,8 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
             if hasattr(heatmap_trace, 'colorbar'):
-                heatmap_trace.colorbar.x = -0.3  
-                heatmap_trace.colorbar.y = 1.0   
+                heatmap_trace.colorbar.x = 1.15
+                heatmap_trace.colorbar.y = 1.005   
                 heatmap_trace.colorbar.yanchor = 'top'
                 heatmap_trace.colorbar.len = 0.3    
                 heatmap_trace.colorbar.thickness = 20 
@@ -287,7 +286,9 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             b=bottom_margin
         ),  
         autosize=True,
-        height=height,  
+        width=None,  
+        height=height,
+        uirevision='constant',
         yaxis=dict(
             automargin=True,
             tickangle=0,
