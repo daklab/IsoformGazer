@@ -962,6 +962,14 @@ html, body {
     box-sizing: border-box !important;
 }
 
+#clustergram-height-slider {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 15px 0 !important;
+    padding: 0 10px 10px 10px !important;
+    box-sizing: border-box !important;
+}
+
 .Select-control {
     border: 2px solid #e1e5e9 !important;
     border-radius: 8px !important;

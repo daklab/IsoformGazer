@@ -823,7 +823,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 value=600,
                                 marks={600: '600', 700: '', 800: '800', 900: '', 1000: '1000', 1100: '', 1200: '1200', 1300: '', 1400: '1400', 1500: '', 1600: '1600'}
                             ),
-                            html.Div(className='app-controls-desc', children='Adjust the height of both the isoform transcript and junction structure plots')
+                            html.Div(className='app-controls-desc', children='Adjust the height of the structure plots')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Exon Color'),
@@ -856,6 +856,19 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         # Clustergrams Section
                         #####################################
                         html.H2('Clustergram Plots', className='alignment-settings-section'),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='app-controls-name', children='Clustergram Height'),
+                            dcc.Slider(
+                                id='clustergram-height-slider',
+                                className='control-slider',
+                                min=600,
+                                max=1600,
+                                step=100,
+                                value=710,
+                                marks={600: '600', 700: '', 800: '800', 900: '', 1000: '1000', 1100: '', 1200: '1200', 1300: '', 1400: '1400', 1500: '', 1600: '1600'}
+                            ),
+                            html.Div(className='app-controls-desc', children='Adjust the height of the clustergrams')
+                        ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div([
                                 html.Div('Isoform Clustergram Unit', className='app-controls-name', 
@@ -1746,19 +1759,16 @@ def adjust_panel_heights(plot_height):
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
      dash.dependencies.Input('overview-dropdown', 'value'),
-     dash.dependencies.Input('show-celltype-labels-toggle', 'value')]
+     dash.dependencies.Input('show-celltype-labels-toggle', 'value'),
+     dash.dependencies.Input('clustergram-height-slider', 'value')]
 )
 def update_junction_clustergram(selected_gene, colorscale, 
-                                filtered_junction_ids, plots_dropdown_value, show_celltype_labels):
+                                filtered_junction_ids, plots_dropdown_value, show_celltype_labels, clustergram_height):
     """Update junction visualization based on gene selection and filtering"""
     if plots_dropdown_value == 'event-level':                       
         return empty_fig() 
     
-    elif plots_dropdown_value == 'clustergram': 
-        heatmap_height = min(1600, int(0.85 * 1600))
-
-    else:
-        heatmap_height = 710
+    heatmap_height = clustergram_height
     
     if not selected_gene:
         try:
@@ -1804,11 +1814,12 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('show-labels-toggle', 'value'),
      dash.dependencies.Input('collapse-tissue-toggle', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('overview-dropdown', 'value')]
+     dash.dependencies.Input('overview-dropdown', 'value'),
+     dash.dependencies.Input('clustergram-height-slider', 'value')]
 )
 def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, 
                           show_labels, collapse_mode, filtered_transcript_ids, 
-                          plots_dropdown_value):
+                          plots_dropdown_value, clustergram_height):
     """Update isoform clustergram with junction clustergram heights"""
     if use_ratio_data: 
         current_data = load_expression_data(db_path=db_path, 
@@ -1824,11 +1835,7 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
     if plots_dropdown_value == 'event-level':
         return empty_fig() 
     
-    if plots_dropdown_value == 'clustergram': 
-        heatmap_height = min(1500, int(0.85 * 1500))
-
-    else:
-        heatmap_height = 710
+    heatmap_height = clustergram_height
     
     try:
         filtered_data = current_data.copy()
