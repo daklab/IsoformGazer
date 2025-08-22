@@ -892,8 +892,8 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div([
-                                html.Div('Show Tissue Labels', className='app-controls-name', 
-                                        style={'display': 'inline-block', 'marginRight': '15px'}),
+                                html.Div('Tissue Labels', className='app-controls-name', 
+                                        style={'display': 'inline-block', 'marginRight': '55px'}),
                                 daq.ToggleSwitch(
                                     id='show-labels-toggle',
                                     value=False,
@@ -902,7 +902,21 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                     style={'display': 'inline-block'}
                                 )
                             ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
-                            html.Div(className='app-controls-desc', children='Toggle tissue name visibility on isoform clustergram')
+                            html.Div(className='app-controls-desc', children='Toggle tissue labels visibility on isoform clustergram')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div([
+                                html.Div('Cell Type Labels', className='app-controls-name', 
+                                        style={'display': 'inline-block', 'marginRight': '30px'}),
+                                daq.ToggleSwitch(
+                                    id='show-celltype-labels-toggle',
+                                    value=False,
+                                    label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='left',
+                                    style={'display': 'inline-block'}
+                                )
+                            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+                            html.Div(className='app-controls-desc', children='Toggle cell type labels visibility on junction clustergram')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Colorscale'),
@@ -1731,10 +1745,11 @@ def adjust_panel_heights(plot_height):
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('overview-dropdown', 'value')]
+     dash.dependencies.Input('overview-dropdown', 'value'),
+     dash.dependencies.Input('show-celltype-labels-toggle', 'value')]
 )
 def update_junction_clustergram(selected_gene, colorscale, 
-                                filtered_junction_ids, plots_dropdown_value):
+                                filtered_junction_ids, plots_dropdown_value, show_celltype_labels):
     """Update junction visualization based on gene selection and filtering"""
     if plots_dropdown_value == 'event-level':                       
         return empty_fig() 
@@ -1747,7 +1762,7 @@ def update_junction_clustergram(selected_gene, colorscale,
     
     if not selected_gene:
         try:
-            fig = create_summary_clustergram(db_path, height=heatmap_height, colorscale=colorscale)
+            fig = create_summary_clustergram(db_path, height=heatmap_height, colorscale=colorscale, show_celltype_labels=show_celltype_labels)
             fig.update_layout(
                 autosize=True, 
                 height=heatmap_height,
@@ -1765,7 +1780,8 @@ def update_junction_clustergram(selected_gene, colorscale,
             selected_gene, 
             height=heatmap_height, 
             colorscale=colorscale, 
-            filtered_junction_ids=filtered_junction_ids
+            filtered_junction_ids=filtered_junction_ids,
+            show_celltype_labels=show_celltype_labels
         )
         fig.update_layout(
             autosize=True, 

@@ -25,7 +25,7 @@ MAX_MARGIN_LABELS = 65
 ###################################################################
 # VISUALIZATION METHODS
 ###################################################################
-def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show'):
+def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False):
     """Create summary-level clustergram across all cell types and top junctions"""
     conn = sqlite3.connect(db_path)
     query = """
@@ -72,7 +72,7 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             'row': 0.5,
             'col': 0.5
         },
-        hidden_labels='col' if hide_junction_labels else None, 
+        hidden_labels='col' if (hide_junction_labels or not show_celltype_labels) else None, 
         cluster='all',
         color_list={
             'row': ['#636EFA', '#EF553B', '#00CC96'],
@@ -154,7 +154,7 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
     return fig
 
 
-def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None):
+def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False):
     """Create ATSE-level clustergram with correct junction ID matching for tooltips"""
     conn = sqlite3.connect(db_path)
     query = """
@@ -221,10 +221,9 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             data=psi_matrix_processed.values,
             row_labels=junction_labels,        
             column_labels=cell_type_labels,
-            height=actual_clustergram_height, 
-            # Remove width parameter to make it responsive
+            height=actual_clustergram_height,
             color_threshold={'row': 0.7, 'col': 0.7},
-            hidden_labels='col' if hide_junction_labels else None,
+            hidden_labels='col' if not show_celltype_labels else None,
             cluster='all',
             color_list={
                 'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],

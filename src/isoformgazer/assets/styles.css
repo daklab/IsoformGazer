@@ -1214,6 +1214,25 @@ div[data-value="tab-3"]:hover {
     min-width: 0 !important;
 }
 
+.dash-bio-clustergram {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+}
+
+.dash-bio-clustergram svg {
+    width: 100% !important;
+    max-width: none !important;
+}
+
+.heatmap-container .dash-bio-clustergram {
+    transform-origin: left center !important;
+}
+
+.heatmap-container .plotly-graph-div .annotations {
+    position: relative !important;
+}
+
 .clustergram-container text {
     font-size: 10px !important;
 }
