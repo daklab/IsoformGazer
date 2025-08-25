@@ -12,6 +12,7 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
+from data_utils import apply_distance_preprocessing
 from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height
 from isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
@@ -25,7 +26,7 @@ MAX_MARGIN_LABELS = 65
 ###################################################################
 # VISUALIZATION METHODS
 ###################################################################
-def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False):
+def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete'):
     """Create summary-level clustergram across all cell types and top junctions"""
     conn = sqlite3.connect(db_path)
     query = """
@@ -60,6 +61,14 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     # Clamp vals so always in 0-1 range
     psi_matrix_filtered = psi_matrix_filtered.clip(lower=0, upper=1)
     
+    # Check for constant rows/columns that cause issues
+    row_std = psi_matrix_filtered.std(axis=1)
+    col_std = psi_matrix_filtered.std(axis=0)
+    
+    # Apply preprocessing based on distance metric
+    if distance_metric in ['correlation', 'seuclidean', 'cosine']:
+        psi_matrix_filtered = apply_distance_preprocessing(psi_matrix_filtered, distance_metric)
+    
     left_margin = max(150, int(height * 0.25))
     hide_junction_labels = (show_tables == 'show')
     
@@ -79,6 +88,9 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             'col': ['#AB63FA', '#FFA15A', '#19D3F3'],
             'bg': '#506784'
         },
+        row_dist=distance_metric,
+        col_dist=distance_metric,
+        link_method=linkage_method,
         line_width=2,
         display_ratio=[0.2, 0.1],
         standardize='none'
@@ -154,7 +166,7 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
     return fig
 
 
-def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False):
+def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete'):
     """Create ATSE-level clustergram with correct junction ID matching for tooltips"""
     conn = sqlite3.connect(db_path)
     query = """
@@ -205,6 +217,10 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     psi_matrix_processed = psi_matrix_processed.clip(lower=0, upper=1)
     psi_matrix_processed = psi_matrix_processed.fillna(0)
     
+    # Apply preprocessing for problematic distance metrics
+    if distance_metric in ['correlation', 'seuclidean', 'cosine']:
+        psi_matrix_processed = apply_distance_preprocessing(psi_matrix_processed, distance_metric)
+    
     num_junctions = len(junction_labels)
     hide_junction_labels = (num_junctions > 30) or (show_tables == 'show')
     left_margin = max(120, int(height * 0.2))
@@ -234,7 +250,10 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05],
             standardize='none', 
             center_values=False,
-            return_computed_traces=True
+            return_computed_traces=True,
+            row_dist=distance_metric,
+            col_dist=distance_metric,
+            link_method=linkage_method
         )
         
         row_ids = computed_traces['row_ids']

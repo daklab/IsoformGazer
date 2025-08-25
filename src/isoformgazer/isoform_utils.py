@@ -8,6 +8,7 @@ import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
+from data_utils import apply_distance_preprocessing
 from performance_utils import cached, memory_tracker, plot_optimizer
 
 def get_lrs_metadata_replicates() -> List[List[str]]:
@@ -774,7 +775,9 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                                           data_type: str = 'TPM',
                                           show_tables: str = 'show',
                                           show_labels: bool = False,
-                                          collapse_mode: str = 'tissue') -> go.Figure:
+                                          collapse_mode: str = 'tissue',
+                                          distance_metric: str = 'euclidean',
+                                          linkage_method: str = 'complete') -> go.Figure:
     """Create responsive clustergram that behaves exactly like junction clustergram"""
     if tpm_data.empty:
         return create_empty_isoform_message(f"No data for gene: {gene_name}")
@@ -838,6 +841,9 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     clustergram_data_processed = clustergram_data_processed.astype(float)
     clustergram_data_processed = clustergram_data_processed.fillna(0)
     
+    if distance_metric in ['correlation', 'seuclidean', 'cosine']:
+        clustergram_data_processed = apply_distance_preprocessing(clustergram_data_processed, distance_metric)
+    
     if num_transcripts == 1:
         return create_single_transcript_heatmap(
             heatmap_data=heatmap_data,
@@ -868,7 +874,10 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             display_ratio=[0.12, 0.08] if not hide_tissue_labels else [0.08, 0.05],
             standardize='none', 
             center_values=False,
-            return_computed_traces=True
+            return_computed_traces=True,
+            row_dist=distance_metric,
+            col_dist=distance_metric,
+            link_method=linkage_method
         )
         # Update heatmap trace with reordered organs
         column_ids = computed_traces['column_ids']
@@ -883,8 +892,6 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             f"<b>{data_type}:</b> %{{z:.2f}}"
             "<extra></extra>"
         )
-        # Title for continuous colorscale bar - currently breaks viz, TO DO: figure out why 
-        #heatmap_trace.colorbar.title = data_type
         
     except Exception as e2:
         print(f"Error creating clustergram: {e2}")

@@ -953,6 +953,40 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 value='Viridis'
                             ),
                             html.Div(className='app-controls-desc', children='Choose the color theme of the heatmaps')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='app-controls-name', children='Distance Metric'),
+                            dcc.Dropdown(
+                                id='distance-metric-dropdown',
+                                className='app-controls-block-dropdown',
+                                options=[
+                                    {'label': 'Euclidean', 'value': 'euclidean'},
+                                    {'label': 'Standardized Euclidean', 'value': 'seuclidean'},
+                                    {'label': 'Cosine', 'value': 'cosine'},
+                                    {'label': 'Correlation', 'value': 'correlation'},
+                                    {'label': 'Manhattan (L1)', 'value': 'cityblock'}
+                                ],
+                                value='euclidean'
+                            ),
+                            html.Div(className='app-controls-desc', children='Distance metric used for clustering in both clustergrams')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='app-controls-name', children='Clustering Algorithm'),
+                            dcc.Dropdown(
+                                id='linkage-method-dropdown',
+                                className='app-controls-block-dropdown',
+                                options=[
+                                    {'label': 'Ward', 'value': 'ward'},
+                                    {'label': 'UPGMA', 'value': 'average'},
+                                    {'label': 'UPGMC', 'value': 'centroid'},
+                                    {'label': 'WPGMC', 'value': 'median'},
+                                    {'label': 'WPGMA', 'value': 'weighted'},
+                                    {'label': 'Nearest Point', 'value': 'single'},
+                                    {'label': 'Furthest Point', 'value': 'complete'}
+                                ],
+                                value='ward'
+                            ),
+                            html.Div(className='app-controls-desc', children='Hierarchical clustering algorithm used for both clustergrams')
                         ])
                     ])
                 ])
@@ -1760,10 +1794,13 @@ def adjust_panel_heights(plot_height):
      dash.dependencies.Input('filtered-junction-store', 'data'),
      dash.dependencies.Input('overview-dropdown', 'value'),
      dash.dependencies.Input('show-celltype-labels-toggle', 'value'),
-     dash.dependencies.Input('clustergram-height-slider', 'value')]
+     dash.dependencies.Input('clustergram-height-slider', 'value'),
+     dash.dependencies.Input('distance-metric-dropdown', 'value'),
+     dash.dependencies.Input('linkage-method-dropdown', 'value')]
 )
 def update_junction_clustergram(selected_gene, colorscale, 
-                                filtered_junction_ids, plots_dropdown_value, show_celltype_labels, clustergram_height):
+                                filtered_junction_ids, plots_dropdown_value, show_celltype_labels, clustergram_height,
+                                distance_metric, linkage_method):
     """Update junction visualization based on gene selection and filtering"""
     if plots_dropdown_value == 'event-level':                       
         return empty_fig() 
@@ -1772,7 +1809,12 @@ def update_junction_clustergram(selected_gene, colorscale,
     
     if not selected_gene:
         try:
-            fig = create_summary_clustergram(db_path, height=heatmap_height, colorscale=colorscale, show_celltype_labels=show_celltype_labels)
+            fig = create_summary_clustergram(db_path, 
+                                             height=heatmap_height, 
+                                             colorscale=colorscale, 
+                                             show_celltype_labels=show_celltype_labels, 
+                                             distance_metric=distance_metric, 
+                                             linkage_method=linkage_method)
             fig.update_layout(
                 autosize=True, 
                 height=heatmap_height,
@@ -1791,7 +1833,9 @@ def update_junction_clustergram(selected_gene, colorscale,
             height=heatmap_height, 
             colorscale=colorscale, 
             filtered_junction_ids=filtered_junction_ids,
-            show_celltype_labels=show_celltype_labels
+            show_celltype_labels=show_celltype_labels,
+            distance_metric=distance_metric,
+            linkage_method=linkage_method
         )
         fig.update_layout(
             autosize=True, 
@@ -1815,11 +1859,13 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('collapse-tissue-toggle', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('overview-dropdown', 'value'),
-     dash.dependencies.Input('clustergram-height-slider', 'value')]
+     dash.dependencies.Input('clustergram-height-slider', 'value'),
+     dash.dependencies.Input('distance-metric-dropdown', 'value'),
+     dash.dependencies.Input('linkage-method-dropdown', 'value')]
 )
 def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, 
                           show_labels, collapse_mode, filtered_transcript_ids, 
-                          plots_dropdown_value, clustergram_height):
+                          plots_dropdown_value, clustergram_height, distance_metric, linkage_method):
     """Update isoform clustergram with junction clustergram heights"""
     if use_ratio_data: 
         current_data = load_expression_data(db_path=db_path, 
@@ -1849,7 +1895,9 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
             colorscale=colorscale,
             data_type=data_type,
             show_labels=show_labels,
-            collapse_mode=collapse_mode
+            collapse_mode=collapse_mode,
+            distance_metric=distance_metric,
+            linkage_method=linkage_method
         )
         fig.update_layout(
             autosize=True, 

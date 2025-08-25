@@ -477,3 +477,39 @@ def create_custom_spinner(message):
             )
         ]
     )
+
+
+###################################################################
+# DATA PREPROCESSING UTILITIES
+###################################################################
+def apply_distance_preprocessing(data_matrix, distance_metric):
+    """Apply specific preprocessing for problematic distance metrics in clustergram - 
+    used to check invalid values and correct prior to passing to Dash Bio Clustergram"""
+    processed = data_matrix.copy()
+    
+    # Correlation requires non-constant rows/columns, so should check for rows where there is no variance and add tiny amount of noise
+    if distance_metric == 'correlation':
+        
+        row_std = processed.std(axis=1)
+        col_std = processed.std(axis=0)
+        
+        constant_rows = row_std == 0
+        if constant_rows.any():
+            noise = np.random.normal(0, 1e-7, processed.loc[constant_rows].shape)
+            processed.loc[constant_rows] += noise
+            
+        constant_cols = col_std == 0
+        if constant_cols.any():
+            noise = np.random.normal(0, 1e-7, processed.loc[:, constant_cols].shape)
+            processed.loc[:, constant_cols] += noise
+    
+    # Standardized Euclidean needs non-zero variance for all features, and cosine needs non-zero magnitude vectors: 
+    # can use same fix as correlation, but only necessary for columns
+    elif distance_metric == 'seuclidean' or distance_metric == 'cosine':
+        col_std = processed.std(axis=0)
+        constant_cols = col_std == 0
+        if constant_cols.any():
+            noise = np.random.normal(0, 1e-7, processed.loc[:, constant_cols].shape)
+            processed.loc[:, constant_cols] += noise
+    
+    return processed
