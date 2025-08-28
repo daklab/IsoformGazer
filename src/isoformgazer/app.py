@@ -19,14 +19,14 @@ from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
-from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner, validate_filter_input
-from junction_utils import (
+from src.isoformgazer.data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner, validate_filter_input
+from src.isoformgazer.junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
     load_atse_data, process_gene_atse_data, create_empty_atse_message, 
     create_junction_exon_visualization, create_empty_clustergram_message, 
     filter_junctions_by_transcripts, filter_transcripts_by_junctions
 )
-from isoform_utils import (
+from src.isoformgazer.isoform_utils import (
     load_expression_data, process_transcript_structure, create_transcript_structure_plot,
     create_isoform_expression_clustergram, create_empty_isoform_message,
     calculate_unified_plot_height, calculate_clustergram_min_height, calculate_single_isoform_hash,
@@ -466,6 +466,7 @@ def create_loading_progress_figure():
 ###################################################################
 db_path = setup_local_database()
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
+server = app.server
 
 # CSS for styling components with responsive design
 app.index_string = '''

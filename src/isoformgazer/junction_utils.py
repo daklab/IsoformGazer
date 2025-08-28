@@ -12,9 +12,9 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
-from data_utils import apply_distance_preprocessing
-from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height, calculate_clustergram_min_height
-from isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
+from src.isoformgazer.data_utils import apply_distance_preprocessing
+from src.isoformgazer.isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height
+from src.isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
 ###################################################################
 # MARGIN PRESETS FOR FIGURES
@@ -205,11 +205,6 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
 
     if psi_matrix.empty:
         return create_empty_clustergram_message(f"No PSI data available for gene: {gene_name}")
-
-    if height <= 700:
-        num_junctions = len(junction_labels)
-        min_required_height = calculate_clustergram_min_height(num_junctions, base_height=600)
-        height = max(height, min_required_height)
     
     if len(gene_vals['junction_id'].unique()) == 1:
         return create_single_junction_heatmap(

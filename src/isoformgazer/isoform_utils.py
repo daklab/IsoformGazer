@@ -9,8 +9,8 @@ import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
-from data_utils import apply_distance_preprocessing
-from performance_utils import cached, memory_tracker, plot_optimizer
+from src.isoformgazer.data_utils import apply_distance_preprocessing
+from src.isoformgazer.performance_utils import cached, memory_tracker, plot_optimizer
 
 def get_lrs_metadata_replicates() -> List[List[str]]:
     """
