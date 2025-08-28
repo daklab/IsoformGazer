@@ -3,7 +3,6 @@ Performance profiling and optimization utilities for IsoformGazer
 """
 import time
 import functools
-import importlib
 import sqlite3
 import pandas as pd
 import numpy as np
@@ -20,6 +19,7 @@ import hashlib
 import pickle
 import threading
 from pathlib import Path
+import importlib
 
 ############################################################################################
 # Disable logging for production use, currently set to CRITICAL to silence all output
@@ -444,14 +444,16 @@ memory_tracker = MemoryTracker()
 @timing_decorator(threshold_seconds=0.5)
 def cached_transcript_structure_processing(db_path: str, gene_name: str, filtered_ids: list):
     """Cached version of transcript structure processing"""
-    isoform_utils = importlib.import_module('isoform_utils')
+    current_package = __name__.rsplit('.', 1)[0]
+    isoform_utils = importlib.import_module(f'{current_package}.isoform_utils')
     return isoform_utils.process_transcript_structure(db_path, gene_name, filtered_ids)
 
 
 @timing_decorator(threshold_seconds=0.5)
 def cached_atse_data_processing(gene_name: str, db_path: str, filtered_junction_ids=None):
     """Cached version of ATSE data processing"""
-    junction_utils = importlib.import_module('junction_utils')
+    current_package = __name__.rsplit('.', 1)[0]
+    junction_utils = importlib.import_module(f'{current_package}.junction_utils')
     return junction_utils.process_gene_atse_data(gene_name, db_path, filtered_junction_ids)
 
 
