@@ -523,7 +523,7 @@ def create_transcript_structure_plot(db_path: str,
             range=[min_start, max_end + (max_end - min_start) * 0.3],
             showgrid=False,
             tickformat=',',
-            rangeslider=dict(visible=True, range=[min_start, max_end]),
+            rangeslider=dict(visible=False, range=[min_start, max_end]),
             autorange=False,
             fixedrange=False
         ),
