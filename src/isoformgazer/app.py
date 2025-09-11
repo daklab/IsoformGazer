@@ -923,7 +923,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                         style={'display': 'inline-block', 'marginRight': '30px'}),
                                 daq.ToggleSwitch(
                                     id='show-celltype-labels-toggle',
-                                    value=False,
+                                    value=True,
                                     label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
                                     style={'display': 'inline-block'}
