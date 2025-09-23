@@ -87,6 +87,14 @@ def setup_local_database(force_rebuild=False):
         df_isoform = pd.read_csv(isoform_file, sep='\t')
         df_isoform['id'] = df_isoform.index # IMPORTANT: we need this to match PSL file 1-based indexing!
         df_isoform['gene_id'] = df_isoform['gene'].str.split('.').str[0]
+
+        # Drop unused columns to reduce database size
+        columns_to_drop = ['gene_total_tpm', 'gene_gencode_v46_basic_transcript_counts']
+        existing_columns_to_drop = [col for col in columns_to_drop if col in df_isoform.columns]
+        if existing_columns_to_drop:
+            df_isoform = df_isoform.drop(columns=existing_columns_to_drop)
+            print(f"Dropped unused columns: {existing_columns_to_drop}")
+
         pbar.update(len(df_isoform))
     
     with tqdm(desc="Writing isoform master table data to local database", unit="rows", total=len(df_isoform)) as pbar:
@@ -505,7 +513,9 @@ header = html.Div(className='app-header', children=[
 left_data_table = dash_table.DataTable(
     id='left_data_table',
     columns=get_master_table_columns(db_path, table_name='isoforms'),
-    hidden_columns=['id'],
+    hidden_columns=['id', 'gene_id', 'gene_name', 'gene_potential', 'gene_perplexity',
+                    'gene_protein_category', 'gene_average_tpm', 'ptc_potential', 'ptc_perplexity',
+                    'ORF_potential', 'ORF_perplexity', 'ORF_expressed_samples', 'gene_expressed_samples'],
     data=[],
     editable=False,
     filter_action="custom",
@@ -770,6 +780,17 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             html.Div(className='app-controls-desc', children='Select a gene identifier to query or type to search')
                         ]),
                         html.Div(id='gene-filter-status'),
+
+                        html.H3('Gene-Level Summary', className='summary-section-header'),
+                        html.Div(id='gene-level-summary', className='summary-block', children=[
+                            html.P("Select a gene to view summary information", className='summary-placeholder')
+                        ]),
+
+                        html.H3('ORF-Level Summary', className='summary-section-header'),
+                        html.Div(id='orf-level-summary', className='summary-block', children=[
+                            html.P("Select a gene to view summary information", className='summary-placeholder')
+                        ]),
+
                         html.H2('Query by Value', className='alignment-settings-section'),
                         html.Div(className='query-content', children=[
                             html.P("You can query master tables to update plots using the query boxes below each column header:"),
@@ -1532,6 +1553,145 @@ def update_gene_options(search_value, current_value):
         if current_options:
             options = current_options + [opt for opt in options if opt['value'] != current_value]
         return options, current_value
+
+
+######################################################################
+# SUMMARY BLOCK CALLBACKS
+######################################################################
+@app.callback(
+    [dash.dependencies.Output('gene-level-summary', 'children'),
+     dash.dependencies.Output('orf-level-summary', 'children')],
+    [dash.dependencies.Input('gene-search-dropdown', 'value')]
+)
+def update_summary_blocks(selected_gene):
+    """Update Gene-Level and ORF-Level summary blocks based on selected gene"""
+    if not selected_gene:
+        return (
+            [html.P("Select a gene to view summary information", className='summary-placeholder')],
+            [html.P("Select a gene to view summary information", className='summary-placeholder')]
+        )
+
+    try:
+        # Get the first row data for the selected gene
+        conn = sqlite3.connect(db_path)
+        query = """
+        SELECT
+            gene_protein_category,
+            gene_potential,
+            gene_perplexity,
+            ptc_potential,
+            ptc_perplexity,
+            gene_average_tpm,
+            gene_expressed_samples,
+            orf_potential,
+            orf_perplexity,
+            orf_expressed_samples
+        FROM isoforms
+        WHERE gene_name = ?
+        LIMIT 1
+        """
+        cursor = conn.cursor()
+        cursor.execute(query, (selected_gene,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return (
+                [html.P("No data found for selected gene", className='summary-placeholder')],
+                [html.P("No data found for selected gene", className='summary-placeholder')]
+            )
+
+        # Extract values
+        (gene_protein_category, gene_potential, gene_perplexity, ptc_potential, 
+         ptc_perplexity, gene_average_tpm, gene_expressed_samples, 
+         orf_potential, orf_perplexity, orf_expressed_samples) = row
+
+        # Format values for display
+        def format_value(val, field_name=None):
+            if val is None:
+                return "N/A"
+            
+            # Special handling for potential columns - no decimals
+            if field_name:
+                return str(int(val)) if val is not None else "N/A"
+            
+            if isinstance(val, float):
+                return f"{val:.2f}" if val else "0.00"
+            
+            return str(val)
+
+        # Special formatting for Gene Protein Category with semicolon handling
+        def format_protein_category(val):
+            if val is None:
+                return html.Span("N/A", className='summary-value')
+
+            # Split by semicolon and create separate lines
+            categories = [cat.strip() for cat in str(val).split(';') if cat.strip()]
+            if len(categories) <= 1:
+                return html.Span(format_value(val), className='summary-value')
+
+            # Create a div with multiple lines for multiple categories
+            return html.Div([
+                html.Div(cat, style={'margin': '0', 'padding': '0', 'lineHeight': '1.4'})
+                for cat in categories
+            ], className='summary-value summary-multiline')
+
+        # Gene-Level Summary
+        gene_summary = [
+            html.Div(className='summary-item', children=[
+                html.Span('Gene Protein Category:', className='summary-label'),
+                format_protein_category(gene_protein_category)
+            ]),
+            html.Div(className='summary-item', children=[
+                html.Span('Number of detected transcripts:', className='summary-label'),
+                html.Span(format_value(gene_potential, 'gene_potential'), className='summary-value')
+            ]),
+            html.Div(className='summary-item', children=[
+                html.Span('Number of detected protein-coding transcripts:', className='summary-label'),
+                html.Span(format_value(ptc_potential, 'ptc_potential'), className='summary-value')
+            ]),
+            html.Div(className='summary-item', children=[
+                html.Span('Gene Perplexity:', className='summary-label'),
+                html.Span(format_value(gene_perplexity), className='summary-value')
+            ]),
+            html.Div(className='summary-item', children=[
+                html.Span('PTC Perplexity:', className='summary-label'),
+                html.Span(format_value(ptc_perplexity), className='summary-value')
+            ]),
+            html.Div(className='summary-item', children=[
+                html.Span('Gene Average TPM:', className='summary-label'),
+                html.Span(format_value(gene_average_tpm), className='summary-value')
+            ]),
+            html.Div(className='summary-item', children=[
+                html.Span('Gene Expressed Samples:', className='summary-label'),
+                html.Span(format_value(gene_expressed_samples), className='summary-value')
+            ])
+        ]
+
+        # ORF-Level Summary
+        orf_summary = [
+            html.Div(className='summary-item', children=[
+                html.Span('Number of detected ORFs:', className='summary-label'),
+                html.Span(format_value(orf_potential, 'orf_potential'), className='summary-value')
+            ]),
+            html.Div(className='summary-item', children=[
+                html.Span('ORF Perplexity:', className='summary-label'),
+                html.Span(format_value(orf_perplexity), className='summary-value')
+            ]),
+            html.Div(className='summary-item', children=[
+                html.Span('ORF Expressed Samples:', className='summary-label'),
+                html.Span(format_value(orf_expressed_samples, 'ORF_expressed_samples'), className='summary-value')
+            ])
+        ]
+
+        return gene_summary, orf_summary
+
+    except Exception as e:
+        print(f"Error updating summary blocks: {e}")
+        return (
+            [html.P("Error loading summary data", className='summary-placeholder')],
+            [html.P("Error loading summary data", className='summary-placeholder')]
+        )
 
 
 ######################################################################
