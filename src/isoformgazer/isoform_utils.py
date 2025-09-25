@@ -1,5 +1,6 @@
 import os
 import re
+import hashlib
 import sqlite3
 import pandas as pd
 import numpy as np
@@ -1297,3 +1298,223 @@ def create_empty_isoform_message(message: str) -> go.Figure:
     )
     
     return fig
+
+##############################################################################
+# Methods for isoform hashing 
+##############################################################################
+
+def convert_psl_ids(psl_file, out_file):
+    """
+    Convert read names in a PSL file to stable hash-based IDs 
+    based on splice junction starts and ends.
+
+    Parameters:
+        psl_file (str): Input PSL file
+        out_file (str): Output PSL file with updated IDs
+    """
+    with open(psl_file, "r") as infile, open(out_file, "w") as outfile:
+        for line in infile:
+            read = line.rstrip("\n").split("\t")
+            name = read[9]
+
+            # parse blocksizes, tstarts
+            blocksizes = [int(x) for x in read[18].rstrip(",").split(",")]
+            tstarts = [int(x) for x in read[20].rstrip(",").split(",")]
+
+            # compute tends
+            tends = [s + l for s, l in zip(tstarts, blocksizes)]
+
+            # collapse junctions
+            collapse_tstarts = tstarts[1:]
+            collapse_tends = tends[:-1]
+
+            # hash start junctions
+            s = ",".join(map(str, collapse_tstarts))
+            s_hashed = hashlib.shake_256(s.encode("utf-8")).hexdigest(8)
+            s_id = "s" + s_hashed
+
+            # hash end junctions
+            e = ",".join(map(str, collapse_tends))
+            e_hashed = hashlib.shake_256(e.encode("utf-8")).hexdigest(8)
+            e_id = "e" + e_hashed
+
+            # new read ID = startID:endID
+            new_id = f"{s_id}:{e_id}"
+            read[9] = new_id
+
+            outfile.write("\t".join(read) + "\n")
+
+
+def calculate_single_isoform_hash(tstarts: list, blocksizes: list) -> str:
+    """
+    Calculate hash ID for a single isoform based on its splice junction coordinates.
+
+    Parameters:
+        tstarts (list): List of target start positions for each exon
+        blocksizes (list): List of block sizes for each exon
+
+    Returns:
+        str: Hash ID in format "s{start_hash}:e{end_hash}"
+
+    Example:
+        >>> tstarts = [1000, 2000, 3000]
+        >>> blocksizes = [200, 300, 400]
+        >>> calculate_single_isoform_hash(tstarts, blocksizes)
+        's12345678:e87654321'
+    """
+    if not tstarts or not blocksizes:
+        raise ValueError("tstarts and blocksizes cannot be empty")
+
+    if len(tstarts) != len(blocksizes):
+        raise ValueError("tstarts and blocksizes must have the same length")
+
+    # Convert to int if str
+    tstarts = [int(x) for x in tstarts]
+    blocksizes = [int(x) for x in blocksizes]
+
+    # Compute exon ends
+    tends = [s + l for s, l in zip(tstarts, blocksizes)]
+
+    # Extract junction coordinates (skip first start and last end)
+    collapse_tstarts = tstarts[1:]    
+    collapse_tends = tends[:-1]       
+
+    # Hash start junctions
+    s = ",".join(map(str, collapse_tstarts))
+    s_hashed = hashlib.shake_256(s.encode("utf-8")).hexdigest(8)
+    s_id = "s" + s_hashed
+
+    # Hash end junctions
+    e = ",".join(map(str, collapse_tends))
+    e_hashed = hashlib.shake_256(e.encode("utf-8")).hexdigest(8)
+    e_id = "e" + e_hashed
+
+    # Return combined hash ID
+    return f"{s_id}:{e_id}"
+
+
+def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
+    """
+    Parse GTF content and calculate hash IDs for all isoforms.
+
+    Parameters:
+        gtf_content (str): Content of GTF file as string
+
+    Returns:
+        list: List of dictionaries with transcript_id, gene_id, and hash_id
+    """
+    results = []
+    transcripts = {}
+
+    # Parse GTF content line by line
+    for line in gtf_content.strip().split('\n'):
+        if line.startswith('#') or not line.strip():
+            continue
+
+        fields = line.split('\t')
+        if len(fields) < 9:
+            continue
+
+        feature_type = fields[2]
+        if feature_type != 'exon':
+            continue
+
+        start = int(fields[3])
+        end = int(fields[4])
+        attributes = fields[8]
+
+        # Parse attributes to get transcript_id and gene_id
+        transcript_id = None
+        gene_id = None
+
+        for attr in attributes.split(';'):
+            attr = attr.strip()
+            if attr.startswith('transcript_id'):
+                transcript_id = attr.split('"')[1]
+            elif attr.startswith('gene_id'):
+                gene_id = attr.split('"')[1]
+
+        if not transcript_id:
+            continue
+
+        # Group exons by transcript
+        if transcript_id not in transcripts:
+            transcripts[transcript_id] = {
+                'gene_id': gene_id,
+                'exons': []
+            }
+
+        transcripts[transcript_id]['exons'].append((start, end))
+
+    # Calculate hashes for each transcript
+    for transcript_id, data in transcripts.items():
+        exons = sorted(data['exons'])  # Sort by start position
+
+        if len(exons) < 2:  # Skip single-exon transcripts
+            continue
+
+        tstarts = [exon[0] for exon in exons]
+        blocksizes = [exon[1] - exon[0] for exon in exons]
+
+        try:
+            hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
+            results.append({
+                'transcript_id': transcript_id,
+                'gene_id': data['gene_id'],
+                'hash_id': hash_id,
+                'exon_count': len(exons)
+            })
+        except Exception as e:
+            print(f"Error calculating hash for {transcript_id}: {e}")
+            continue
+
+    return results
+
+
+def test_psl_hash_algorithm():
+    """
+    Test case to match actual PSL hash format from the example:
+    PSL data: blocksizes: 2445,1632  tstarts: 58351029,58353713
+    Expected hash: s05ff6e0b43331bfc:e2111d58dcc6fc4ae
+    """
+    # From PSL example
+    tstarts = [58351029, 58353713]
+    blocksizes = [2445, 1632]
+    expected_hash = "s05ff6e0b43331bfc:e2111d58dcc6fc4ae"
+
+    # Calculate tends (exon end positions)
+    tends = [s + l for s, l in zip(tstarts, blocksizes)]  # [58353474, 58355345]
+
+    # Extract junction coordinates (skip first start and last end)
+    collapse_tstarts = tstarts[1:]    # [58353713] - start of second exon
+    collapse_tends = tends[:-1]       # [58353474] - end of first exon
+
+    print(f"Original tstarts: {tstarts}")
+    print(f"Original blocksizes: {blocksizes}")
+    print(f"Calculated tends: {tends}")
+    print(f"Junction starts (collapse_tstarts): {collapse_tstarts}")
+    print(f"Junction ends (collapse_tends): {collapse_tends}")
+    print(f"Expected hash: {expected_hash}")
+
+    try:
+        current_hash = calculate_single_isoform_hash(tstarts, blocksizes)
+        print(f"Current algorithm result: {current_hash}")
+        matches = current_hash == expected_hash
+        print(f"Matches expected: {matches}")
+        if matches:
+            print("✓ SUCCESS: Hash algorithm is correct!")
+        else:
+            print("✗ MISMATCH: Hash algorithm needs adjustment")
+    except Exception as e:
+        print(f"Current algorithm error: {e}")
+
+    print(f"\nJunction coordinate strings:")
+    s_string = ",".join(map(str, collapse_tstarts))
+    e_string = ",".join(map(str, collapse_tends))
+    print(f"Start string: '{s_string}'")
+    print(f"End string: '{e_string}'")
+
+
+# Example usage for hashing function:
+# convert_psl_ids("input.psl", "output_with_hash_ids.psl")
+# test_psl_hash_algorithm()  # Run this to test hash algorithm

@@ -1946,3 +1946,226 @@ div[data-value="tab-3"]:hover {
     border-radius: 0% !important;
     border: none !important;
 }
+
+/* ######################################################################################
+   # Isoform Hash Lookup Styling
+   ###################################################################################### */
+
+.hash-lookup-content {
+    margin-top: 15px;
+    padding: 25px;
+    background: linear-gradient(135deg, #fafbfc 0%, #ffffff 100%);
+    border-radius: 12px;
+    border: 1px solid rgba(225, 229, 233, 0.6);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+}
+
+.hash-lookup-content p {
+    font-family: "Inter", "Segoe UI", "SF Pro Display", "Roboto", "Helvetica Neue", sans-serif;
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.7;
+    color: #2c3e50;
+    margin: 0 0 18px 0;
+    letter-spacing: -0.1px;
+}
+
+.hash-lookup-content p:last-child {
+    margin-bottom: 0;
+}
+
+.coordinate-mode-selector {
+    margin: 15px 0 20px 0;
+    padding: 0;
+}
+
+.coordinate-radio-items {
+    margin-top: 8px;
+}
+
+.coordinate-radio-items label {
+    margin-right: 20px;
+    font-size: 14px;
+    color: #495057;
+    white-space: pre-line;
+}
+
+.coordinate-input-group {
+    margin: 15px 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.coordinate-section-label {
+    color: #301279;
+    font-family: "Open Sans", sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 5px;
+    display: block;
+}
+
+.coordinate-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.coordinate-input:focus {
+    outline: none;
+    border-color: #301279;
+    box-shadow: 0 0 0 2px rgba(48, 18, 121, 0.2);
+}
+
+.hash-output {
+    margin: 20px 0;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    min-height: 80px;
+}
+
+.hash-result-container {
+    margin-top: 15px;
+}
+
+.hash-result-label {
+    color: #301279;
+    font-family: "Open Sans", sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 18px;
+    margin-bottom: 8px;
+}
+
+.hash-result-box {
+    background-color: #ffffff;
+    border: 2px solid #301279;
+    border-radius: 6px;
+    padding: 12px 15px;
+    font-family: "Consolas", "Monaco", "Courier New", monospace;
+    font-size: 14px;
+    font-weight: 500;
+    color: #301279;
+    word-break: break-all;
+    user-select: all;
+    cursor: text;
+    line-height: 1.4;
+}
+
+.hash-result-box:hover {
+    background-color: #f8f9ff;
+    border-color: #252066;
+}
+
+.hash-result-with-copy {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.hash-result-with-copy .hash-result-box {
+    flex: 1;
+}
+
+.hash-copy-button {
+    background-color: #301279;
+    color: white;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: background-color 0.3s;
+    white-space: nowrap;
+}
+
+.hash-copy-button:hover {
+    background-color: #252066;
+}
+
+.hash-copy-button:active {
+    background-color: #1e1a55;
+}
+
+/* Style the clipboard icon */
+.hash-copy-button svg {
+    width: 14px;
+    height: 14px;
+}
+
+.hash-placeholder {
+    color: #6c757d;
+    font-style: italic;
+    margin: 0;
+}
+
+.upload-status {
+    margin: 10px 0;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.control-button {
+    background-color: #301279;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.control-button:hover {
+    background-color: #252066;
+}
+
+.control-button:active {
+    background-color: #1e1a55;
+}
+
+/* GTF Upload Styling */
+#gtf-upload {
+    width: 100%;
+    height: 70px;
+    border: 2px dashed #cccccc;
+    border-radius: 8px;
+    background-color: #fafbfc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 10px 0;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+#gtf-upload:hover {
+    border-color: #301279;
+    background-color: #f8f9ff;
+}
+
+#gtf-upload div {
+    font-family: "Open Sans", sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    color: #495057;
+    text-align: center;
+    line-height: 1.4;
+}
+
+#gtf-upload a {
+    color: #301279;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+#gtf-upload a:hover {
+    text-decoration: underline;
+}

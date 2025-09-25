@@ -1,4 +1,4 @@
-import os 
+import os
 import math
 import traceback
 from tqdm import tqdm
@@ -6,6 +6,7 @@ import sqlite3
 import scipy
 import numpy as np
 import pandas as pd
+import base64
 import matplotlib
 matplotlib.use('Agg')
 from pathlib import Path
@@ -26,9 +27,9 @@ from junction_utils import (
     filter_junctions_by_transcripts, filter_transcripts_by_junctions
 )
 from isoform_utils import (
-    load_expression_data, process_transcript_structure,
-    create_transcript_structure_plot, create_isoform_expression_clustergram, 
-    create_empty_isoform_message, calculate_unified_plot_height
+    load_expression_data, process_transcript_structure, create_transcript_structure_plot, 
+    create_isoform_expression_clustergram, create_empty_isoform_message, 
+    calculate_unified_plot_height, calculate_single_isoform_hash
 )
 
 RANDOM_SEED = 18
@@ -81,7 +82,7 @@ def setup_local_database(force_rebuild=False):
     ########################################################
     # Load isoform master table data
     ########################################################
-    isoform_file = os.path.join(data_dir, "mt_isoform_gazers_250616.tsv")
+    isoform_file = os.path.join(data_dir, "mt_isoform_gazers_250828.tsv")
     
     with tqdm(desc="Loading isoform master table data", unit=" rows") as pbar:
         df_isoform = pd.read_csv(isoform_file, sep='\t')
@@ -106,7 +107,7 @@ def setup_local_database(force_rebuild=False):
     # Load isoform PSL data
     ########################################################
     print("Processing PSL data...")
-    psl_file = os.path.join(data_dir, "all_samples_sp_collapse_all_chr_no_treatment_full.psl")
+    psl_file = os.path.join(data_dir, "all_samples_sp_collapse_all_chr_no_treatment_hashid_isoform_full.psl")
     psl_columns = [
         'matches', 'misMatches', 'repMatches', 'nCount', 'qNumInsert', 'qBaseInsert',
         'tNumInsert', 'tBaseInsert', 'strand', 'qName', 'qSize', 'qStart', 'qEnd',
@@ -178,13 +179,13 @@ def setup_local_database(force_rebuild=False):
             pbar.update(len(chunk))
 
     print("Processing isoform TPM data...")
-    tpm_file = os.path.join(data_dir, "all_tpm.tsv")
+    tpm_file = os.path.join(data_dir, "all_tpm_250828.tsv")
     tpm_df = pd.read_csv(tpm_file, sep='\t')
     tpm_df['id'] = tpm_df.index
     tpm_df.to_sql('tpm_data', conn, if_exists='replace')
 
     print("Processing isoform ratio data...")
-    ratio_file = os.path.join(data_dir, "all_quant_ratio.tsv")
+    ratio_file = os.path.join(data_dir, "all_quant_ratio_250828.tsv")
     ratio_df = pd.read_csv(ratio_file, sep='\t')
     ratio_df['id'] = ratio_df.index
     ratio_df.to_sql('ratio_data', conn, if_exists='replace')
@@ -804,6 +805,71 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 "Delete your queries in the filter boxes and hit Enter to remove individual filters. "
                                 "To clear all filters, use the Clear All button above the master table.",
                             ])
+                        ]),
+
+                        html.H2('Isoform Hash Lookup', className='alignment-settings-section'),
+                        html.Div(className='hash-lookup-content', children=[
+                            html.P("Generate hash IDs for isoforms based on their junction coordinates."),
+
+                            html.H3('Coordinate Entry', className='summary-section-header'),
+                            html.Div(className='app-controls-block', children=[
+                                html.Div(className='coordinate-mode-selector', children=[
+                                    html.Label('Input Mode:', className='coordinate-section-label'),
+                                    dcc.RadioItems(
+                                        id='coordinate-input-mode',
+                                        options=[
+                                            {'label': 'Start positions +\nBlock sizes', 'value': 'start_block'},
+                                            {'label': 'Start positions +\nEnd positions', 'value': 'start_end'}
+                                        ],
+                                        value='start_block',
+                                        className='coordinate-radio-items',
+                                        inline=True
+                                    )
+                                ]),
+
+                                html.Div(className='coordinate-input-group', children=[
+                                    html.Label('Exon Start Positions (comma-separated):', className='coordinate-section-label'),
+                                    dcc.Input(
+                                        id='exon-starts-input',
+                                        type='text',
+                                        placeholder='e.g., 1000,2000,3000',
+                                        className='coordinate-input'
+                                    )
+                                ]),
+
+                                html.Div(id='second-input-container', children=[
+                                    html.Div(className='coordinate-input-group', children=[
+                                        html.Label('Block Sizes (comma-separated):', className='coordinate-section-label', id='second-input-label'),
+                                        dcc.Input(
+                                            id='second-coordinate-input',
+                                            type='text',
+                                            placeholder='e.g., 200,300,400',
+                                            className='coordinate-input'
+                                        )
+                                    ])
+                                ]),
+
+                                html.Button('Calculate Hash', id='calculate-hash-btn', className='control-button'),
+                                html.Div(id='hash-result')
+                            ]),
+
+                            #html.H3('GTF File Upload', className='summary-section-header'),
+                            #html.Div(className='app-controls-block', children=[
+                            #    dcc.Upload(
+                            #        id='gtf-upload',
+                            #        children=html.Div([
+                            #            'Drag and drop or',
+                            #            html.Br(),
+                            #            html.A('select GTF file')
+                            #        ]),
+                            #        multiple=False
+                            #    ),
+                            #    html.Div(id='gtf-upload-status', className='upload-status'),
+                            #    html.Div(id='gtf-download-section', style={'display': 'none'}, children=[
+                            #        html.Button('Download Hash Results', id='download-hashes-btn', className='control-button'),
+                            #        dcc.Download(id='download-hashes')
+                            #    ])
+                            #])
                         ])
                     ])
                 ]),
@@ -1180,6 +1246,7 @@ app.layout.children.extend([
     dcc.Store(id='loading-progress-store', data=0),
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
+    dcc.Store(id='gtf-hash-results-store', data=[]),
     dcc.Interval(id='loading-delay-interval', interval=1000, n_intervals=0, max_intervals=1, disabled=True),
     dcc.Interval(id='progress-update-interval', interval=50, n_intervals=0, disabled=False)
 ])
@@ -2243,7 +2310,170 @@ def update_heatmap2_loading_message(selected_gene, filtered_ids):
 
 
 ###################################################################
-# INTRO BANNER 
+# ISOFORM HASH LOOKUP CALLBACKS
+###################################################################
+
+@app.callback(
+    [dash.dependencies.Output('second-input-label', 'children'),
+     dash.dependencies.Output('second-coordinate-input', 'placeholder')],
+    [dash.dependencies.Input('coordinate-input-mode', 'value')]
+)
+def update_second_input_labels(input_mode):
+    """Update the second input field label and placeholder based on selected mode"""
+    if input_mode == 'start_end':
+        return 'Exon End Positions (comma-separated):', 'e.g., 1200,2300,3400'
+    else:  # start_block
+        return 'Block Sizes (comma-separated):', 'e.g., 200,300,400'
+
+
+@app.callback(
+    dash.dependencies.Output('hash-result', 'children'),
+    [dash.dependencies.Input('calculate-hash-btn', 'n_clicks')],
+    [dash.dependencies.State('coordinate-input-mode', 'value'),
+     dash.dependencies.State('exon-starts-input', 'value'),
+     dash.dependencies.State('second-coordinate-input', 'value')]
+)
+def calculate_hash_from_coordinates(n_clicks, input_mode, starts_input, second_input):
+    """Calculate hash ID from user-entered coordinates"""
+    if not n_clicks or not starts_input or not second_input:
+        return html.Div()
+
+    try:
+        # Parse comma-separated inputs
+        tstarts = [int(x.strip()) for x in starts_input.split(',') if x.strip()]
+        second_values = [int(x.strip()) for x in second_input.split(',') if x.strip()]
+
+        if len(tstarts) != len(second_values):
+            error_msg = ("Error: Number of start positions must match number of " +
+                        ("end positions" if input_mode == 'start_end' else "block sizes"))
+            return html.Div([
+                html.P(error_msg, style={'color': 'red', 'font-weight': 'bold'})
+            ])
+
+        if len(tstarts) < 2:
+            return html.Div([
+                html.P("Error: At least 2 exons required for hash calculation",
+                       style={'color': 'red', 'font-weight': 'bold'})
+            ])
+
+        # Convert end positions to block sizes if needed
+        if input_mode == 'start_end':
+            # second_values are end positions, convert to block sizes
+            blocksizes = [end - start for start, end in zip(tstarts, second_values)]
+            # Validate that all block sizes are positive
+            if any(size <= 0 for size in blocksizes):
+                return html.Div([
+                    html.P("Error: End positions must be greater than start positions",
+                           style={'color': 'red', 'font-weight': 'bold'})
+                ])
+        else:
+            # second_values are already block sizes
+            blocksizes = second_values
+
+        hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
+
+        return html.Div([
+            html.Div("Isoform Hash ID:", className='hash-result-label'),
+            html.Div(className='hash-output', children=[
+                html.Div(className='hash-result-with-copy', children=[
+                    html.Div(hash_id, className='hash-result-box', id='hash-result-value'),
+                    dcc.Clipboard(
+                        target_id="hash-result-value",
+                        title="Copy hash ID to clipboard",
+                        className='hash-copy-button'
+                    )
+                ])
+            ])
+        ])
+
+    except ValueError as e:
+        return html.Div([
+            html.P(f"Error: Invalid input - {str(e)}",
+                   style={'color': 'red', 'font-weight': 'bold'})
+        ])
+    except Exception as e:
+        return html.Div([
+            html.P(f"Error calculating hash: {str(e)}",
+                   style={'color': 'red', 'font-weight': 'bold'})
+        ])
+
+
+@app.callback(
+    [dash.dependencies.Output('gtf-upload-status', 'children'),
+     dash.dependencies.Output('gtf-download-section', 'style'),
+     dash.dependencies.Output('gtf-hash-results-store', 'data')],
+    [dash.dependencies.Input('gtf-upload', 'contents')],
+    [dash.dependencies.State('gtf-upload', 'filename')]
+)
+def handle_gtf_upload(contents, filename):
+    """Handle GTF file upload and hash calculation"""
+    if not contents:
+        return html.Div("No file uploaded", className='app-controls-desc'), {'display': 'none'}, []
+
+    try:
+        # Parse the uploaded file
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+        gtf_content = decoded.decode('utf-8')
+
+        # Calculate hashes for all isoforms
+        from isoform_utils import parse_gtf_and_calculate_hashes
+        hash_results = parse_gtf_and_calculate_hashes(gtf_content)
+
+        if not hash_results:
+            return (
+                html.Div([
+                    html.P(f"File '{filename}' uploaded successfully", style={'color': 'green'}),
+                    html.P("Warning: No multi-exon transcripts found in GTF file", style={'color': 'orange'})
+                ]),
+                {'display': 'none'},
+                []
+            )
+
+        upload_status = html.Div([
+            html.P(f"File '{filename}' processed successfully", style={'color': 'green', 'font-weight': 'bold'}),
+            html.P(f"Found {len(hash_results)} multi-exon transcripts")
+        ])
+
+        return upload_status, {'display': 'block'}, hash_results
+
+    except Exception as e:
+        return (
+            html.Div([
+                html.P(f"Error processing file '{filename}':", style={'color': 'red', 'font-weight': 'bold'}),
+                html.P(str(e), style={'color': 'red'})
+            ]),
+            {'display': 'none'},
+            []
+        )
+
+
+@app.callback(
+    dash.dependencies.Output('download-hashes', 'data'),
+    [dash.dependencies.Input('download-hashes-btn', 'n_clicks')],
+    [dash.dependencies.State('gtf-hash-results-store', 'data')]
+)
+def download_hash_results(download_clicks, hash_results):
+    """Handle download of hash results"""
+    if not download_clicks or not hash_results:
+        return dash.no_update
+
+    try:
+        # Create TSV content
+        lines = ["transcript_id\tgene_id\thash_id\texon_count"]
+        for result in hash_results:
+            lines.append(f"{result['transcript_id']}\t{result['gene_id']}\t{result['hash_id']}\t{result['exon_count']}")
+
+        download_content = "\n".join(lines)
+
+        return dict(content=download_content, filename="isoform_hashes.txt")
+
+    except Exception as e:
+        return dash.no_update
+
+
+###################################################################
+# INTRO BANNER
 ###################################################################
 def display_ascii_banner():
     """
