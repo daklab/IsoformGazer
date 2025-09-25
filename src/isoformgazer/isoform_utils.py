@@ -769,8 +769,9 @@ def calculate_bottom_margin(show_labels: bool, transcript_names: list) -> int:
     return 50
 
 
-def create_isoform_expression_clustergram(tpm_data: pd.DataFrame, 
-                                          gene_name: str, 
+def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
+                                          ratio_data: pd.DataFrame,
+                                          gene_name: str,
                                           height: int = 600,
                                           colorscale: str = 'Viridis',
                                           data_type: str = 'TPM',
@@ -780,33 +781,45 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                                           distance_metric: str = 'euclidean',
                                           linkage_method: str = 'complete') -> go.Figure:
     """Create responsive clustergram that behaves exactly like junction clustergram"""
-    if tpm_data.empty:
+    if data_type == 'TPM':
+        expression_data = tpm_data
+    else:
+        expression_data = ratio_data
+
+    if expression_data.empty or tpm_data.empty or ratio_data.empty:
         return create_empty_isoform_message(f"No data for gene: {gene_name}")
-    
-    if 'gene_name' not in tpm_data.columns:
+
+    if 'gene_name' not in expression_data.columns:
         return create_empty_isoform_message("Data missing 'gene_name' column.")
-    #tpm_data = tpm_data[tpm_data['gene_name'] == gene_name].copy()
-    
-    if tpm_data.empty:
+    #expression_data = expression_data[expression_data['gene_name'] == gene_name].copy()
+
+    if expression_data.empty:
         return create_empty_isoform_message(f"No isoform data found for gene {gene_name}.")
-    
+
     metadata_cols = ['id', 'trans_id', 'transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
-    tissue_cols = [col for col in tpm_data.columns if col not in metadata_cols]
-    
-    transcript_names = tpm_data['transcript'].tolist() if 'transcript' in tpm_data.columns else tpm_data.index.tolist()
+    tissue_cols = [col for col in expression_data.columns if col not in metadata_cols]
+
+    transcript_names = expression_data['transcript'].tolist() if 'transcript' in expression_data.columns else expression_data.index.tolist()
     transcript_names_abbreviated = abbreviate_transcript_names(transcript_names)
     num_transcripts = len(transcript_names)
 
+    # Process both TPM and ratio data with same averaging approach for tooltip
     if collapse_mode == 'tissue':
-        heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_tissue(tpm_data, tissue_cols)
+        heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_tissue(expression_data, tissue_cols)
+        tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, tissue_cols)
+        ratio_heatmap_data, _, _ = average_lrs_by_tissue(ratio_data, tissue_cols)
         tissue_cols_for_organs = tissue_display_names
 
     elif collapse_mode == 'replicate':
-        heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_replicates(tpm_data, tissue_cols)
+        heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_replicates(expression_data, tissue_cols)
+        tpm_heatmap_data, _, _ = average_lrs_by_replicates(tpm_data, tissue_cols)
+        ratio_heatmap_data, _, _ = average_lrs_by_replicates(ratio_data, tissue_cols)
         tissue_cols_for_organs = tissue_display_names
 
-    else:  
-        heatmap_data = tpm_data[tissue_cols].values.T
+    else:
+        heatmap_data = expression_data[tissue_cols].values.T
+        tpm_heatmap_data = tpm_data[tissue_cols].values.T
+        ratio_heatmap_data = ratio_data[tissue_cols].values.T
         tissue_display_names, tissue_categories = process_individual_tissues(tissue_cols)
         tissue_cols_for_organs = tissue_cols
     
@@ -822,7 +835,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     num_tissues = len(clean_tissue_names)
     hide_tissue_labels = (num_tissues > 30) or (show_tables == 'show')
     #left_margin = min(40, int(height * 0.1))
-    if not show_labels or (num_transcripts > 30):   # or whatever your threshold for showing ticks is
+    if not show_labels or (num_transcripts > 30): 
         left_margin = 2  # Minimum left margin, just enough to prevent figure overflow
     else:
         # Calculate pixel width for longest label
@@ -848,6 +861,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     if num_transcripts == 1:
         return create_single_transcript_heatmap(
             heatmap_data=heatmap_data,
+            tpm_heatmap_data=tpm_heatmap_data,
+            ratio_heatmap_data=ratio_heatmap_data,
             transcript_names=transcript_names_abbreviated,
             tissue_display_names=tissue_display_names,
             gene_name=gene_name,
@@ -880,17 +895,35 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             col_dist=distance_metric,
             link_method=linkage_method
         )
-        # Update heatmap trace with reordered organs
+
+        # Update heatmap trace with reordered organs and both TPM/ratio values
         column_ids = computed_traces['column_ids']
+        row_ids = computed_traces['row_ids']
         reordered_organ_list = [organ_list[i] for i in column_ids]
+
+        # Custom hover data with both TPM and ratio values: need to reorder both TPM and ratio data according to clustering
+        if tpm_heatmap_data.shape[0] == len(tissue_cols_for_organs):
+            tpm_clustered = tpm_heatmap_data.T[row_ids][:, column_ids]
+            ratio_clustered = ratio_heatmap_data.T[row_ids][:, column_ids]
+        else:
+            tpm_clustered = tpm_heatmap_data[row_ids][:, column_ids]
+            ratio_clustered = ratio_heatmap_data[row_ids][:, column_ids]
+
+        customdata = np.zeros((len(transcript_names), len(clean_tissue_names), 3), dtype=object)
+        for i in range(len(transcript_names)):
+            for j in range(len(clean_tissue_names)):
+                customdata[i, j, 0] = reordered_organ_list[j] 
+                customdata[i, j, 1] = tpm_clustered[i, j]      
+                customdata[i, j, 2] = ratio_clustered[i, j]    
+
         heatmap_trace = clustergram.data[-1]
-        heatmap_trace.customdata = np.array([reordered_organ_list] * len(transcript_names))
-        heatmap_trace.text = heatmap_trace.customdata
+        heatmap_trace.customdata = customdata
         heatmap_trace.hovertemplate = (
             "<b>Transcript:</b> %{y}<br>"
             "<b>Tissue:</b> %{x}<br>"
-            "<b>Organ:</b> %{text}<br>"
-            f"<b>{data_type}:</b> %{{z:.2f}}"
+            "<b>Organ:</b> %{customdata[0]}<br>"
+            "<b>TPM:</b> %{customdata[1]:.2f}<br>"
+            "<b>Ratio:</b> %{customdata[2]:.2f}"
             "<extra></extra>"
         )
         
@@ -1021,20 +1054,29 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     return clustergram
 
 
-def create_single_transcript_heatmap(heatmap_data, transcript_names, tissue_display_names,
+def create_single_transcript_heatmap(heatmap_data, tpm_heatmap_data, ratio_heatmap_data,
+                                     transcript_names, tissue_display_names,
                                      gene_name, height, colorscale, data_type):
     """Create simple heatmap when only one transcript remains"""
     fig = go.Figure()
-    
+
+    # Customdata array for each cell with format [tpm_value, ratio_value] needed to show both expression types
+    customdata = np.zeros((len(tissue_display_names), len(transcript_names), 2), dtype=object)
+    for i in range(len(tissue_display_names)):
+        for j in range(len(transcript_names)):
+            customdata[i, j, 0] = tpm_heatmap_data[i, j]   
+            customdata[i, j, 1] = ratio_heatmap_data[i, j]  
+
     fig.add_trace(go.Heatmap(
         z=heatmap_data,
         x=transcript_names,
         y=tissue_display_names,
         colorscale=colorscale,
         colorbar=dict(title=data_type),
-        hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>'
+        customdata=customdata,
+        hovertemplate='<b>Transcript:</b> %{x}<br><b>Tissue:</b> %{y}<br><b>TPM:</b> %{customdata[0]:.2f}<br><b>Ratio:</b> %{customdata[1]:.2f}<extra></extra>'
     ))
-    
+
     fig.update_layout(
         title=f"{gene_name} Expression for Transcript {transcript_names[0]}",
         height=height,
@@ -1042,7 +1084,7 @@ def create_single_transcript_heatmap(heatmap_data, transcript_names, tissue_disp
         yaxis=dict(title="Tissue"),
         margin=dict(l=100, r=50, t=80, b=100)
     )
-    
+
     return fig
 
 

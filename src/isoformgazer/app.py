@@ -2090,15 +2090,17 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
                           show_labels, collapse_mode, filtered_transcript_ids, 
                           plots_dropdown_value, clustergram_height, distance_metric, linkage_method):
     """Update isoform clustergram with junction clustergram heights"""
-    if use_ratio_data: 
-        current_data = load_expression_data(db_path=db_path, 
-                                            gene_name=selected_gene, 
-                                            data_type='ratio')
+    ratio_data = load_expression_data(db_path=db_path, 
+                                      gene_name=selected_gene, 
+                                      data_type='ratio')
+    
+    tpm_data = load_expression_data(db_path=db_path, 
+                                    gene_name=selected_gene, 
+                                    data_type='tpm')
+    
+    if use_ratio_data:
         data_type = "Ratio"
     else: 
-        current_data = load_expression_data(db_path=db_path, 
-                                            gene_name=selected_gene, 
-                                            data_type='tpm')
         data_type = "TPM"
 
     if plots_dropdown_value == 'event-level':
@@ -2107,12 +2109,22 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
     heatmap_height = clustergram_height
     
     try:
-        filtered_data = current_data.copy()
+        if data_type == "Ratio":
+            current_data = ratio_data
+        else: 
+            current_data = tpm_data
+
         filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
-        filtered_data = current_data[current_data['id'].isin(filtered_ids)] if filtered_ids else current_data
+
+        filtered_ratio_data = ratio_data.copy()
+        filtered_tpm_data = tpm_data.copy()
+
+        filtered_ratio_data = filtered_ratio_data[filtered_ratio_data['id'].isin(filtered_ids)] if filtered_ids else filtered_ratio_data
+        filtered_tpm_data = filtered_tpm_data[filtered_tpm_data['id'].isin(filtered_ids)] if filtered_ids else filtered_tpm_data
         
         fig = create_isoform_expression_clustergram(
-            tpm_data=filtered_data,
+            tpm_data=filtered_tpm_data,
+            ratio_data=filtered_ratio_data,
             gene_name=selected_gene,
             height=heatmap_height,  
             colorscale=colorscale,
