@@ -29,7 +29,8 @@ from junction_utils import (
 from isoform_utils import (
     load_expression_data, process_transcript_structure, create_transcript_structure_plot, 
     create_isoform_expression_clustergram, create_empty_isoform_message, 
-    calculate_unified_plot_height, calculate_single_isoform_hash
+    calculate_unified_plot_height, calculate_single_isoform_hash, 
+    parse_gtf_and_calculate_hashes, generate_annotated_gtf
 )
 
 RANDOM_SEED = 18
@@ -853,23 +854,27 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                 html.Div(id='hash-result')
                             ]),
 
-                            #html.H3('GTF File Upload', className='summary-section-header'),
-                            #html.Div(className='app-controls-block', children=[
-                            #    dcc.Upload(
-                            #        id='gtf-upload',
-                            #        children=html.Div([
-                            #            'Drag and drop or',
-                            #            html.Br(),
-                            #            html.A('select GTF file')
-                            #        ]),
-                            #        multiple=False
-                            #    ),
-                            #    html.Div(id='gtf-upload-status', className='upload-status'),
-                            #    html.Div(id='gtf-download-section', style={'display': 'none'}, children=[
-                            #        html.Button('Download Hash Results', id='download-hashes-btn', className='control-button'),
-                            #        dcc.Download(id='download-hashes')
-                            #    ])
-                            #])
+                            html.H3('GTF File Upload', className='summary-section-header'),
+                            html.Div(className='app-controls-block', children=[
+                                dcc.Upload(
+                                    id='gtf-upload',
+                                    children=html.Div([
+                                        'Drag and drop or',
+                                        html.Br(),
+                                        html.A('select GTF file')
+                                    ]),
+                                    multiple=False
+                                ),
+                                html.Div(id='gtf-upload-status', className='upload-status'),
+                                html.Div(id='gtf-download-section', style={'display': 'none'}, children=[
+                                    html.Div(style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}, children=[
+                                        html.Button('Download Annotated GTF', id='download-annotated-gtf-btn', className='control-button'),
+                                        html.Button('Download Hash Results', id='download-hashes-btn', className='control-button')
+                                    ]),
+                                    dcc.Download(id='download-hashes'),
+                                    dcc.Download(id='download-annotated-gtf')
+                                ])
+                            ])
                         ])
                     ])
                 ]),
@@ -2376,7 +2381,8 @@ def calculate_hash_from_coordinates(n_clicks, input_mode, starts_input, second_i
             if any(size <= 0 for size in blocksizes):
                 return html.Div([
                     html.P("Error: End positions must be greater than start positions",
-                           style={'color': 'red', 'font-weight': 'bold'})
+                           style={'color': 'red', 'font-weight': 'bold', 
+                                  'padding-top': '10px'})
                 ])
         else:
             # second_values are already block sizes
@@ -2423,31 +2429,38 @@ def handle_gtf_upload(contents, filename):
         return html.Div("No file uploaded", className='app-controls-desc'), {'display': 'none'}, []
 
     try:
-        # Parse the uploaded file
         content_type, content_string = contents.split(',')
         decoded = base64.b64decode(content_string)
         gtf_content = decoded.decode('utf-8')
 
-        # Calculate hashes for all isoforms
-        from isoform_utils import parse_gtf_and_calculate_hashes
         hash_results = parse_gtf_and_calculate_hashes(gtf_content)
 
         if not hash_results:
             return (
                 html.Div([
                     html.P(f"File '{filename}' uploaded successfully", style={'color': 'green'}),
-                    html.P("Warning: No multi-exon transcripts found in GTF file", style={'color': 'orange'})
+                    html.P("Warning: No valid transcripts found in GTF file. " \
+                    "Please refer to the documentation to ensure your GTF adheres to the required format.", style={'color': 'orange'})
                 ]),
                 {'display': 'none'},
                 []
             )
 
+        annotated_gtf = generate_annotated_gtf(gtf_content)
+        encoded_gtf = base64.b64encode(annotated_gtf.encode('utf-8')).decode('utf-8')
+
         upload_status = html.Div([
-            html.P(f"File '{filename}' processed successfully", style={'color': 'green', 'font-weight': 'bold'}),
-            html.P(f"Found {len(hash_results)} multi-exon transcripts")
+            html.P(f"Loaded '{filename}' successfully.", style={'color': 'green', 'font-weight': 'bold'}),
+            html.P(f"Number of transcripts processed: {len(hash_results)}")
         ])
 
-        return upload_status, {'display': 'block'}, hash_results
+        combined_data = {
+            'hash_results': hash_results,
+            'annotated_gtf': encoded_gtf,
+            'original_filename': filename
+        }
+
+        return upload_status, {'display': 'block'}, combined_data
 
     except Exception as e:
         return (
@@ -2465,20 +2478,51 @@ def handle_gtf_upload(contents, filename):
     [dash.dependencies.Input('download-hashes-btn', 'n_clicks')],
     [dash.dependencies.State('gtf-hash-results-store', 'data')]
 )
-def download_hash_results(download_clicks, hash_results):
+def download_hash_results(download_clicks, stored_data):
     """Handle download of hash results"""
-    if not download_clicks or not hash_results:
+    if not download_clicks or not stored_data:
         return dash.no_update
 
     try:
-        # Create TSV content
+        if isinstance(stored_data, dict) and 'hash_results' in stored_data:
+            hash_results = stored_data['hash_results']
+        else:
+            hash_results = stored_data  # backwards compatibility
+
         lines = ["transcript_id\tgene_id\thash_id\texon_count"]
         for result in hash_results:
             lines.append(f"{result['transcript_id']}\t{result['gene_id']}\t{result['hash_id']}\t{result['exon_count']}")
 
         download_content = "\n".join(lines)
 
-        return dict(content=download_content, filename="isoform_hashes.txt")
+        return dict(content=download_content, filename="isoform_hashes.tsv")
+
+    except Exception as e:
+        return dash.no_update
+
+
+@app.callback(
+    dash.dependencies.Output('download-annotated-gtf', 'data'),
+    [dash.dependencies.Input('download-annotated-gtf-btn', 'n_clicks')],
+    [dash.dependencies.State('gtf-hash-results-store', 'data')]
+)
+def download_annotated_gtf(download_clicks, stored_data):
+    """Handle download of annotated GTF file"""
+    if not download_clicks or not stored_data:
+        return dash.no_update
+
+    try:
+        if isinstance(stored_data, dict) and 'annotated_gtf' in stored_data:
+            encoded_gtf = stored_data['annotated_gtf']
+            original_filename = stored_data.get('original_filename', 'annotated.gtf')
+
+            gtf_content = base64.b64decode(encoded_gtf).decode('utf-8')
+            base_name = original_filename.rsplit('.', 1)[0] if '.' in original_filename else original_filename
+            output_filename = f"{base_name}_annotated.gtf"
+
+            return dict(content=gtf_content, filename=output_filename)
+        else:
+            return dash.no_update
 
     except Exception as e:
         return dash.no_update

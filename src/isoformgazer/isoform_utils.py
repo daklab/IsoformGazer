@@ -1438,6 +1438,8 @@ def calculate_single_isoform_hash(tstarts: list, blocksizes: list) -> str:
 def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
     """
     Parse GTF content and calculate hash IDs for all isoforms.
+    Uses sequential parsing logic, i.e. assumes that exons contained 
+    within a transcript follow that transcript feature line.
 
     Parameters:
         gtf_content (str): Content of GTF file as string
@@ -1446,9 +1448,12 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
         list: List of dictionaries with transcript_id, gene_id, and hash_id
     """
     results = []
-    transcripts = {}
+    transcripts = []
+    current_transcript = None
 
-    # Parse GTF content line by line
+    ###################################################################################
+    # First pass: sequentially parse and group exons with their preceding transcript
+    ###################################################################################
     for line in gtf_content.strip().split('\n'):
         if line.startswith('#') or not line.strip():
             continue
@@ -1458,73 +1463,244 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
             continue
 
         feature_type = fields[2]
-        if feature_type != 'exon':
+        if feature_type not in ['transcript', 'exon']:
             continue
 
         start = int(fields[3])
         end = int(fields[4])
         attributes = fields[8]
 
-        # Parse attributes to get transcript_id and gene_id
-        transcript_id = None
+        # can get gene_id from attributes if available
         gene_id = None
-
         for attr in attributes.split(';'):
             attr = attr.strip()
-            if attr.startswith('transcript_id'):
-                transcript_id = attr.split('"')[1]
-            elif attr.startswith('gene_id'):
+            if attr.startswith('gene_id'):
                 gene_id = attr.split('"')[1]
+                break
 
-        if not transcript_id:
+        if not gene_id:
             continue
 
-        # Group exons by transcript
-        if transcript_id not in transcripts:
-            transcripts[transcript_id] = {
+        if feature_type == 'transcript':
+            current_transcript = {
                 'gene_id': gene_id,
-                'exons': []
+                'transcript_start': start,
+                'transcript_end': end,
+                'exons': [],
+                'transcript_index': len(transcripts)
             }
+            transcripts.append(current_transcript)
 
-        transcripts[transcript_id]['exons'].append((start, end))
+        # For exon features, add to current transcript IF same gene
+        elif feature_type == 'exon' and current_transcript and current_transcript['gene_id'] == gene_id:
+            current_transcript['exons'].append((start, end))
 
-    # Calculate hashes for each transcript
-    for transcript_id, data in transcripts.items():
-        exons = sorted(data['exons'])  # Sort by start position
+    ###########################################################################
+    # Second pass: validate transcript coordinates and calculate hash IDs
+    ###########################################################################
+    for i, transcript_data in enumerate(transcripts):
+        exons = sorted(transcript_data['exons'])
 
-        if len(exons) < 2:  # Skip single-exon transcripts
-            continue
+        if len(exons) >= 2:
+            first_exon_start = exons[0][0]
+            last_exon_end = exons[-1][1]
 
-        tstarts = [exon[0] for exon in exons]
-        blocksizes = [exon[1] - exon[0] for exon in exons]
+            if (transcript_data['transcript_start'] == first_exon_start and
+                transcript_data['transcript_end'] == last_exon_end):
 
-        try:
-            hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
-            results.append({
-                'transcript_id': transcript_id,
-                'gene_id': data['gene_id'],
-                'hash_id': hash_id,
-                'exon_count': len(exons)
-            })
-        except Exception as e:
-            print(f"Error calculating hash for {transcript_id}: {e}")
-            continue
+                tstarts = [exon[0] for exon in exons]
+                blocksizes = [exon[1] - exon[0] for exon in exons]
+
+                try:
+                    hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
+                    # Use a synthetic transcript_id based on coordinates
+                    transcript_id = f"transcript_{transcript_data['transcript_start']}_{transcript_data['transcript_end']}"
+
+                    results.append({
+                        'transcript_id': transcript_id,
+                        'gene_id': transcript_data['gene_id'],
+                        'hash_id': hash_id,
+                        'exon_count': len(exons)
+                    })
+                except Exception as e:
+                    print(f"Error calculating hash for transcript {i}: {e}")
+                    continue
 
     return results
 
 
+def generate_annotated_gtf(gtf_content: str) -> str:
+    """
+    Generate annotated GTF with transcript_id (hash IDs) and exon_number added to attributes.
+
+    Assummptions: 
+    - Exons following a transcript line belong to that transcript, until the next transcript feature is processed.
+    - All transcript coordinates must align with first and last exon coordinates.
+
+    Parameters:
+        gtf_content (str): Original GTF content as string
+
+    Returns:
+        str: Annotated GTF content with transcript_id and exon_number attributes
+    """
+    lines = gtf_content.strip().split('\n')
+    annotated_lines = []
+    transcripts = []
+    current_transcript = None
+
+    ###################################################################################
+    # First pass: parse sequentially and group exons with their preceding transcript
+    ###################################################################################
+    for line in lines:
+        if line.startswith('#') or not line.strip():
+            continue
+
+        fields = line.split('\t')
+        if len(fields) < 9:
+            continue
+
+        feature_type = fields[2]
+        if feature_type not in ['transcript', 'exon']:
+            continue
+
+        start = int(fields[3])
+        end = int(fields[4])
+        attributes = fields[8]
+
+        gene_id = None
+        for attr in attributes.split(';'):
+            attr = attr.strip()
+            if attr.startswith('gene_id'):
+                gene_id = attr.split('"')[1]
+                break
+
+        if not gene_id:
+            continue
+
+        if feature_type == 'transcript':
+            current_transcript = {
+                'gene_id': gene_id,
+                'transcript_start': start,
+                'transcript_end': end,
+                'exons': [],
+                'hash_id': None
+            }
+            transcripts.append(current_transcript)
+
+        elif feature_type == 'exon' and current_transcript and current_transcript['gene_id'] == gene_id:
+            current_transcript['exons'].append({
+                'start': start,
+                'end': end
+            })
+
+    ############################################################################
+    # Second pass: validate transcript coordinates and calculate hash IDs
+    ############################################################################
+    for transcript_data in transcripts:
+        exons = sorted(transcript_data['exons'], key=lambda x: x['start'])
+
+        if len(exons) >= 2:
+            first_exon_start = exons[0]['start']
+            last_exon_end = exons[-1]['end']
+
+            if (transcript_data['transcript_start'] == first_exon_start and
+                transcript_data['transcript_end'] == last_exon_end):
+
+                tstarts = [exon['start'] for exon in exons]
+                blocksizes = [exon['end'] - exon['start'] for exon in exons]
+
+                try:
+                    hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
+                    transcript_data['hash_id'] = hash_id
+                except Exception as e:
+                    print(f"Error calculating hash for transcript: {e}")
+                    continue
+
+    ############################################################################
+    # Third pass: generate annotated output
+    ############################################################################
+    current_transcript_index = -1
+
+    for line in lines:
+        if line.startswith('#') or not line.strip():
+            annotated_lines.append(line)
+            continue
+
+        fields = line.split('\t')
+        if len(fields) < 9:
+            annotated_lines.append(line)
+            continue
+
+        feature_type = fields[2]
+        if feature_type not in ['transcript', 'exon']:
+            annotated_lines.append(line)
+            continue
+
+        start = int(fields[3])
+        end = int(fields[4])
+        attributes = fields[8].rstrip()
+
+        gene_id = None
+        for attr in attributes.split(';'):
+            attr = attr.strip()
+            if attr.startswith('gene_id'):
+                gene_id = attr.split('"')[1]
+                break
+
+        if not gene_id:
+            annotated_lines.append(line)
+            continue
+
+        if feature_type == 'transcript':
+            current_transcript_index += 1
+
+        if (current_transcript_index >= 0 and
+            current_transcript_index < len(transcripts) and
+            transcripts[current_transcript_index]['hash_id'] and
+            transcripts[current_transcript_index]['gene_id'] == gene_id):
+
+            transcript_data = transcripts[current_transcript_index]
+            hash_id = transcript_data['hash_id']
+
+            if not attributes.endswith(';'):
+                attributes += ';'
+            attributes += f' transcript_id "{hash_id}";'
+
+            # Add exon_number for exon features
+            if feature_type == 'exon':
+                exons = sorted(transcript_data['exons'], key=lambda x: x['start'])
+                exon_number = None
+                for i, exon in enumerate(exons):
+                    if exon['start'] == start and exon['end'] == end:
+                        exon_number = i + 1
+                        break
+
+                if exon_number:
+                    attributes += f' exon_number "{exon_number}";'
+
+            # Reconstruct full line for gtf final output
+            fields[8] = attributes
+            annotated_lines.append('\t'.join(fields))
+        else:
+            annotated_lines.append(line)
+
+    return '\n'.join(annotated_lines)
+
+
 def test_psl_hash_algorithm():
     """
-    Test case to match actual PSL hash format from the example:
-    PSL data: blocksizes: 2445,1632  tstarts: 58351029,58353713
+    Test case to match actual PSL hash format.
+    
+    example PSL data: 
+    - blocksizes: 2445,1632  
+    - tstarts: 58351029,58353713
+
     Expected hash: s05ff6e0b43331bfc:e2111d58dcc6fc4ae
     """
-    # From PSL example
     tstarts = [58351029, 58353713]
     blocksizes = [2445, 1632]
     expected_hash = "s05ff6e0b43331bfc:e2111d58dcc6fc4ae"
 
-    # Calculate tends (exon end positions)
     tends = [s + l for s, l in zip(tstarts, blocksizes)]  # [58353474, 58355345]
 
     # Extract junction coordinates (skip first start and last end)
@@ -1541,18 +1717,23 @@ def test_psl_hash_algorithm():
     try:
         current_hash = calculate_single_isoform_hash(tstarts, blocksizes)
         print(f"Current algorithm result: {current_hash}")
+
         matches = current_hash == expected_hash
         print(f"Matches expected: {matches}")
+
         if matches:
-            print("✓ SUCCESS: Hash algorithm is correct!")
+            print("SUCCESS: Hash algorithm is correct!")
         else:
-            print("✗ MISMATCH: Hash algorithm needs adjustment")
+            print("ERROR: Hash algorithm needs adjustment!")
+
     except Exception as e:
         print(f"Current algorithm error: {e}")
 
     print(f"\nJunction coordinate strings:")
+    
     s_string = ",".join(map(str, collapse_tstarts))
     e_string = ",".join(map(str, collapse_tends))
+
     print(f"Start string: '{s_string}'")
     print(f"End string: '{e_string}'")
 
