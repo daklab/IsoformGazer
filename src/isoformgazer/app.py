@@ -683,9 +683,7 @@ right_data_table = dash_table.DataTable(
 ###################################################################
 # MAIN LAYOUT
 ###################################################################
-app.layout = html.Div(style={'height': '100vh', 'width': '100%', 
-                             'display': 'flex', 'flexDirection': 'column'}, 
-                             children=[
+app.layout = html.Div(className='app-layout', children=[
     #####################################
     # Initial loading screen overlay!
     #####################################
@@ -699,7 +697,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             id='progress-circle',
                             figure=create_loading_progress_figure(),
                             config={'displayModeBar': False},
-                            style={'width': '100%', 'height': '100%'}
+                            className='progress-graph'
                         )
                     ])
                 ])
@@ -729,12 +727,8 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
         #####################################
         # Control panel (left sidebar)
         #####################################
-        html.Div(id='control-tabs', className='control-tabs', style={
-            'width': '340px', 
-            'backgroundColor': 'white', 
-            'borderRight': '1px solid #e1e1e1'
-        }, children=[
-            dcc.Tabs(id='tabs', value='tab-1', style={'height': '100%'}, children=[
+        html.Div(id='control-tabs', className='control-tabs control-tabs-container', children=[
+            dcc.Tabs(id='tabs', value='tab-1', className='tabs-full-height', children=[
                 dcc.Tab(label='About', className='tab-1', value='tab-1', children=[
                     html.Div(className='control-tab', children=[
                         html.Div(className='about-logo-header-container', children=[
@@ -744,7 +738,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         ]),
                         html.Div(className='about-content', children=[
                             html.P([
-                                'Isoform Gazer provides a unified view of RNA splicing across both single-cell junction usage and long-read isoform data in GENCODEv46 (GRCh38.p14).'
+                                'Isoform Gazer provides a unified view of RNA splicing across both short-read junction-level single-cell data and long-read transcript-level isoform data in GENCODEv46 (GRCh38.p14).'
                             ]),
                             html.P([
                                 'Use the controls in the ',
@@ -866,8 +860,8 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                     multiple=False
                                 ),
                                 html.Div(id='gtf-upload-status', className='upload-status'),
-                                html.Div(id='gtf-download-section', style={'display': 'none'}, children=[
-                                    html.Div(style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'}, children=[
+                                html.Div(id='gtf-download-section', className='hidden', children=[
+                                    html.Div(className='download-buttons-container', children=[
                                         html.Button('Download Annotated GTF', id='download-annotated-gtf-btn', className='control-button'),
                                         html.Button('Download Hash Results', id='download-hashes-btn', className='control-button')
                                     ]),
@@ -918,29 +912,42 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Exon Color'),
-                            html.Div(style={'border': 'none', 'outline': 'none', 'boxShadow': 'none'}, children=[
+                            html.Div(className='color-picker-container', children=[
                                 daq.ColorPicker(
                                     id='exon-color-picker',
                                     value={'hex': '#2E86C1'},
                                     size=240,
                                     theme=None,
-                                    style={'border': 'none', 'outline': 'none', 'boxShadow': 'none'}
+                                    className='color-picker'
                                 )
                             ]),
                             html.Div(className='app-controls-desc', children='Customize default color of exons in the structure plots')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Junction Color'),
-                            html.Div(style={'border': 'none', 'outline': 'none', 'boxShadow': 'none'}, children=[
+                            html.Div(className='color-picker-container', children=[
                                 daq.ColorPicker(
                                     id='junction-color-picker',
                                     value={'hex': '#85929E'},
                                     size=240,
                                     theme=None,
-                                    style={'border': 'none', 'outline': 'none', 'boxShadow': 'none'}
+                                    className='color-picker'
                                 )
                             ]),
                             html.Div(className='app-controls-desc', children='Customize default color of junctions in the ATSE structure plot')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Hide Junctions', className='app-controls-name toggle-switch-label-wide'),
+                                daq.ToggleSwitch(
+                                    id='hide-junctions-toggle',
+                                    value=False,  # False = show junctions, True = hide junctions (show transcript plot)
+                                    label={'label': 'Show / Hide', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='left',
+                                    className='toggle-switch-inline'
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Toggle to hide junctions from the structure plot and show transcript structure instead')
                         ]),
 
                         #####################################
@@ -961,23 +968,21 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                             html.Div(className='app-controls-desc', children='Adjust the height of the clustergrams')
                         ]),
                         html.Div(className='app-controls-block', children=[
-                            html.Div([
-                                html.Div('Isoform Clustergram Unit', className='app-controls-name', 
-                                        style={'display': 'inline-block', 'marginRight': '15px'}),
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Isoform Clustergram Unit', className='app-controls-name toggle-switch-label-narrow'),
                                 daq.ToggleSwitch(
                                     id='isoform-data-type-switch',
                                     value=False,  # False = TPM, True = Ratio
                                     label={'label': 'TPM / Ratio', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='right',
-                                    style={'display': 'inline-block'}
+                                    className='toggle-switch-inline'
                                 )
-                            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+                            ]),
                             html.Div(className='app-controls-desc', children='Toggle whether isoform clustergram shows TPM values or ratio values across all tissues')
                         ]),
                         html.Div(className='app-controls-block', children=[
-                            html.Div([
-                                html.Div('Isoform Clustermap Sample Averaging', className='app-controls-name', 
-                                        style={'display': 'inline-block', 'marginRight': '15px'}),
+                            html.Div(className='radio-items-row', children=[
+                                html.Div('Isoform Clustermap Sample Averaging', className='app-controls-name radio-items-label'),
                                 dcc.RadioItems(
                                     id='collapse-tissue-toggle',
                                     options=[
@@ -986,40 +991,37 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                         {'label': 'None', 'value': 'all'}
                                     ],
                                     value='replicate',
-                                    labelStyle={'display': 'inline-block', 'marginRight': '5px'},
-                                    style={'display': 'inline-block', 'fontSize': '12px', 'marginLeft': '-10px'}
+                                    className='radio-items-inline'
                                 )
-                            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+                            ]),
                             html.Div(className='app-controls-desc', children='Select whether isoform clustergram samples are averaged across replicates, '
                             'averaged across tissues, or not averaged (shows all samples). Averaging across replicates is recommended to reduce technical ' \
                             'noise while preserving true biological variation')
                         ]),
                         html.Div(className='app-controls-block', children=[
-                            html.Div([
-                                html.Div('Tissue Labels', className='app-controls-name', 
-                                        style={'display': 'inline-block', 'marginRight': '55px'}),
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Tissue Labels', className='app-controls-name toggle-switch-label-medium'),
                                 daq.ToggleSwitch(
                                     id='show-labels-toggle',
                                     value=False,
                                     label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
-                                    style={'display': 'inline-block'}
+                                    className='toggle-switch-inline'
                                 )
-                            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+                            ]),
                             html.Div(className='app-controls-desc', children='Toggle tissue labels visibility on isoform clustergram')
                         ]),
                         html.Div(className='app-controls-block', children=[
-                            html.Div([
-                                html.Div('Cell Type Labels', className='app-controls-name', 
-                                        style={'display': 'inline-block', 'marginRight': '30px'}),
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Cell Type Labels', className='app-controls-name toggle-switch-label-narrow-plus'),
                                 daq.ToggleSwitch(
                                     id='show-celltype-labels-toggle',
                                     value=True,
                                     label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
-                                    style={'display': 'inline-block'}
+                                    className='toggle-switch-inline'
                                 )
-                            ], style={'display': 'flex', 'alignItems': 'center', 'marginBottom': '10px'}),
+                            ]),
                             html.Div(className='app-controls-desc', children='Toggle cell type labels visibility on junction clustergram')
                         ]),
                         html.Div(className='app-controls-block', children=[
@@ -1088,27 +1090,71 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
         # Main content section
         #####################################
         html.Div(className='main-content', children=[
-            html.Div(id='panels-container', className='panels-container', children=[
+            #####################################
+            # Panels Wrapper - Contains both top and bottom panels
+            #####################################
+            html.Div(className='panels-wrapper', children=[
+                #####################################
+                # Top Structure Plot Panel (Full Width)
+                #####################################
+                html.Div(className='top-panel-container', children=[
+                    html.Div(className='top-panel-with-header', children=[
+                        html.H2("Transcripts and Junctions Structure Plot", className='top-panel-header'),
+                        html.Div(id='top-panel-body', className='top-panel', children=[
+                            html.Div(className='graph-wrapper', children=[
+                                # ATSE/Junction Structure Plot
+                                html.Div(id='top-junction-structure-plot-container', className='atse-container', children=[
+                                    html.Div(className='loading-container plot-container-full-height', id='top-structure-plot-container-style', children=[
+                                        dcc.Loading(
+                                            id="loading-top-structure-plot",
+                                            type="default",
+                                            color='#EDAE49',
+                                            delay_hide=500,
+                                            children=[
+                                                dcc.Graph(
+                                                    id='atse-map',
+                                                    figure=create_empty_atse_message("Select a gene to view splice junctions and exons"),
+                                                    config={
+                                                        'responsive': True,
+                                                        'displayModeBar': True,
+                                                        'scrollZoom': True
+                                                    },
+                                                    className='graph-full-size'
+                                                )
+                                            ]
+                                        ),
+                                        html.Div(id="atse-map-loading-message", className="custom-loading-message")
+                                    ])
+                                ]),
+                                # Transcript Structure Plot (hidden by default)
+                                html.Div(id='top-transcript-structure-plot-container', className='barplot-container hidden', children=[
+                                    html.Div(className='loading-container plot-container-full-height', children=[
+                                        dcc.Loading(
+                                            id="loading-top-transcript-plot",
+                                            type="default",
+                                            color='#EDAE49',
+                                            delay_show=500,
+                                            delay_hide=200,
+                                            children=[dcc.Graph(id='top-barplot')]
+                                        ),
+                                        html.Div(id="top-barplot-loading-message", className="custom-loading-message")
+                                    ])
+                                ])
+                            ])
+                        ])
+                    ])
+                ]),
+                #####################################
+                # Bottom Panels Container (Original Side-by-Side Layout)
+                #####################################
+                html.Div(id='panels-container', className='panels-container', children=[
                 #####################################
                 # Data Panel 1: Isoform Data
                 #####################################
                 html.Div(className='panel-with-header', children=[
-                    html.H2("ENCODE4 Bulk RNA-seq Long-Read Data", className='panel-header'),
+                    html.H2("ENCODE4 BULK RNA-SEQ LONG-READ DATA", className='panel-header'),
                     html.Div(id='left-panel', className='panel', children=[
                         html.Div(className='graph-wrapper', children=[
-                        html.Div(id='isoform-event-plot-container', className='barplot-container', children=[
-                            html.Div(className='loading-container', children=[
-                                dcc.Loading(
-                                    id="loading-transcript-plot",
-                                    type="default",
-                                    color='#EDAE49',
-                                    delay_show=500,
-                                    delay_hide=200,
-                                    children=[dcc.Graph(id='barplot1')]
-                                ),
-                                html.Div(id="barplot1-loading-message", className="custom-loading-message")
-                            ])
-                        ]),
                         html.Div(id='isoform-clustergram-container', className='heatmap-container', children=[
                             html.Div(className='loading-container', children=[
                                 dcc.Loading(
@@ -1119,7 +1165,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                     delay_hide=200,
                                     children=[dcc.Graph(
                                         id='heatmap1',
-                                        style={'width': '100%', 'height': '100%'},
+                                        className='graph-full-size',
                                         config={'responsive': True}
                                     )]
                                 ),
@@ -1129,37 +1175,14 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                     ])
                 ]),
                 ]),
-                
+
                 #####################################
                 # Data Panel 2: Junction Data
                 #####################################
                 html.Div(className='panel-with-header', children=[
-                    html.H2("Tabula Sapiens 2.0 Pseudobulked Smart-seq2 Single-cell and Allen Brain Single Nuclei for Brain Data", className='panel-header'),
+                    html.H2("TABULA SAPIENS 2.0 PSEUDOBULKED SMART-SEQ2 SINGLE-CELL AND ALLEN BRAIN SINGLE NUCLEI FOR BRAIN DATA", className='panel-header'),
                     html.Div(id='right-panel', className='panel', children=[
                         html.Div(className='graph-wrapper', children=[
-                        html.Div(id='junction-event-plot-container', className='atse-container', children=[
-                            html.Div(className='loading-container', children=[
-                                dcc.Loading(
-                                    id="loading-atse-plot",
-                                    type="default",
-                                    color='#EDAE49',
-                                    delay_hide=500,
-                                    children=[
-                                        dcc.Graph(
-                                            id='atse-map',
-                                            figure=create_empty_atse_message("Select a gene to view splice junctions and exons"),
-                                            config={
-                                                'responsive': True, 
-                                                'displayModeBar': True,
-                                                'scrollZoom': True
-                                            },
-                                            style={'height': '100%', 'width': '100%'}
-                                        )
-                                    ]
-                                ),
-                                html.Div(id="atse-map-loading-message", className="custom-loading-message")
-                            ], style={'height': '25%', 'min-height': '200px', 'margin-bottom': '15px'})
-                        ]),
                         html.Div(id='junction-clustergram-container', className='heatmap-container', children=[
                             html.Div(className='loading-container', children=[
                                 dcc.Loading(
@@ -1179,7 +1202,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                                                 )
                                             },
                                             config={'responsive': True},
-                                            style={'height': '100%', 'width': '100%'}
+                                            className='graph-full-size'
                                         )
                                     ]
                                 ),
@@ -1189,6 +1212,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                     ])
                 ]),
                 ])
+            ])
             ]),
             #####################################
             # Master Tables Section (Outside Panels)
@@ -1208,8 +1232,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                     # Isoform table filter error popup
                     html.Div(
                         id='left-table-error-popup',
-                        className='filter-error-popup',
-                        style={'display': 'none'},
+                        className='filter-error-popup hidden',
                         children=[]
                     ),
                     left_data_table
@@ -1228,8 +1251,7 @@ app.layout = html.Div(style={'height': '100vh', 'width': '100%',
                     # Junction table filter error popup
                     html.Div(
                         id='right-table-error-popup',
-                        className='filter-error-popup',
-                        style={'display': 'none'},
+                        className='filter-error-popup hidden',
                         children=[]
                     ),
                     right_data_table
@@ -1638,7 +1660,7 @@ def format_protein_category(val):
 
     # Create a div with multiple lines for multiple categories
     return html.Div([
-        html.Div(cat, style={'margin': '0', 'padding': '0', 'lineHeight': '1.4'})
+        html.Div(cat, className='summary-line')
         for cat in categories
     ], className='summary-value summary-multiline')
 
@@ -1878,9 +1900,7 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
 ######################################################################
 @app.callback(
     [
-        dash.dependencies.Output('isoform-event-plot-container', 'style'),
         dash.dependencies.Output('isoform-clustergram-container', 'style'),
-        dash.dependencies.Output('junction-event-plot-container', 'style'),
         dash.dependencies.Output('junction-clustergram-container', 'style'),
         dash.dependencies.Output('panels-container', 'className'),
         dash.dependencies.Output('left-panel', 'className'),
@@ -1893,28 +1913,28 @@ def toggle_plot_visibility(overview_value):
     show_full = {'display': 'block', 'height': '100%', 'flex': '1 1 auto'}
     hide = {'display': 'none', 'height': '0', 'flex': '0 0 0'}
     show_normal = {'display': 'block', 'height': '100%'}
-    
+
     panels_class = 'panels-container'
     left_panel_class = 'panel'
     right_panel_class = 'panel'
-    
+
     if overview_value == 'both':
-        return show_normal, show_normal, show_normal, show_normal, panels_class, left_panel_class, right_panel_class
-    
+        return show_normal, show_normal, panels_class, left_panel_class, right_panel_class
+
     # Show only structure plots, hide clustergrams
     elif overview_value == 'event-level':
         left_panel_class = 'panel full-panel-event'
         right_panel_class = 'panel full-panel-event'
-        return show_full, hide, show_full, hide, panels_class, left_panel_class, right_panel_class
-    
+        return hide, hide, panels_class, left_panel_class, right_panel_class
+
     # Show only clustergrams, hide structure plots
     elif overview_value == 'clustergram':
         left_panel_class = 'panel full-panel-clustergram'
         right_panel_class = 'panel full-panel-clustergram'
-        return hide, show_full, hide, show_full, panels_class, left_panel_class, right_panel_class
-    
+        return show_full, show_full, panels_class, left_panel_class, right_panel_class
+
     else:
-        return show_normal, show_normal, show_normal, show_normal, panels_class, left_panel_class, right_panel_class
+        return show_normal, show_normal, panels_class, left_panel_class, right_panel_class
 
 
 ######################################################################
@@ -1923,9 +1943,7 @@ def toggle_plot_visibility(overview_value):
 @app.callback(
     [dash.dependencies.Output('bar-height-slider', 'value'),
      dash.dependencies.Output('left-panel', 'style', allow_duplicate=True),
-     dash.dependencies.Output('right-panel', 'style', allow_duplicate=True),
-     dash.dependencies.Output('isoform-event-plot-container', 'style', allow_duplicate=True),
-     dash.dependencies.Output('junction-event-plot-container', 'style', allow_duplicate=True)],
+     dash.dependencies.Output('right-panel', 'style', allow_duplicate=True)],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('filtered-junction-store', 'data')],
@@ -1936,9 +1954,8 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
     """Calculate unified height for both plots and update slider and panels when gene changes"""
     if not selected_gene:
         # Return current values if no gene selected
-        panel_style = {'height': '1000px', 'minHeight': '1000px'}
-        plot_container_style = {'height': f'{current_height}px', 'minHeight': f'{max(current_height - 50, 500)}px', 'maxHeight': f'{current_height + 100}px'}
-        return current_height, panel_style, panel_style, plot_container_style, plot_container_style
+        panel_style = {'height': '760px', 'minHeight': '760px'}
+        return current_height, panel_style, panel_style
     
     try:
         filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
@@ -1951,9 +1968,9 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
         if abs(calculated_height - current_height) < 100:
             calculated_height = current_height
         
-        # Calculate panel heights
-        base_panel_height = 710 + calculated_height + 10
-        panel_height = max(base_panel_height, 1000)
+        # Calculate panel heights (only clustergrams now, no transcript plot in panels)
+        base_panel_height = 710 + 50  # clustergram height + margins
+        panel_height = max(base_panel_height, 760)
         
         panel_style = {
             'height': f'{panel_height}px',
@@ -1966,16 +1983,15 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
             'maxHeight': f'{calculated_height + 100}px'
         }
         
-        return calculated_height, panel_style, panel_style, plot_container_style, plot_container_style
+        return calculated_height, panel_style, panel_style
         
     except Exception as e:
         print(f"Error calculating dynamic height: {e}")
 
         # Return current values on error to avoid breaking layout
-        panel_style = {'height': '1000px', 'minHeight': '1000px'}
-        plot_container_style = {'height': f'{current_height}px', 'minHeight': f'{max(current_height - 50, 500)}px', 'maxHeight': f'{current_height + 100}px'}
+        panel_style = {'height': '760px', 'minHeight': '760px'}
 
-        return current_height, panel_style, panel_style, plot_container_style, plot_container_style
+        return current_height, panel_style, panel_style
 
 
 ######################################################################
@@ -1983,33 +1999,23 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
 ######################################################################
 @app.callback(
     [dash.dependencies.Output('left-panel', 'style'),
-     dash.dependencies.Output('right-panel', 'style'),
-     dash.dependencies.Output('isoform-event-plot-container', 'style', allow_duplicate=True),
-     dash.dependencies.Output('junction-event-plot-container', 'style', allow_duplicate=True)],
+     dash.dependencies.Output('right-panel', 'style')],
     [dash.dependencies.Input('bar-height-slider', 'value')],
     prevent_initial_call=True
 )
 def adjust_panel_heights(plot_height):
-    """Dynamically adjust panel heights based on transcript plot height slider"""
-    
-    # Calculate proportional panel height based on plot height
-    # Base calculation: clustergram (710px) + plot height + margins/padding (~100px)
-    base_panel_height = 710 + plot_height + 10
-    panel_height = max(base_panel_height, 1000)
-    
+    """Panel heights are now fixed since only clustergrams remain in panels"""
+
+    # Fixed panel height for clustergrams only (no transcript plots in panels)
+    base_panel_height = 710 + 50  # clustergram height + margins
+    panel_height = max(base_panel_height, 760)
+
     panel_style = {
         'height': f'{panel_height}px',
         'minHeight': f'{panel_height}px'
     }
-    
-    # Update plot container heights to match slider value
-    plot_container_style = {
-        'height': f'{plot_height}px',
-        'minHeight': f'{max(plot_height - 50, 500)}px',
-        'maxHeight': f'{plot_height + 100}px'
-    }
-    
-    return panel_style, panel_style, plot_container_style, plot_container_style
+
+    return panel_style, panel_style
 
 
 ######################################################################
@@ -2156,71 +2162,6 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
 # STRUCTURE-LEVEL VISUALIZATIONS CALLBACKS
 ######################################################################
 @app.callback(
-    dash.dependencies.Output('barplot1', 'figure'),
-    [dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('bar-height-slider', 'value'),
-     dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('overview-dropdown', 'value'),
-     dash.dependencies.Input('exon-color-store', 'data'),
-     dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('left-table-validation-store', 'data')]
-)
-def update_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value, exon_color, filter_query, validation_data):
-    """Update transcript structure plot based on gene selection"""
-    # Check if current filter is valid: if not, don't update plot
-    if filter_query and validation_data and not validation_data.get('valid', True):
-        raise PreventUpdate
-    
-    if not selected_gene:
-        fig = go.Figure()
-        fig.add_annotation(
-            text="Select a gene to view transcript structure",
-            xref="paper", yref="paper", x=0.5, y=0.5,
-            xanchor='center', yanchor='middle', showarrow=False,
-            font=dict(size=16, color="gray")
-        )
-        fig.update_layout(
-            xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-            yaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-            plot_bgcolor='white', height=plot_height,
-            margin=dict(l=50, r=50, t=50, b=50)
-        )
-        return fig
-
-    try:
-        has_filter = bool(filter_query and filter_query.strip())
-        filtered_ids = [int(id) for id in filtered_ids] if (filtered_ids and has_filter) else []
-        
-        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-
-        if filtered_ids and not transcript_data.empty:
-            transcript_data = transcript_data[transcript_data['id'].isin(filtered_ids)]
-
-        if plots_dropdown_value == 'clustergram':
-            return empty_fig() 
-        
-        elif plots_dropdown_value == 'event-level': 
-            plot_height = min(1500, int(0.8 * 1500))
-        
-        show_labels = (plots_dropdown_value == 'event-level')
-        
-        fig = create_transcript_structure_plot(
-            db_path, 
-            transcript_data, 
-            selected_gene, 
-            height=plot_height,
-            show_y_labels=show_labels,
-            exon_color=exon_color
-        )
-        
-        return fig
-    
-    except Exception as e:
-        print(f"Error creating transcript plot: {e}")
-        return create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
-    
-
-@app.callback(
     dash.dependencies.Output('atse-map', 'figure'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
@@ -2237,10 +2178,10 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
-    
+
     has_isoform_filter = bool(isoform_filter_query and isoform_filter_query.strip())
     actual_filtered_transcript_ids = filtered_transcript_ids if has_isoform_filter else None
-    
+
     if not selected_gene:
         return create_empty_atse_message("Select a gene to view splice junctions and exons")
     
@@ -2278,16 +2219,219 @@ def empty_fig(height=200):
     return fig
 
 
+######################################################################
+# TOP PANEL TOGGLE AND STRUCTURE PLOT CALLBACKS
+######################################################################
 @app.callback(
-    dash.dependencies.Output('barplot1-loading-message', 'children'),
+    [dash.dependencies.Output('top-junction-structure-plot-container', 'style'),
+     dash.dependencies.Output('top-transcript-structure-plot-container', 'style')],
+    [dash.dependencies.Input('hide-junctions-toggle', 'value')]
+)
+def toggle_top_panel_plots(hide_junctions):
+    """Toggle between junction and transcript structure plots in top panel"""
+    if hide_junctions:
+        # Hide junctions, show transcript plot with height overrides to prevent CSS clipping
+        junction_style = {'display': 'none'}
+        transcript_style = {
+            'display': 'block',
+            'height': 'auto',
+            'minHeight': 'auto',
+            'maxHeight': 'none',
+            'margin-bottom': '15px'
+        }
+    else:
+        # Show junctions, hide transcript plot with height overrides
+        junction_style = {
+            'display': 'block',
+            'height': 'auto',
+            'minHeight': 'auto',
+            'maxHeight': 'none',
+            'margin-bottom': '15px'
+        }
+        transcript_style = {'display': 'none'}
+
+    return junction_style, transcript_style
+
+
+@app.callback(
+    dash.dependencies.Output('top-barplot', 'figure'),
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('bar-height-slider', 'value'),
+     dash.dependencies.Input('filtered-isoform-store', 'data'),
+     dash.dependencies.Input('overview-dropdown', 'value'),
+     dash.dependencies.Input('exon-color-store', 'data'),
+     dash.dependencies.Input('hide-junctions-toggle', 'value'),
+     dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('left-table-validation-store', 'data')]
+)
+def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value, exon_color, hide_junctions, filter_query, validation_data):
+    """Update transcript structure plot in top panel when toggle is activated"""
+    # Only update if junctions are hidden (transcript plot should be shown)
+    if not hide_junctions:
+        raise PreventUpdate
+
+    # Check if current filter is valid: if not, don't update plot
+    if filter_query and validation_data and not validation_data.get('valid', True):
+        raise PreventUpdate
+
+    if not selected_gene:
+        return create_empty_isoform_message("Select a gene to view transcript structures")
+
+    try:
+        # Convert filtered IDs to integers
+        filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
+
+        # Process transcript structure data
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+
+        # Let the transcript plot function handle its own height calculation when using default
+        # Only override when user manually sets a specific height
+        if plot_height == 600:
+            # Use None to let the function calculate its own dynamic height
+            height_to_use = None
+        else:
+            # Use the manually set height from the slider
+            height_to_use = plot_height
+
+        # Create transcript structure plot
+        fig = create_transcript_structure_plot(
+            db_path,
+            transcript_data,
+            gene_name=selected_gene,
+            height=height_to_use,
+            show_y_labels=True,
+            exon_color=exon_color
+        )
+        return fig
+
+    except Exception as e:
+        print(f"Error creating top transcript plot: {e}")
+        return create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
+
+
+@app.callback(
+    dash.dependencies.Output('top-barplot-loading-message', 'children'),
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data')]
 )
-def update_barplot1_loading_message(selected_gene, filtered_ids):
+def update_top_barplot_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
         selected_gene = 'A1BG-AS1'
     T = len(filtered_ids) if filtered_ids else 0
-    return f"Loading data for {T} isoform transcripts for {selected_gene}"
+    return f"Loading data for {T} transcript structures for {selected_gene}"
+
+
+######################################################################
+# TOP PANEL MANUAL HEIGHT ADJUSTMENT (Manual Slider Changes)
+######################################################################
+@app.callback(
+    [dash.dependencies.Output('top-structure-plot-container-style', 'style', allow_duplicate=True),
+     dash.dependencies.Output('top-panel-body', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('bar-height-slider', 'value')],
+    prevent_initial_call=True
+)
+def adjust_top_panel_height(plot_height):
+    """Manually adjust top panel height when user changes the height slider"""
+
+    # With auto-sizing containers, keep panel minimal and content-driven
+    container_style = {
+        'height': 'auto',
+        'min-height': '200px',
+        'margin-bottom': '15px'
+    }
+
+    panel_body_style = {
+        'width': '100%',
+        'background-color': 'white',
+        'padding': '15px 15px 30px 15px',  # minimal bottom padding
+        'border-radius': '0',
+        'min-height': 'auto',
+        'height': 'auto',
+        'color': '#1C1C2C',
+        'transition': 'height 0.3s ease, min-height 0.3s ease',
+        'box-sizing': 'border-box'
+    }
+
+    return container_style, panel_body_style
+
+
+@app.callback(
+    [dash.dependencies.Output('top-structure-plot-container-style', 'style'),
+     dash.dependencies.Output('top-panel-body', 'style')],
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('filtered-isoform-store', 'data'),
+     dash.dependencies.Input('filtered-junction-store', 'data'),
+     dash.dependencies.Input('hide-junctions-toggle', 'value')],
+    [dash.dependencies.State('bar-height-slider', 'value')]
+)
+def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_junction_ids, hide_junctions, current_height):
+    """Calculate unified height for top panel using the same system as old structure plots"""
+    if not selected_gene:
+        container_style = {'height': '100%', 'min-height': '400px', 'margin-bottom': '15px'}
+        panel_body_style = {
+            'width': '100%',
+            'background-color': 'white',
+            'padding': '15px 15px 165px 15px',  # extra bottom padding for x-axis labels and margin
+            'border-radius': '0',
+            'min-height': '450px',  # 300px + 150px for padding
+            'height': 'auto',
+            'color': '#1C1C2C',
+            'transition': 'height 0.3s ease, min-height 0.3s ease',
+            'box-sizing': 'border-box'
+        }
+        return container_style, panel_body_style
+
+    try:
+        filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+
+        # If showing transcript plot, use transcript-specific height calculation
+        if hide_junctions:
+            from isoform_utils import calculate_dynamic_structure_plot_height
+            num_transcripts = len(transcript_data['id'].unique()) if not transcript_data.empty else 0
+            calculated_height = calculate_dynamic_structure_plot_height(num_transcripts)
+        else:
+            # For junction plot, use unified height calculation
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            calculated_height = calculate_unified_plot_height(transcript_data, gene_data)
+
+        # Only update if the difference is significant (same logic as old system)
+        if abs(calculated_height - current_height) < 100:
+            calculated_height = current_height
+
+        container_style = {
+            'height': 'auto',
+            'min-height': '200px'
+        }
+
+        panel_body_style = {
+            'width': '100%',
+            'background-color': 'white',
+            'padding': '15px',
+            'border-radius': '0',
+            'min-height': 'auto',
+            'height': 'auto',
+            'color': '#1C1C2C',
+            'box-sizing': 'border-box'
+        }
+
+        return container_style, panel_body_style
+
+    except Exception as e:
+        print(f"Error calculating top panel height: {e}")
+        container_style = {'height': '100%', 'min-height': '400px', 'margin-bottom': '15px'}
+        panel_body_style = {
+            'width': '100%',
+            'background-color': 'white',
+            'padding': '15px 15px 165px 15px', 
+            'border-radius': '0',
+            'min-height': '450px',
+            'height': 'auto',
+            'color': '#1C1C2C',
+            'transition': 'height 0.3s ease, min-height 0.3s ease',
+            'box-sizing': 'border-box'
+        }
+        return container_style, panel_body_style
 
 
 @app.callback(
@@ -2364,13 +2508,13 @@ def calculate_hash_from_coordinates(n_clicks, input_mode, starts_input, second_i
             error_msg = ("Error: Number of start positions must match number of " +
                         ("end positions" if input_mode == 'start_end' else "block sizes"))
             return html.Div([
-                html.P(error_msg, style={'color': 'red', 'font-weight': 'bold'})
+                html.P(error_msg, className='error-message')
             ])
 
         if len(tstarts) < 2:
             return html.Div([
                 html.P("Error: At least 2 exons required for hash calculation",
-                       style={'color': 'red', 'font-weight': 'bold'})
+                       className='error-message')
             ])
 
         # Convert end positions to block sizes if needed
@@ -2381,8 +2525,7 @@ def calculate_hash_from_coordinates(n_clicks, input_mode, starts_input, second_i
             if any(size <= 0 for size in blocksizes):
                 return html.Div([
                     html.P("Error: End positions must be greater than start positions",
-                           style={'color': 'red', 'font-weight': 'bold', 
-                                  'padding-top': '10px'})
+                           className='error-message error-message-spaced')
                 ])
         else:
             # second_values are already block sizes
@@ -2407,12 +2550,12 @@ def calculate_hash_from_coordinates(n_clicks, input_mode, starts_input, second_i
     except ValueError as e:
         return html.Div([
             html.P(f"Error: Invalid input - {str(e)}",
-                   style={'color': 'red', 'font-weight': 'bold'})
+                   className='error-message')
         ])
     except Exception as e:
         return html.Div([
             html.P(f"Error calculating hash: {str(e)}",
-                   style={'color': 'red', 'font-weight': 'bold'})
+                   className='error-message')
         ])
 
 
@@ -2438,9 +2581,9 @@ def handle_gtf_upload(contents, filename):
         if not hash_results:
             return (
                 html.Div([
-                    html.P(f"File '{filename}' uploaded successfully", style={'color': 'green'}),
+                    html.P(f"File '{filename}' uploaded successfully", className='success-message'),
                     html.P("Warning: No valid transcripts found in GTF file. " \
-                    "Please refer to the documentation to ensure your GTF adheres to the required format.", style={'color': 'orange'})
+                    "Please refer to the documentation to ensure your GTF adheres to the required format.", className='warning-message')
                 ]),
                 {'display': 'none'},
                 []
@@ -2450,7 +2593,7 @@ def handle_gtf_upload(contents, filename):
         encoded_gtf = base64.b64encode(annotated_gtf.encode('utf-8')).decode('utf-8')
 
         upload_status = html.Div([
-            html.P(f"Loaded '{filename}' successfully.", style={'color': 'green', 'font-weight': 'bold'}),
+            html.P(f"Loaded '{filename}' successfully.", className='success-message success-message-bold'),
             html.P(f"Number of transcripts processed: {len(hash_results)}")
         ])
 
@@ -2465,8 +2608,8 @@ def handle_gtf_upload(contents, filename):
     except Exception as e:
         return (
             html.Div([
-                html.P(f"Error processing file '{filename}':", style={'color': 'red', 'font-weight': 'bold'}),
-                html.P(str(e), style={'color': 'red'})
+                html.P(f"Error processing file '{filename}':", className='error-message'),
+                html.P(str(e), className='error-message-light')
             ]),
             {'display': 'none'},
             []

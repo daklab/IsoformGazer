@@ -2169,3 +2169,317 @@ div[data-value="tab-3"]:hover {
 #gtf-upload a:hover {
     text-decoration: underline;
 }
+
+/* ######################################################################################
+   # Refactored styles from app.py - Layout and containers
+   ###################################################################################### */
+
+/* Main application layout */
+.app-layout {
+    height: 100vh;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Panels wrapper */
+.panels-wrapper {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Top panel container */
+.top-panel-container {
+    width: 100%;
+    margin-bottom: 10px;
+}
+
+/* Control tabs container */
+.control-tabs-container {
+    width: 340px;
+    background-color: white;
+    border-right: 1px solid #e1e1e1;
+}
+
+/* Tabs with full height */
+.tabs-full-height {
+    height: 100%;
+}
+
+/* Download section */
+.gtf-download-section {
+    display: none;
+}
+
+.gtf-download-section.visible {
+    display: block;
+}
+
+.gtf-download-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* ######################################################################################
+   # Control panel styles
+   ###################################################################################### */
+
+/* Color picker containers */
+.color-picker-container {
+    border: none;
+    outline: none;
+    box-shadow: none;
+}
+
+/* Toggle switch containers */
+.toggle-switch-container {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.toggle-switch-inline {
+    display: inline-block;
+}
+
+.hide-junctions-toggle-label {
+    display: inline-block;
+    margin-right: 75px;
+}
+
+.isoform-unit-toggle-label {
+    display: inline-block;
+    margin-right: 15px;
+}
+
+.sample-averaging-toggle-label {
+    display: inline-block;
+    margin-right: 15px;
+}
+
+.tissue-labels-toggle-label {
+    display: inline-block;
+    margin-right: 55px;
+}
+
+.celltype-labels-toggle-label {
+    display: inline-block;
+    margin-right: 30px;
+}
+
+.radio-items-inline {
+    display: inline-block;
+    font-size: 12px;
+    margin-left: -10px;
+}
+
+/* ######################################################################################
+   # Plot and graph containers
+   ###################################################################################### */
+
+/* Top structure plot container */
+.top-structure-plot-container {
+    height: 100%;
+    margin-bottom: 15px;
+}
+
+/* Transcript structure plot container */
+.top-transcript-structure-plot-hidden {
+    display: none;
+}
+
+/* Graph containers with full dimensions */
+.graph-full-size {
+    height: 100%;
+    width: 100%;
+}
+
+.progress-graph {
+    width: 100%;
+    height: 100%;
+}
+
+/* Heatmap containers */
+.heatmap-full-size {
+    width: 100%;
+    height: 100%;
+}
+
+/* ######################################################################################
+   # Error and status styles
+   ###################################################################################### */
+
+/* Filter error popups */
+.filter-error-popup-hidden {
+    display: none;
+}
+
+/* Summary multiline styling */
+.summary-multiline-item {
+    margin: 0;
+    padding: 0;
+    line-height: 1.4;
+}
+
+/* Error messages */
+.error-message {
+    color: red;
+    font-weight: bold;
+}
+
+.error-message-with-padding {
+    color: red;
+    font-weight: bold;
+    padding-top: 10px;
+}
+
+/* Success messages */
+.success-message {
+    color: green;
+}
+
+.success-message-bold {
+    color: green;
+    font-weight: bold;
+}
+
+/* Warning messages */
+.warning-message {
+    color: orange;
+}
+
+/* ######################################################################################
+   # Dynamic container styles (for callbacks)
+   ###################################################################################### */
+
+/* Panel styles that are dynamically set by callbacks */
+.panel-dynamic-height {
+    height: 760px;
+    min-height: 760px;
+}
+
+/* Top panel container styles */
+.top-panel-container-auto {
+    height: auto;
+    min-height: 200px;
+    margin-bottom: 15px;
+}
+
+.top-panel-container-fallback {
+    height: 100%;
+    min-height: 400px;
+    margin-bottom: 15px;
+}
+
+/* Top panel body styles */
+.top-panel-body-minimal {
+    width: 100%;
+    background-color: white;
+    padding: 15px 15px 30px 15px;
+    border-radius: 0;
+    min-height: auto;
+    height: auto;
+    color: #1C1C2C;
+    transition: height 0.3s ease, min-height 0.3s ease;
+    box-sizing: border-box;
+}
+
+.top-panel-body-fallback {
+    width: 100%;
+    background-color: white;
+    padding: 15px 15px 165px 15px;
+    border-radius: 0;
+    min-height: 450px;
+    height: auto;
+    color: #1C1C2C;
+    transition: height 0.3s ease, min-height 0.3s ease;
+    box-sizing: border-box;
+}
+
+/* Plot container toggle styles */
+.plot-container-hidden {
+    display: none;
+}
+
+.plot-container-visible {
+    display: block;
+    height: auto;
+    min-height: auto;
+    max-height: none;
+    margin-bottom: 15px;
+}
+
+/* Additional CSS classes for inline style refactoring */
+.download-buttons-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.toggle-switch-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.toggle-switch-label-wide {
+    display: inline-block;
+    margin-right: 75px;
+}
+
+.toggle-switch-label-narrow {
+    display: inline-block;
+    margin-right: 15px;
+}
+
+.toggle-switch-label-medium {
+    display: inline-block;
+    margin-right: 55px;
+}
+
+.toggle-switch-label-narrow-plus {
+    display: inline-block;
+    margin-right: 30px;
+}
+
+.radio-items-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.radio-items-label {
+    display: inline-block;
+    margin-right: 15px;
+}
+
+.radio-items-inline {
+    display: inline-block;
+    font-size: 12px;
+    margin-left: -10px;
+}
+
+.radio-items-inline label {
+    display: inline-block;
+    margin-right: 5px;
+}
+
+.plot-container-full-height {
+    height: 100%;
+    margin-bottom: 15px;
+}
+
+.summary-line {
+    margin: 0;
+    padding: 0;
+    line-height: 1.4;
+}
+
+.error-message-spaced {
+    padding-top: 10px;
+}
+
+.error-message-light {
+    color: red;
+}
