@@ -875,25 +875,6 @@ app.layout = html.Div(className='app-layout', children=[
                 dcc.Tab(label='Custom', className='tab-1', value='tab-3', children=[
                     html.Div(className='control-tab', children=[
                         #####################################
-                        # General Controls Section
-                        #####################################
-                        html.H2('General', className='alignment-settings-section'),
-                        html.Div(className='app-controls-block', children=[
-                            html.Div(className='app-controls-name', children='Plots to Show'),
-                            dcc.Dropdown(
-                                id='overview-dropdown',
-                                className='app-controls-block-dropdown',
-                                options=[
-                                    {'label': 'Structure Plots', 'value': 'event-level'},
-                                    {'label': 'Clustergrams', 'value': 'clustergram'},
-                                    {'label': 'Both', 'value': 'both'}
-                                ],
-                                value='both'
-                            ),
-                            html.Div(className='app-controls-desc', children='Select which visualizations to show')
-                        ]),
-
-                        #####################################
                         # Isoform-level Event Plot Section
                         #####################################
                         html.H2('Transcript Plots', className='alignment-settings-section'),
@@ -1895,47 +1876,6 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
     return paginated_data, page_count, full_data
 
 
-######################################################################
-# CALLBACK CONTROLLING WHICH PLOTS ARE VISIBLE (DROPDOWN OPTION)
-######################################################################
-@app.callback(
-    [
-        dash.dependencies.Output('isoform-clustergram-container', 'style'),
-        dash.dependencies.Output('junction-clustergram-container', 'style'),
-        dash.dependencies.Output('panels-container', 'className'),
-        dash.dependencies.Output('left-panel', 'className'),
-        dash.dependencies.Output('right-panel', 'className'),
-    ],
-    [dash.dependencies.Input('overview-dropdown', 'value')]
-)
-def toggle_plot_visibility(overview_value):
-    """Enhanced plot visibility toggle with proper container sizing"""
-    show_full = {'display': 'block', 'height': '100%', 'flex': '1 1 auto'}
-    hide = {'display': 'none', 'height': '0', 'flex': '0 0 0'}
-    show_normal = {'display': 'block', 'height': '100%'}
-
-    panels_class = 'panels-container'
-    left_panel_class = 'panel'
-    right_panel_class = 'panel'
-
-    if overview_value == 'both':
-        return show_normal, show_normal, panels_class, left_panel_class, right_panel_class
-
-    # Show only structure plots, hide clustergrams
-    elif overview_value == 'event-level':
-        left_panel_class = 'panel full-panel-event'
-        right_panel_class = 'panel full-panel-event'
-        return hide, hide, panels_class, left_panel_class, right_panel_class
-
-    # Show only clustergrams, hide structure plots
-    elif overview_value == 'clustergram':
-        left_panel_class = 'panel full-panel-clustergram'
-        right_panel_class = 'panel full-panel-clustergram'
-        return show_full, show_full, panels_class, left_panel_class, right_panel_class
-
-    else:
-        return show_normal, show_normal, panels_class, left_panel_class, right_panel_class
-
 
 ######################################################################
 # DYNAMIC HEIGHT CALCULATION AND PANEL ADJUSTMENT
@@ -2026,19 +1966,15 @@ def adjust_panel_heights(plot_height):
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('overview-dropdown', 'value'),
      dash.dependencies.Input('show-celltype-labels-toggle', 'value'),
      dash.dependencies.Input('clustergram-height-slider', 'value'),
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value')]
 )
-def update_junction_clustergram(selected_gene, colorscale, 
-                                filtered_junction_ids, plots_dropdown_value, show_celltype_labels, clustergram_height,
+def update_junction_clustergram(selected_gene, colorscale,
+                                filtered_junction_ids, show_celltype_labels, clustergram_height,
                                 distance_metric, linkage_method):
     """Update junction visualization based on gene selection and filtering"""
-    if plots_dropdown_value == 'event-level':                       
-        return empty_fig() 
-    
     heatmap_height = clustergram_height
     
     if not selected_gene:
@@ -2092,14 +2028,13 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('show-labels-toggle', 'value'),
      dash.dependencies.Input('collapse-tissue-toggle', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('overview-dropdown', 'value'),
      dash.dependencies.Input('clustergram-height-slider', 'value'),
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value')]
 )
-def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data, 
-                          show_labels, collapse_mode, filtered_transcript_ids, 
-                          plots_dropdown_value, clustergram_height, distance_metric, linkage_method):
+def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
+                          show_labels, collapse_mode, filtered_transcript_ids,
+                          clustergram_height, distance_metric, linkage_method):
     """Update isoform clustergram with junction clustergram heights"""
     ratio_data = load_expression_data(db_path=db_path, 
                                       gene_name=selected_gene, 
@@ -2111,12 +2046,9 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
     
     if use_ratio_data:
         data_type = "Ratio"
-    else: 
+    else:
         data_type = "TPM"
 
-    if plots_dropdown_value == 'event-level':
-        return empty_fig() 
-    
     heatmap_height = clustergram_height
     
     try:
@@ -2167,13 +2099,12 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
      dash.dependencies.Input('filtered-junction-store', 'data'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('bar-height-slider', 'value'),
-     dash.dependencies.Input('overview-dropdown', 'value'),
      dash.dependencies.Input('exon-color-store', 'data'),
      dash.dependencies.Input('junction-color-store', 'data'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('left-table-validation-store', 'data')]
 )
-def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, plot_height, plots_dropdown_value, exon_color, junction_color, isoform_filter_query, validation_data):
+def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, plot_height, exon_color, junction_color, isoform_filter_query, validation_data):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -2192,10 +2123,7 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             filtered_junction_ids=filtered_junction_ids
         )
 
-        if plots_dropdown_value == 'event-level': 
-            plot_height = min(1500, int(0.8 * 1500))
-        
-        show_labels = (plots_dropdown_value == 'event-level')
+        show_labels = False
         
         fig = create_junction_exon_visualization(
             gene_data, 
@@ -2258,13 +2186,12 @@ def toggle_top_panel_plots(hide_junctions):
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('bar-height-slider', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('overview-dropdown', 'value'),
      dash.dependencies.Input('exon-color-store', 'data'),
      dash.dependencies.Input('hide-junctions-toggle', 'value'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('left-table-validation-store', 'data')]
 )
-def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, plots_dropdown_value, exon_color, hide_junctions, filter_query, validation_data):
+def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data):
     """Update transcript structure plot in top panel when toggle is activated"""
     # Only update if junctions are hidden (transcript plot should be shown)
     if not hide_junctions:
