@@ -881,8 +881,8 @@ def create_junction_exon_visualization(gene_data: dict,
             all_coords = []
             for j in junctions:
                 all_coords.extend([j['start'], j['end']])
-            min_start = min(all_coords) - 1000
-            max_end = max(all_coords) + 1000
+            min_start = min(all_coords)
+            max_end = max(all_coords)
         else:
             min_start, max_end = 0, 100000
         
@@ -964,7 +964,7 @@ def create_junction_exon_visualization(gene_data: dict,
         },
         xaxis=dict(
             title="Genomic Position",
-            range=[min_start, max_end + (max_end - min_start) * 0.3],
+            range=[min_start, max_end],
             showgrid=False,
             tickformat=',',
             rangeslider=dict(visible=False, range=[min_start, max_end]),
@@ -981,20 +981,22 @@ def create_junction_exon_visualization(gene_data: dict,
         ),
         height=height,
         margin=dict(
-            l=MIN_MARGIN,  
-            r=MIN_MARGIN,  
-            t=MAX_MARGIN, 
+            l=MIN_MARGIN,
+            r=160,
+            t=MAX_MARGIN,
             b=MAX_MARGIN+7
         ),
         hovermode='closest',
         plot_bgcolor='white',
-        autosize=True
+        autosize=True,
+        uirevision='constant'
     )
     
     for idx, transcript in enumerate(transcript_labels):
         y_pos = transcript_y_positions[idx]
         fig.add_annotation(
-            x=max_end + (max_end - min_start) * 0.02,
+            x=1.01,
+            xref='paper',
             y=y_pos,
             text=transcript,
             showarrow=False,
@@ -1006,7 +1008,8 @@ def create_junction_exon_visualization(gene_data: dict,
     for idx, junction in enumerate(junction_labels):
         y_pos = junction_y_positions[idx]
         fig.add_annotation(
-            x=max_end + (max_end - min_start) * 0.02,
+            x=1.01,
+            xref='paper',
             y=y_pos,
             text=junction,
             showarrow=False,
