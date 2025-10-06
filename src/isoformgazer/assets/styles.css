@@ -644,6 +644,14 @@ html, body {
     min-width: 0;
 }
 
+#left-panel {
+    flex: 1;
+}
+
+#right-panel {
+    flex: 1.2;
+}
+
 .top-panel {
     width: 100%;
     background-color: white;
@@ -2293,6 +2301,8 @@ div[data-value="tab-3"]:hover {
 .graph-full-size {
     height: 100%;
     width: 100%;
+    min-height: 0;
+    flex: 1;
 }
 
 .progress-graph {
@@ -2466,8 +2476,11 @@ div[data-value="tab-3"]:hover {
 }
 
 .plot-container-full-height {
+    width: 100%;
     height: 100%;
     margin-bottom: 15px;
+    display: flex;
+    flex-direction: column;
 }
 
 .summary-line {

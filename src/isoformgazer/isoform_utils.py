@@ -141,26 +141,49 @@ def calculate_dynamic_structure_plot_height(num_transcripts: int, base_height: i
 def calculate_unified_plot_height(transcript_data: pd.DataFrame, gene_data: dict = None, base_height: int = 600) -> int:
     """Calculate unified height for both transcript and junction plots based on available data"""
     num_transcripts = 0
-    
-    # Count transcripts from transcript data and junctions from junction ATSE plot
     if not transcript_data.empty:
         if 'id' in transcript_data.columns:
             num_transcripts = transcript_data['id'].nunique()
         elif 'trans_id' in transcript_data.columns:
             num_transcripts = transcript_data['trans_id'].nunique()
-    
+
     num_junctions = 0
     if gene_data and 'junctions' in gene_data:
         num_junctions = len(gene_data['junctions'])
-    
-    # Use maximum required height
+
     max_elements = max(num_transcripts, num_junctions)
     calculated_height = base_height + (max_elements * 20)
-    
-    # Round to nearest hundred and cap at maximum slider value
+
     calculated_height = round(calculated_height / 100) * 100
 
     return min(calculated_height, 1600)
+
+
+def calculate_clustergram_min_height(num_rows: int, base_height: int = 600) -> int:
+    """
+    Calculate minimum height needed for clustergram to prevent label overlap.
+
+    For clustergrams, each row needs approximately 15-20 pixels to display labels without overlap.
+    This ensures labels are readable even with many transcripts/junctions.
+
+    Parameters:
+        num_rows: Number of rows (transcripts or junctions) in the clustergram
+        base_height: Minimum base height for the clustergram
+
+    Returns:
+        Minimum height needed to display all labels without overlap
+    """
+    pixels_per_row = 18
+    min_heatmap_height = num_rows * pixels_per_row
+    min_total_height = int(min_heatmap_height / 0.88)
+
+    calculated_height = max(base_height, min_total_height)
+    calculated_height += 100
+    # round to nearest hundred for slider compatibility
+    calculated_height = round(calculated_height / 100) * 100
+
+    return calculated_height
+
 
 ###################################################################
 # VISUALIZATION METHODS
@@ -803,7 +826,10 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     transcript_names_abbreviated = abbreviate_transcript_names(transcript_names)
     num_transcripts = len(transcript_names)
 
-    # Process both TPM and ratio data with same averaging approach for tooltip
+    if height <= 700:
+        min_required_height = calculate_clustergram_min_height(num_transcripts, base_height=600)
+        height = max(height, min_required_height)
+
     if collapse_mode == 'tissue':
         heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_tissue(expression_data, tissue_cols)
         tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, tissue_cols)
@@ -968,34 +994,42 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     # Scale positions based on number of tissues - more tissues = legends closer to plot
     #width_scale = min(1.0, 20 / max(num_tissues, 20))
     
-    colorbar_x_paper = 1.20 
-    #print(f"ORIGINAL WIDTH SCALE: {width_scale}")
-    legend_x_paper = 1.65 #- min(0.80 * width_scale, 0.20776)    # Between 1.02 and 1.65
-    
-    legend_y_start = 0.995
-    legend_y_step = 0.04
+    # Colorbar positioning - use paper coordinate at plot edge, then shift by pixels
+    colorbar_x_paper = 1.0  
+    colorbar_pixel_offset = 150 
+    colorbar_y_position = 1.005
+
+    # Calculate legend step size in paper coordinates to maintain consistent pixel spacing
+    pixels_between_items = 25
+    legend_y_step = pixels_between_items / height
+
+    vertical_offset_pixels = 7
+    legend_y_start = colorbar_y_position - (vertical_offset_pixels / height)
 
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
             if hasattr(heatmap_trace, 'colorbar'):
                 heatmap_trace.colorbar.x = colorbar_x_paper
-                heatmap_trace.colorbar.y = 1.005
+                heatmap_trace.colorbar.xpad = colorbar_pixel_offset 
+                heatmap_trace.colorbar.y = colorbar_y_position
                 heatmap_trace.colorbar.yanchor = 'top'
-                heatmap_trace.colorbar.len = 0.3    
+                heatmap_trace.colorbar.len = 0.3
                 heatmap_trace.colorbar.thickness = 20
-                heatmap_trace.colorbar.title = data_type 
+                heatmap_trace.colorbar.title = data_type
     except Exception as e:
         print(f"Warning: Could not update colorbar position: {e}")
-    
-    # Title is now added directly to the colorbar above
 
-    # Add organ legend annotations (positioned at calculated location)
+    legend_base_x = colorbar_x_paper
+    # Offset from plot edge = colorbar offset + colorbar width + spacing between legends
+    legend_pixel_offset = colorbar_pixel_offset + 20 + 30 
+
     clustergram.add_annotation(
-        x=legend_x_paper,                 
-        y=legend_y_start,                    
+        x=legend_base_x,
+        y=legend_y_start,
         xref="paper",
         yref="paper",
+        xshift=legend_pixel_offset,  # Shift by pixels instead of paper coords
         text="Organ Legend",
         showarrow=False,
         xanchor="left",
@@ -1005,10 +1039,11 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
 
     for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
         clustergram.add_annotation(
-            x=legend_x_paper,
-            y=legend_y_start - 0.04 - (i * legend_y_step),
+            x=legend_base_x,
+            y=legend_y_start - legend_y_step - (i * legend_y_step),
             xref='paper',
             yref='paper',
+            xshift=legend_pixel_offset,  
             text=f'<span style="color:{color}; font-size:14px">&#9632;</span> {organ}',
             showarrow=False,
             xanchor='left',
@@ -1025,14 +1060,14 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         },
         margin=dict(
                 l=min(20, left_margin + 50), 
-                r=350,  # Further increased right margin for legends positioned at 25%+ to the right
+                r=350,  
                 t=90, 
                 b=calculate_bottom_margin(show_labels, transcript_names_abbreviated)
             ),
-        autosize=True,  # This enables responsive width
-        width=None,  # Explicitly remove width constraints  
+        autosize=True, 
+        width=None,  
         height=height,
-        uirevision='constant',  # Helps maintain responsive behavior on updates
+        uirevision='constant', 
         yaxis=dict(
             automargin=True,
             tickangle=0,

@@ -13,7 +13,7 @@ from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
 from data_utils import apply_distance_preprocessing
-from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height
+from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height, calculate_clustergram_min_height
 from isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
 ###################################################################
@@ -202,9 +202,14 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     n_cells_values = n_cells_matrix.values.astype(int)
     junction_labels = list(psi_matrix.index)
     cell_type_labels = list(psi_matrix.columns)
-    
+
     if psi_matrix.empty:
         return create_empty_clustergram_message(f"No PSI data available for gene: {gene_name}")
+
+    if height <= 700:
+        num_junctions = len(junction_labels)
+        min_required_height = calculate_clustergram_min_height(num_junctions, base_height=600)
+        height = max(height, min_required_height)
     
     if len(gene_vals['junction_id'].unique()) == 1:
         return create_single_junction_heatmap(
@@ -280,11 +285,12 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
             if hasattr(heatmap_trace, 'colorbar'):
-                heatmap_trace.colorbar.x = 1.15
-                heatmap_trace.colorbar.y = 1.005   
+                heatmap_trace.colorbar.x = 1.0 
+                heatmap_trace.colorbar.xpad = 160
+                heatmap_trace.colorbar.y = 1.005
                 heatmap_trace.colorbar.yanchor = 'top'
-                heatmap_trace.colorbar.len = 0.3    
-                heatmap_trace.colorbar.thickness = 20 
+                heatmap_trace.colorbar.len = 0.3
+                heatmap_trace.colorbar.thickness = 20
                 heatmap_trace.colorbar.title = 'PSI'
 
     except Exception as e:
@@ -295,16 +301,16 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             'text': f"Splicing PSI Clustermap for {gene_name} ({len(junction_labels)} junctions)",
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 14 if hide_junction_labels else 16}  
+            'font': {'size': 14 if hide_junction_labels else 16}
         },
         margin=dict(
-            l=MIN_MARGIN, 
-            r=MIN_MARGIN, 
-            t=MAX_MARGIN, 
+            l=MIN_MARGIN,
+            r=MIN_MARGIN,
+            t=MAX_MARGIN,
             b=bottom_margin
-        ),  
+        ),
         autosize=True,
-        width=None,  
+        width=None,
         height=height,
         uirevision='constant',
         yaxis=dict(
