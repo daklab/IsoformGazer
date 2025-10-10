@@ -1098,7 +1098,7 @@ app.layout = html.Div(className='app-layout', children=[
                                                     config={
                                                         'responsive': True,
                                                         'displayModeBar': True,
-                                                        'scrollZoom': True
+                                                        'scrollZoom': False
                                                     },
                                                     className='graph-full-size'
                                                 )
@@ -1116,7 +1116,14 @@ app.layout = html.Div(className='app-layout', children=[
                                             color='#EDAE49',
                                             delay_show=500,
                                             delay_hide=200,
-                                            children=[dcc.Graph(id='top-barplot')]
+                                            children=[dcc.Graph(
+                                                id='top-barplot',
+                                                config={
+                                                    'responsive': True,
+                                                    'displayModeBar': True,
+                                                    'scrollZoom': False
+                                                }
+                                            )]
                                         ),
                                         html.Div(id="top-barplot-loading-message", className="custom-loading-message")
                                     ])
