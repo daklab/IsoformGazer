@@ -19,7 +19,7 @@ from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
-from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner, validate_filter_input
+from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, get_all_gene_options, create_custom_spinner, validate_filter_input
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
     load_atse_data, process_gene_atse_data, create_empty_atse_message, 
@@ -1262,6 +1262,7 @@ app.layout.children.extend([
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='gtf-hash-results-store', data=[]),
+    dcc.Store(id='all-gene-options-store', data=get_all_gene_options(db_path)),
     dcc.Interval(id='loading-delay-interval', interval=1000, n_intervals=0, max_intervals=1, disabled=True),
     dcc.Interval(id='progress-update-interval', interval=50, n_intervals=0, disabled=False)
 ])
@@ -1610,29 +1611,41 @@ def update_button_states(left_filter, right_filter):
     [dash.dependencies.Output('gene-search-dropdown', 'options'),
      dash.dependencies.Output('gene-search-dropdown', 'value')],
     [dash.dependencies.Input('gene-search-dropdown', 'search_value')],
-    [dash.dependencies.State('gene-search-dropdown', 'value')]
+    [dash.dependencies.State('gene-search-dropdown', 'value'),
+     dash.dependencies.State('all-gene-options-store', 'data')]
 )
-def update_gene_options(search_value, current_value):
-    """Update gene options while preserving current selection"""
-    
+def update_gene_options(search_value, current_value, all_gene_options):
+    """Update gene options using client-side filtering from cached data"""
+    # If no cached options available, fall back to database query (shouldn't happen)
+    if not all_gene_options:
+        all_gene_options = get_all_gene_options(db_path)
+
     if not search_value:
-        options = get_gene_options(db_path, limit=5)
-        a1bg_option = {'label': 'A1BG-AS1', 'value': 'A1BG-AS1'}
+        options = all_gene_options[:10]
+        a1bg_option = {'label': 'A1BG-AS1', 'value': 'A1BG-AS1', 'search': 'a1bg-as1'}
         if not any(opt['value'] == 'A1BG-AS1' for opt in options):
             options.insert(0, a1bg_option)
     else:
-        options = get_gene_options(db_path, search_term=search_value, limit=10)
-    
+        # Client-side filtering using the pre-computed search string
+        search_lower = search_value.lower()
+        filtered = [opt for opt in all_gene_options if search_lower in opt.get('search', '')]
+        options = filtered[:50]
+
+    # Handle current value preservation
     if current_value is None:
         return options, 'A1BG-AS1'
-    
+
     option_values = [opt['value'] for opt in options]
+    
     if current_value in option_values:
         return options, current_value
+    
     else:
-        current_options = get_gene_options(db_path, search_term=current_value, limit=1)
-        if current_options:
-            options = current_options + [opt for opt in options if opt['value'] != current_value]
+        # Find the current value in all options and add it to the list
+        current_option = next((opt for opt in all_gene_options if opt['value'] == current_value), None)
+        if current_option:
+            options = [current_option] + [opt for opt in options if opt['value'] != current_value]
+
         return options, current_value
 
 

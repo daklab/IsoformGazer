@@ -76,24 +76,58 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
     return df.to_dict('records'), total_count
 
 
+def get_all_gene_options(db_path):
+    """Loads all gene options from database at startup for fast client-side filtering"""
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA cache_size = 10000")
+
+    query = """
+    SELECT DISTINCT
+        CASE
+            WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
+            ELSE gene_name
+        END as gene_name,
+        gene_id
+    FROM isoforms
+    WHERE gene_id IS NOT NULL
+    ORDER BY gene_name
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+
+    options = []
+    for _, row in df.iterrows():
+        gene_name = row['gene_name']
+        gene_id = row['gene_id']
+
+        if gene_name and gene_id and not pd.isna(gene_name) and not pd.isna(gene_id):
+            options.append({
+                'label': f"{gene_name} ({gene_id})",
+                'value': gene_name,
+                'search': f"{gene_name.lower()} {gene_id.lower()}"
+            })
+
+    return options
+
+
 def get_gene_options(db_path, search_term=None, limit=10):
     """Get gene options for dropdown from database"""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA cache_size = 10000")
-    
+
     if search_term:
         query = """
-        SELECT DISTINCT 
-            CASE 
+        SELECT DISTINCT
+            CASE
                 WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
-                ELSE gene_name 
-            END as gene_name, 
-            gene_id 
-        FROM isoforms 
-        WHERE gene_id IS NOT NULL 
+                ELSE gene_name
+            END as gene_name,
+            gene_id
+        FROM isoforms
+        WHERE gene_id IS NOT NULL
         AND (
-            (gene_name IS NOT NULL AND gene_name LIKE ?) 
-            OR gene_id LIKE ? 
+            (gene_name IS NOT NULL AND gene_name LIKE ?)
+            OR gene_id LIKE ?
             OR (gene_name IS NULL AND 'Unknown' LIKE ?)
         )
         ORDER BY gene_name
@@ -102,33 +136,33 @@ def get_gene_options(db_path, search_term=None, limit=10):
         df = pd.read_sql_query(query, conn, params=[f"%{search_term}%", f"%{search_term}%", f"%{search_term}%", limit])
     else:
         query = """
-        SELECT DISTINCT 
-            CASE 
+        SELECT DISTINCT
+            CASE
                 WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
-                ELSE gene_name 
-            END as gene_name, 
-            gene_id 
-        FROM isoforms 
+                ELSE gene_name
+            END as gene_name,
+            gene_id
+        FROM isoforms
         WHERE gene_id IS NOT NULL
         ORDER BY gene_name
         LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=[limit])
-    
+
     conn.close()
-    
+
     options = []
     for _, row in df.iterrows():
         gene_name = row['gene_name']
         gene_id = row['gene_id']
-        
+
         # Skip any entries that are still somehow None/null?
         if gene_name and gene_id and not pd.isna(gene_name) and not pd.isna(gene_id):
             options.append({
                 'label': f"{gene_name} ({gene_id})",
                 'value': gene_name  # Use the processed gene_name (including 'Unknown' for no name genes)
             })
-    
+
     return options
 
 
