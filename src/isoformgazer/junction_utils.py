@@ -108,14 +108,12 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     if len(clustergram.data) > 0:
         heatmap_trace = clustergram.data[-1]
         heatmap_trace.z = psi_matrix_filtered_with_nan.values
-        clustergram.update_layout(plot_bgcolor='white')
 
     if show_gridlines:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
             heatmap_trace.xgap = 1
             heatmap_trace.ygap = 1
-            clustergram.update_layout(plot_bgcolor='white')
 
     bottom_margin = 60 if hide_junction_labels else 120
 
@@ -126,14 +124,14 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             'xanchor': 'center',
             'font': {'size': 16}
         },
-        margin=dict(l=MIN_MARGIN, 
-                    r=MIN_MARGIN, 
-                    t=MAX_MARGIN, 
+        margin=dict(l=MIN_MARGIN,
+                    r=MIN_MARGIN,
+                    t=MAX_MARGIN,
                     b=bottom_margin),
         autosize=True,
-        width=None,  
+        width=None,
         height=height,
-        uirevision='constant', 
+        plot_bgcolor='white',
         yaxis=dict(automargin=True),
         xaxis=dict(automargin=True)
     )
@@ -346,14 +344,12 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         nan_data_reordered = psi_matrix_with_nan.iloc[row_ids, :].iloc[:, col_ids]
         heatmap_trace = clustergram.data[-1]
         heatmap_trace.z = nan_data_reordered.values
-        clustergram.update_layout(plot_bgcolor='white')
 
     if show_gridlines:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
             heatmap_trace.xgap = 1
             heatmap_trace.ygap = 1
-            clustergram.update_layout(plot_bgcolor='white')
 
     try:
         if len(clustergram.data) > 0:
@@ -386,7 +382,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         autosize=True,
         width=None,
         height=height,
-        uirevision='constant',
+        plot_bgcolor='white',
         yaxis=dict(
             automargin=True,
             tickangle=0,
@@ -394,7 +390,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         ),
         xaxis=dict(
             automargin=False,
-            tickangle=0,
+            tickangle=90,
             tickfont=dict(size=8) if not hide_junction_labels else dict(size=10),
             side='bottom'
         )

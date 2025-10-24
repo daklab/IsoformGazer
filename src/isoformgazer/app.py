@@ -2138,12 +2138,7 @@ def update_junction_clustergram(selected_gene, colorscale,
         fig.update_layout(
             autosize=True,
             width=None,
-            transition_duration=200,
-            xaxis=dict(
-                tickangle=0,
-                automargin=False,
-                side='bottom'
-            )
+            transition_duration=200
         )
         return fig
     
