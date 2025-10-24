@@ -2,6 +2,7 @@ import os
 import re
 import hashlib
 import sqlite3
+import warnings
 import pandas as pd
 import numpy as np
 import dash_bio
@@ -11,6 +12,8 @@ from plotly.subplots import make_subplots
 from typing import List, Tuple
 from data_utils import apply_distance_preprocessing
 from performance_utils import cached, memory_tracker, plot_optimizer
+# suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
+warnings.filterwarnings('ignore', category=RuntimeWarning, message='Mean of empty slice')
 
 def get_lrs_metadata_replicates() -> List[List[str]]:
     """
@@ -374,9 +377,11 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
     if not gene_id:
         return pd.DataFrame()
     
-    if data_type.lower() == 'tpm': 
+    if data_type.lower() == 'tpm':
         table_name = 'tpm_data'
-    else: 
+    elif data_type.lower() == 'log_tpm':
+        table_name = 'log_tpm_data'
+    else:
         table_name = 'ratio_data'
     
     query = f"""
@@ -397,7 +402,14 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
         numeric_cols = [col for col in df.columns if col not in ['transcript', 'trans_id', 'gene', 'gene_name']]
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-        df[numeric_cols] = df[numeric_cols].fillna(0)
+
+        # For log_tpm data, preserve NaN values. For other data types, fill NaN with 0
+        if data_type.lower() != 'log_tpm':
+            df[numeric_cols] = df[numeric_cols].fillna(0)
+        else:
+            # Log TPM: preserve NaN values
+            nan_count = df[numeric_cols].isna().sum().sum()
+            print(f"DEBUG load_expression_data: Loading log_tpm for {gene_name} - found {nan_count} NaN values")
 
         return df
     
@@ -794,19 +806,24 @@ def calculate_bottom_margin(show_labels: bool, transcript_names: list) -> int:
 
 def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                                           ratio_data: pd.DataFrame,
+                                          log_tpm_data: pd.DataFrame,
                                           gene_name: str,
                                           height: int = 600,
                                           colorscale: str = 'Viridis',
-                                          data_type: str = 'TPM',
+                                          data_type: str = 'Ratio',
                                           show_tables: str = 'show',
                                           show_labels: bool = False,
                                           collapse_mode: str = 'tissue',
                                           distance_metric: str = 'euclidean',
-                                          linkage_method: str = 'complete') -> go.Figure:
+                                          linkage_method: str = 'complete',
+                                          show_gridlines: bool = False,
+                                          gridline_color: str = '#ffffff') -> go.Figure:
     """Create responsive clustergram that behaves exactly like junction clustergram"""
-    if data_type == 'TPM':
+    if data_type == 'TPM' or data_type == 'tpm':
         expression_data = tpm_data
-    else:
+    elif data_type == 'Log TPM' or data_type == 'log_tpm':
+        expression_data = log_tpm_data
+    else: 
         expression_data = ratio_data
 
     if expression_data.empty or tpm_data.empty or ratio_data.empty:
@@ -832,14 +849,44 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
 
     if collapse_mode == 'tissue':
         heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_tissue(expression_data, tissue_cols)
-        tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, tissue_cols)
-        ratio_heatmap_data, _, _ = average_lrs_by_tissue(ratio_data, tissue_cols)
+
+        # Mapping from tissue name to column indices
+        tissue_name_to_indices = {}
+        for col in tissue_cols:
+            tissue_name = extract_tissue_name_from_column(col)
+            if tissue_name not in tissue_name_to_indices:
+                tissue_name_to_indices[tissue_name] = []
+            tissue_name_to_indices[tissue_name].append(col)
+
+        kept_tissue_cols = []
+        for tissue_name in tissue_display_names:
+            if tissue_name in tissue_name_to_indices:
+                kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
+
+        # Average TPM and Ratio using only kept tissues
+        tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, kept_tissue_cols)
+        ratio_heatmap_data, _, _ = average_lrs_by_tissue(ratio_data, kept_tissue_cols)
         tissue_cols_for_organs = tissue_display_names
 
     elif collapse_mode == 'replicate':
         heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_replicates(expression_data, tissue_cols)
-        tpm_heatmap_data, _, _ = average_lrs_by_replicates(tpm_data, tissue_cols)
-        ratio_heatmap_data, _, _ = average_lrs_by_replicates(ratio_data, tissue_cols)
+
+        # Use the same tissue list for TPM and Ratio as used for the main data type
+        tissue_name_to_indices = {}
+        for col in tissue_cols:
+            tissue_name = extract_tissue_name_from_column(col)
+            if tissue_name not in tissue_name_to_indices:
+                tissue_name_to_indices[tissue_name] = []
+            tissue_name_to_indices[tissue_name].append(col)
+
+        kept_tissue_cols = []
+        for tissue_name in tissue_display_names:
+            if tissue_name in tissue_name_to_indices:
+                kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
+
+        # Average TPM and Ratio using only the kept tissues
+        tpm_heatmap_data, _, _ = average_lrs_by_replicates(tpm_data, kept_tissue_cols)
+        ratio_heatmap_data, _, _ = average_lrs_by_replicates(ratio_data, kept_tissue_cols)
         tissue_cols_for_organs = tissue_display_names
 
     else:
@@ -877,10 +924,32 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         actual_clustergram_height = height - 80
 
     clustergram_data_processed = pd.DataFrame(clustergram_data).copy()
-    clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], 0)
+
+    # For log TPM data, keep track of NaN values to show them instead of filling with 0
+    show_nan_as_black = (data_type == "Log TPM" or data_type == "log_tpm")
+    clustergram_data_with_nan = None
+
+    if show_nan_as_black:
+        # Replace -inf and inf values with NaN, keep NaN as NaN for proper handling
+        clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], np.nan)
+        nan_count = clustergram_data_processed.isna().sum().sum()
+        clustergram_data_with_nan = clustergram_data_processed.copy()
+
+        for idx in clustergram_data_processed.index:
+            row = clustergram_data_processed.loc[idx]
+            row_median = row.median()  # median of non-NaN values
+            if pd.notna(row_median):
+                clustergram_data_processed.loc[idx, row.isna()] = row_median
+            else:
+                # If all values are NaN in this row, use 0
+                clustergram_data_processed.loc[idx, row.isna()] = 0
+    else:
+        # Original behavior: replace -inf and inf with 0, fill NaN with 0
+        clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], 0)
+        clustergram_data_processed = clustergram_data_processed.fillna(0)
+
     clustergram_data_processed = clustergram_data_processed.astype(float)
-    clustergram_data_processed = clustergram_data_processed.fillna(0)
-    
+
     if distance_metric in ['correlation', 'seuclidean', 'cosine']:
         clustergram_data_processed = apply_distance_preprocessing(clustergram_data_processed, distance_metric)
     
@@ -914,7 +983,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             },
             line_width=2,
             display_ratio=[0.12, 0.08] if not hide_tissue_labels else [0.08, 0.05],
-            standardize='none', 
+            standardize='none',
             center_values=False,
             return_computed_traces=True,
             row_dist=distance_metric,
@@ -927,7 +996,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         row_ids = computed_traces['row_ids']
         reordered_organ_list = [organ_list[i] for i in column_ids]
 
-        # Custom hover data with both TPM and ratio values: need to reorder both TPM and ratio data according to clustering
+        # Custom hover data with TPM, log10(TPM), and ratio values: need to reorder both TPM and ratio data according to clustering
         if tpm_heatmap_data.shape[0] == len(tissue_cols_for_organs):
             tpm_clustered = tpm_heatmap_data.T[row_ids][:, column_ids]
             ratio_clustered = ratio_heatmap_data.T[row_ids][:, column_ids]
@@ -935,12 +1004,26 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             tpm_clustered = tpm_heatmap_data[row_ids][:, column_ids]
             ratio_clustered = ratio_heatmap_data[row_ids][:, column_ids]
 
-        customdata = np.zeros((len(transcript_names), len(clean_tissue_names), 3), dtype=object)
+        # Always get log10(TPM) data for tooltip, regardless of which data type is being displayed
+        log_tpm_clustered = None
+        if clustergram_data_with_nan is not None:
+            if clustergram_data_with_nan.shape[0] == len(tissue_cols_for_organs):
+                log_tpm_clustered = clustergram_data_with_nan.T.iloc[row_ids, :].iloc[:, column_ids].values
+            else:
+                log_tpm_clustered = clustergram_data_with_nan.iloc[row_ids, :].iloc[:, column_ids].values
+
+        customdata = np.zeros((len(transcript_names), len(clean_tissue_names), 4), dtype=object)
         for i in range(len(transcript_names)):
             for j in range(len(clean_tissue_names)):
-                customdata[i, j, 0] = reordered_organ_list[j] 
-                customdata[i, j, 1] = tpm_clustered[i, j]      
-                customdata[i, j, 2] = ratio_clustered[i, j]    
+                customdata[i, j, 0] = reordered_organ_list[j]
+                customdata[i, j, 1] = tpm_clustered[i, j]
+                # Format log10(TPM) to show NaN as 'NaN', otherwise format to 2 decimal places
+                if log_tpm_clustered is not None:
+                    log_val = log_tpm_clustered[i, j]
+                    customdata[i, j, 2] = 'NaN' if pd.isna(log_val) else f'{log_val:.2f}'
+                else:
+                    customdata[i, j, 2] = 'N/A'
+                customdata[i, j, 3] = ratio_clustered[i, j]
 
         heatmap_trace = clustergram.data[-1]
         heatmap_trace.customdata = customdata
@@ -949,15 +1032,26 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             "<b>Tissue:</b> %{x}<br>"
             "<b>Organ:</b> %{customdata[0]}<br>"
             "<b>TPM:</b> %{customdata[1]:.2f}<br>"
-            "<b>Ratio:</b> %{customdata[2]:.2f}"
+            "<b>Log10(TPM):</b> %{customdata[2]}<br>"
+            "<b>Ratio:</b> %{customdata[3]:.2f}"
             "<extra></extra>"
         )
+
+        if show_gridlines:
+            heatmap_trace.xgap = 1
+            heatmap_trace.ygap = 1
+
+        # Log TPM NaN clustering workaround: replace the median-filled NaN values back with NaN in the heatmap display
+        if show_nan_as_black and clustergram_data_with_nan is not None:
+            nan_data_reordered = clustergram_data_with_nan.iloc[row_ids, :].iloc[:, column_ids]
+            # Replace the heatmap trace data with the version containing NaN (show as transparent/white)
+            heatmap_trace.z = nan_data_reordered.values
         
     except Exception as e2:
         print(f"Error creating clustergram: {e2}")
         return create_empty_isoform_message(f"Error creating visualization for {gene_name}")
     
-    clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
+    clustergram = apply_colorscale_to_clustergram(clustergram, colorscale, show_nan_as_black=show_nan_as_black)
     colorbar_x = -0.35
     
     try:
@@ -1022,7 +1116,9 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
 
     legend_base_x = colorbar_x_paper
     # Offset from plot edge = colorbar offset + colorbar width + spacing between legends
-    legend_pixel_offset = colorbar_pixel_offset + 20 + 30 
+    base_spacing = 30
+    extra_spacing_log_tpm = 20 if (data_type == "Log TPM" or data_type == "log_tpm") else 0
+    legend_pixel_offset = colorbar_pixel_offset + 20 + base_spacing + extra_spacing_log_tpm 
 
     clustergram.add_annotation(
         x=legend_base_x,
@@ -1059,30 +1155,36 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             'font': {'size': 14 if hide_tissue_labels else 16}
         },
         margin=dict(
-                l=min(20, left_margin + 50), 
-                r=350,  
-                t=90, 
+                l=min(20, left_margin + 50),
+                r=350,
+                t=90,
                 b=calculate_bottom_margin(show_labels, transcript_names_abbreviated)
-            ),
-        autosize=True, 
-        width=None,  
+        ),
+        autosize=True,
+        width=None,
         height=height,
-        uirevision='constant', 
+        uirevision='constant',
         yaxis=dict(
             automargin=True,
             tickangle=0,
-            tickfont=dict(size=min(11, max(8, int(height/60))))
+            tickfont=dict(size=min(11, max(8, int(height/60)))),
+            showgrid=True,
+            gridcolor='white',
+            gridwidth=1
         ),
         xaxis=dict(
             automargin=True,
             tickangle=45 if show_labels else 0,
             tickfont=dict(
                 size=6 if show_labels else 1,
-                color='rgba(0,0,0,0)' if not show_labels else None 
+                color='rgba(0,0,0,0)' if not show_labels else None
             ),
-            showticklabels=show_labels
+            showticklabels=show_labels,
+            showgrid=True,
+            gridcolor='white',
+            gridwidth=1
         ),
-        plot_bgcolor='white',
+        plot_bgcolor=gridline_color if show_gridlines else 'rgba(0,0,0,0)',
         paper_bgcolor='white'
     )
     
@@ -1123,7 +1225,7 @@ def create_single_transcript_heatmap(heatmap_data, tpm_heatmap_data, ratio_heatm
     return fig
 
 
-def apply_colorscale_to_clustergram(fig, colorscale):
+def apply_colorscale_to_clustergram(fig, colorscale, show_nan_as_black=False):
     """Apply colorscale to the heatmap portion of a clustergram"""
     try:
         if len(fig.data) > 0:
@@ -1158,10 +1260,21 @@ def average_lrs_by_tissue(tpm_data: pd.DataFrame,
     
     for tissue_name, columns in tissue_groups.items():
         tissue_data = tpm_data[columns].values
-        
-        averaged_values = np.mean(tissue_data, axis=1)
+
+        # skip if all values in tissue are NaN
+        if np.isnan(tissue_data).all():
+            continue
+
+        # Use nanmean to properly handle NaN values
+        if np.isnan(tissue_data).any():
+            mask = ~np.isnan(tissue_data)
+            with np.errstate(invalid='ignore', all='ignore'):
+                averaged_values = np.where(mask.any(axis=1), np.nanmean(tissue_data, axis=1), np.nan)
+        else:
+            averaged_values = np.mean(tissue_data, axis=1)
+
         averaged_data.append(averaged_values)
-        
+
         tissue_display_names.append(tissue_name)
         tissue_category = tissue_to_organ_mapping[tissue_name]
         tissue_categories.append(tissue_category)
@@ -1187,15 +1300,25 @@ def average_lrs_by_replicates(tpm_data: pd.DataFrame,
         if not group_columns:
             continue 
         
-        # Case 1: multiple replicates, so need to average them 
+        # Case 1: multiple replicates, so need to average them
         if len(group_columns) > 1:
             tissue_data = tpm_data[group_columns].values
-            averaged_values = np.mean(tissue_data, axis=1)
+
+            if np.isnan(tissue_data).all():
+                continue
+
+            # Use nanmean to properly preserve NaN if present
+            if np.isnan(tissue_data).any():
+                mask = ~np.isnan(tissue_data)
+                with np.errstate(invalid='ignore', all='ignore'):
+                    averaged_values = np.where(mask.any(axis=1), np.nanmean(tissue_data, axis=1), np.nan)
+            else:
+                averaged_values = np.mean(tissue_data, axis=1)
 
         # Case 2: single replicate
         else:
             averaged_values = tpm_data[group_columns[0]].values
-        
+
         averaged_data.append(averaged_values)
 
         tissue_name = extract_tissue_name_from_column(group_columns[0])

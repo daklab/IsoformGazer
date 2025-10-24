@@ -191,6 +191,12 @@ def setup_local_database(force_rebuild=False):
     ratio_df['id'] = ratio_df.index
     ratio_df.to_sql('ratio_data', conn, if_exists='replace')
 
+    print("Processing isoform log TPM data...")
+    log_tpm_file = os.path.join(data_dir, "all_tpm_log10_250828.tsv")
+    log_tpm_df = pd.read_csv(log_tpm_file, sep='\t')
+    log_tpm_df['id'] = log_tpm_df.index
+    log_tpm_df.to_sql('log_tpm_data', conn, if_exists='replace')
+
     print("Updating isoform transcript names with full names from PSL data...")
     conn.execute("""
         UPDATE isoforms 
@@ -951,15 +957,19 @@ app.layout = html.Div(className='app-layout', children=[
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='toggle-switch-row', children=[
                                 html.Div('Isoform Clustergram Unit', className='app-controls-name toggle-switch-label-narrow'),
-                                daq.ToggleSwitch(
+                                dcc.RadioItems(
                                     id='isoform-data-type-switch',
-                                    value=False,  # False = TPM, True = Ratio
-                                    label={'label': 'TPM / Ratio', 'style': {'fontSize': '12px', 'color': '#506784'}},
-                                    labelPosition='right',
-                                    className='toggle-switch-inline'
+                                    options=[
+                                        {'label': ' Ratio', 'value': 'ratio'},
+                                        {'label': ' TPM', 'value': 'tpm'},
+                                        {'label': ' Log TPM', 'value': 'log_tpm'}
+                                    ],
+                                    value='ratio',
+                                    className='radio-items-inline',
+                                    labelStyle={'display': 'inline-block', 'marginRight': '20px', 'fontSize': '12px', 'color': '#506784'}
                                 )
                             ]),
-                            html.Div(className='app-controls-desc', children='Toggle whether isoform clustergram shows TPM values or ratio values across all tissues')
+                            html.Div(className='app-controls-desc', children='Select whether to show Ratio, TPM, or log TPM values for the isoform clustergram')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='radio-items-row', children=[
@@ -1027,6 +1037,19 @@ app.layout = html.Div(className='app-layout', children=[
                                 value='Viridis'
                             ),
                             html.Div(className='app-controls-desc', children='Choose the color theme of the heatmaps')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Clustergram Gridlines', className='app-controls-name toggle-switch-label-narrow-plus'),
+                                daq.ToggleSwitch(
+                                    id='gridlines-toggle',
+                                    value=False,
+                                    label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='left',
+                                    className='toggle-switch-inline'
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Toggle white gridlines visibility in clustergrams')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Distance Metric'),
@@ -2054,11 +2077,12 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
      dash.dependencies.Input('clustergram-height-slider', 'value'),
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
-     dash.dependencies.Input('filtered-isoform-store', 'data')]
+     dash.dependencies.Input('filtered-isoform-store', 'data'),
+     dash.dependencies.Input('gridlines-toggle', 'value')]
 )
 def update_junction_clustergram(selected_gene, colorscale,
                                 filtered_junction_ids, show_celltype_labels, clustergram_height,
-                                distance_metric, linkage_method, filtered_isoform_ids):
+                                distance_metric, linkage_method, filtered_isoform_ids, show_gridlines):
     """Update junction visualization based on gene selection and filtering"""
 
     if selected_gene:
@@ -2087,7 +2111,8 @@ def update_junction_clustergram(selected_gene, colorscale,
                                              colorscale=colorscale,
                                              show_celltype_labels=show_celltype_labels,
                                              distance_metric=distance_metric,
-                                             linkage_method=linkage_method)
+                                             linkage_method=linkage_method,
+                                             show_gridlines=show_gridlines)
             fig.update_layout(
                 autosize=True,
                 width=None,
@@ -2107,7 +2132,8 @@ def update_junction_clustergram(selected_gene, colorscale,
             filtered_junction_ids=filtered_junction_ids,
             show_celltype_labels=show_celltype_labels,
             distance_metric=distance_metric,
-            linkage_method=linkage_method
+            linkage_method=linkage_method,
+            show_gridlines=show_gridlines
         )
         fig.update_layout(
             autosize=True,
@@ -2132,12 +2158,16 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('clustergram-height-slider', 'value'),
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
-     dash.dependencies.Input('filtered-junction-store', 'data')]
+     dash.dependencies.Input('filtered-junction-store', 'data'),
+     dash.dependencies.Input('gridlines-toggle', 'value')]
 )
-def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
+def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
                           show_labels, collapse_mode, filtered_transcript_ids,
-                          clustergram_height, distance_metric, linkage_method, filtered_junction_ids):
+                          clustergram_height, distance_metric, linkage_method, filtered_junction_ids,
+                          show_gridlines):
     """Update isoform clustergram with unified height based on both isoform and junction data"""
+    gridline_color = '#ffffff'
+
     ratio_data = load_expression_data(db_path=db_path,
                                       gene_name=selected_gene,
                                       data_type='ratio')
@@ -2146,10 +2176,18 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
                                     gene_name=selected_gene,
                                     data_type='tpm')
 
-    if use_ratio_data:
+    log_tpm_data = load_expression_data(db_path=db_path,
+                                        gene_name=selected_gene,
+                                        data_type='log_tpm')
+
+    if data_type_selection == 'ratio':
         data_type = "Ratio"
-    else:
+    elif data_type_selection == 'log_tpm':
+        data_type = "Log TPM"
+    else: 
         data_type = "TPM"
+
+    print(f"DEBUG: update_isoform_heatmap called with data_type_selection='{data_type_selection}' -> data_type='{data_type}'")
 
     if selected_gene:
         try:
@@ -2180,13 +2218,16 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
 
         filtered_ratio_data = ratio_data.copy()
         filtered_tpm_data = tpm_data.copy()
+        filtered_log_tpm_data = log_tpm_data.copy()
 
         filtered_ratio_data = filtered_ratio_data[filtered_ratio_data['id'].isin(filtered_ids)] if filtered_ids else filtered_ratio_data
         filtered_tpm_data = filtered_tpm_data[filtered_tpm_data['id'].isin(filtered_ids)] if filtered_ids else filtered_tpm_data
-        
+        filtered_log_tpm_data = filtered_log_tpm_data[filtered_log_tpm_data['id'].isin(filtered_ids)] if filtered_ids else filtered_log_tpm_data
+
         fig = create_isoform_expression_clustergram(
             tpm_data=filtered_tpm_data,
             ratio_data=filtered_ratio_data,
+            log_tpm_data=filtered_log_tpm_data,
             gene_name=selected_gene,
             height=heatmap_height,
             colorscale=colorscale,
@@ -2194,7 +2235,9 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
             show_labels=show_labels,
             collapse_mode=collapse_mode,
             distance_metric=distance_metric,
-            linkage_method=linkage_method
+            linkage_method=linkage_method,
+            show_gridlines=show_gridlines,
+            gridline_color=gridline_color
         )
         fig.update_layout(
             autosize=True,

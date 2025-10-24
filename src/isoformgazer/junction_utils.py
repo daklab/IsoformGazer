@@ -26,7 +26,7 @@ MAX_MARGIN_LABELS = 65
 ###################################################################
 # VISUALIZATION METHODS
 ###################################################################
-def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete'):
+def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete', show_gridlines=False):
     """Create summary-level clustergram across all cell types and top junctions"""
     conn = sqlite3.connect(db_path)
     query = """
@@ -97,9 +97,16 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     )
     
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
-    
+
+    if show_gridlines:
+        if len(clustergram.data) > 0:
+            heatmap_trace = clustergram.data[-1]
+            heatmap_trace.xgap = 1
+            heatmap_trace.ygap = 1
+            clustergram.update_layout(plot_bgcolor='white')
+
     bottom_margin = 60 if hide_junction_labels else 120
-    
+
     clustergram.update_layout(
         title={
             'text': "Summary: Junction Usage Across All Cell Types",
@@ -166,7 +173,7 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
     return fig
 
 
-def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete'):
+def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete', show_gridlines=False):
     """Create ATSE-level clustergram with correct junction ID matching for tooltips"""
     conn = sqlite3.connect(db_path)
     query = """
@@ -278,9 +285,15 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         print(f"Error creating clustergram: {e}")
         return create_empty_clustergram_message(f"Error creating visualization for {gene_name}")
     
-    # Apply colorscale and positioning
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
-    
+
+    if show_gridlines:
+        if len(clustergram.data) > 0:
+            heatmap_trace = clustergram.data[-1]
+            heatmap_trace.xgap = 1
+            heatmap_trace.ygap = 1
+            clustergram.update_layout(plot_bgcolor='white')
+
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
