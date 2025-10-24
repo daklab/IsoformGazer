@@ -409,7 +409,6 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
         else:
             # Log TPM: preserve NaN values
             nan_count = df[numeric_cols].isna().sum().sum()
-            print(f"DEBUG load_expression_data: Loading log_tpm for {gene_name} - found {nan_count} NaN values")
 
         return df
     
@@ -1022,7 +1021,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                     log_val = log_tpm_clustered[i, j]
                     customdata[i, j, 2] = 'NaN' if pd.isna(log_val) else f'{log_val:.2f}'
                 else:
-                    customdata[i, j, 2] = 'N/A'
+                    customdata[i, j, 2] = 'NaN'
                 customdata[i, j, 3] = ratio_clustered[i, j]
 
         heatmap_trace = clustergram.data[-1]

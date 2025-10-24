@@ -45,20 +45,26 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
         return create_empty_clustergram_message("No junction data available for summary view")
     
     psi_matrix = df.pivot(index='junction_id', columns='cell_type', values='avg_psi')
-    psi_matrix = psi_matrix.fillna(0)
-    
+
     orig_matrix = df.pivot(index='junction_id', columns='cell_type', values='avg_psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
+
     psi_matrix = psi_matrix[valid_columns]
+    psi_matrix_with_nan = psi_matrix.copy()
     
-    junction_variance = psi_matrix.var(axis=0).sort_values(ascending=False)
+    # For variance calculation, use 0-filled data
+    psi_matrix_for_variance = psi_matrix.fillna(0)
+    junction_variance = psi_matrix_for_variance.var(axis=0).sort_values(ascending=False)
     top_junctions = junction_variance.head(30).index
     psi_matrix_filtered = psi_matrix[top_junctions]
-    
+
+    psi_matrix_filtered_with_nan = psi_matrix_filtered.copy()
+
     if psi_matrix_filtered.empty:
         return create_empty_clustergram_message("No variable junction data available")
-    
-    # Clamp vals so always in 0-1 range
+
+    # For clustering, fill NaN with 0
+    psi_matrix_filtered = psi_matrix_filtered.fillna(0)
     psi_matrix_filtered = psi_matrix_filtered.clip(lower=0, upper=1)
     
     # Check for constant rows/columns that cause issues
@@ -98,6 +104,12 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
 
+    # Replace heatmap data with NaN values (shown as white)
+    if len(clustergram.data) > 0:
+        heatmap_trace = clustergram.data[-1]
+        heatmap_trace.z = psi_matrix_filtered_with_nan.values
+        clustergram.update_layout(plot_bgcolor='white')
+
     if show_gridlines:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
@@ -122,10 +134,31 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
         width=None,  
         height=height,
         uirevision='constant', 
-        yaxis=dict(automargin=True),  
-        xaxis=dict(automargin=True)   
+        yaxis=dict(automargin=True),
+        xaxis=dict(automargin=True)
     )
-    
+
+    if len(clustergram.data) > 0:
+        heatmap_trace = clustergram.data[-1]
+        customdata = []
+        for i in range(len(psi_matrix_filtered_with_nan)):
+            row_data = []
+            for j in range(len(psi_matrix_filtered_with_nan.columns)):
+                psi_val = psi_matrix_filtered_with_nan.iloc[i, j]
+                if pd.isna(psi_val):
+                    row_data.append('NaN')
+                else:
+                    row_data.append(f'{psi_val:.2f}')
+            customdata.append(row_data)
+
+        heatmap_trace.customdata = customdata
+        heatmap_trace.hovertemplate = (
+            '<b>Junction ID</b>: %{y}<br>'
+            '<b>Cell Type</b>: %{x}<br>'
+            '<b>PSI</b>: %{customdata}<br>'
+            '<extra></extra>'
+        )
+
     return clustergram
 
 
@@ -196,11 +229,11 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         return create_empty_clustergram_message(f"No junction data found for gene: {gene_name}")
     
     psi_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='psi')
-    psi_matrix = psi_matrix.fillna(0)
 
     orig_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
     psi_matrix = psi_matrix[valid_columns]
+    psi_matrix_with_nan = psi_matrix.copy()
 
     # n_cells matrix to allow us to show cell count in tooltip on hover in dashboard
     n_cells_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='n_cells')
@@ -224,10 +257,18 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         )
     
     psi_matrix_processed = psi_matrix.copy()
-    psi_matrix_processed = psi_matrix_processed.replace([np.inf, -np.inf], 0)
+    psi_matrix_processed = psi_matrix_processed.replace([np.inf, -np.inf], np.nan)
     psi_matrix_processed = psi_matrix_processed.astype(float)
     psi_matrix_processed = psi_matrix_processed.clip(lower=0, upper=1)
-    psi_matrix_processed = psi_matrix_processed.fillna(0)
+
+    # For clustering, use row-median filled data (NaN -> median value per row)
+    for idx in psi_matrix_processed.index:
+        row = psi_matrix_processed.loc[idx]
+        row_median = row.median()
+        if pd.notna(row_median):
+            psi_matrix_processed.loc[idx, row.isna()] = row_median
+        else:
+            psi_matrix_processed.loc[idx, row.isna()] = 0
     
     # Apply preprocessing for problematic distance metrics
     if distance_metric in ['correlation', 'seuclidean', 'cosine']:
@@ -271,12 +312,26 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         row_ids = computed_traces['row_ids']
         col_ids = computed_traces['column_ids']
         reordered_n_cells = n_cells_values[row_ids, :][:, col_ids]
+        reordered_psi = psi_matrix_with_nan.iloc[row_ids, :].iloc[:, col_ids]
 
         heatmap_trace = clustergram.data[-1]
+
+        customdata = []
+        for i in range(len(row_ids)):
+            row_data = []
+            for j in range(len(col_ids)):
+                psi_val = reordered_psi.iloc[i, j]
+                if pd.isna(psi_val):
+                    row_data.append('NaN')
+                else:
+                    row_data.append(f'{psi_val:.2f}')
+            customdata.append(row_data)
+
+        heatmap_trace.customdata = customdata
         heatmap_trace.hovertemplate = (
-            '<b>Junction ID</b>: %{y}<br>'     
-            '<b>Cell Type</b>: %{x}<br>'      
-            '<b>PSI</b>: %{z:.2f}<br>'
+            '<b>Junction ID</b>: %{y}<br>'
+            '<b>Cell Type</b>: %{x}<br>'
+            '<b>PSI</b>: %{customdata}<br>'
             '<b>Number of Cells</b>: %{text}<extra></extra>'
         )
         heatmap_trace.text = reordered_n_cells.astype(str).tolist()
@@ -284,8 +339,14 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     except Exception as e:
         print(f"Error creating clustergram: {e}")
         return create_empty_clustergram_message(f"Error creating visualization for {gene_name}")
-    
+
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
+
+    if len(clustergram.data) > 0:
+        nan_data_reordered = psi_matrix_with_nan.iloc[row_ids, :].iloc[:, col_ids]
+        heatmap_trace = clustergram.data[-1]
+        heatmap_trace.z = nan_data_reordered.values
+        clustergram.update_layout(plot_bgcolor='white')
 
     if show_gridlines:
         if len(clustergram.data) > 0:
@@ -332,9 +393,10 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             tickfont=dict(size=min(11, max(8, int(height/60))))
         ),
         xaxis=dict(
-            automargin=True,
-            tickangle=45 if not hide_junction_labels else 0,
-            tickfont=dict(size=8) if not hide_junction_labels else dict(size=10)
+            automargin=False,
+            tickangle=0,
+            tickfont=dict(size=8) if not hide_junction_labels else dict(size=10),
+            side='bottom'
         )
     )
     

@@ -2138,7 +2138,12 @@ def update_junction_clustergram(selected_gene, colorscale,
         fig.update_layout(
             autosize=True,
             width=None,
-            transition_duration=200
+            transition_duration=200,
+            xaxis=dict(
+                tickangle=0,
+                automargin=False,
+                side='bottom'
+            )
         )
         return fig
     
@@ -2186,8 +2191,6 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
         data_type = "Log TPM"
     else: 
         data_type = "TPM"
-
-    print(f"DEBUG: update_isoform_heatmap called with data_type_selection='{data_type_selection}' -> data_type='{data_type}'")
 
     if selected_gene:
         try:
