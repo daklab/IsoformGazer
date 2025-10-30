@@ -212,35 +212,48 @@ html, body {
     max-width: 80vw;
     z-index: 2;
     position: relative;
+    will-change: transform;
+    transform: translateZ(0);
 }
 
 .progress-ring {
     position: absolute;
     top: 50%;
     left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translate(-50%, -50%) translateZ(0);
     width: 450px;
     height: 450px;
     z-index: 1;
-    filter: 
-        drop-shadow(0 0 12px rgba(255, 255, 255, 0.8)) 
-        drop-shadow(0 0 24px rgba(255, 255, 255, 0.6))
-        drop-shadow(0 0 36px rgba(255, 255, 255, 0.4));
-    animation: pulse-ring 2s ease-in-out infinite;
+    backface-visibility: hidden;
+    will-change: contents;
+    contain: layout style paint;
 }
 
 #progress-circle {
     width: 100% !important;
     height: 100% !important;
+    pointer-events: none;
+    transform: translateZ(0);
+    will-change: contents;
+    contain: layout style paint;
 }
 
 #progress-circle .js-plotly-plot {
     width: 100% !important;
     height: 100% !important;
+    pointer-events: none;
+    transform: translateZ(0);
+}
+
+#progress-circle svg {
+    shape-rendering: crispEdges;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
 }
 
 .pulsing {
     animation: pulse 2s ease-in-out infinite;
+    animation-delay: 0.2s;
 }
 
 @keyframes pulse {
@@ -260,23 +273,23 @@ html, body {
 
 @keyframes pulse-ring {
     0% {
-        transform: translate(-50%, -50%) scale(1);
-        filter: 
-            drop-shadow(0 0 12px rgba(255, 255, 255, 0.8)) 
+        transform: translate(-50%, -50%);
+        filter:
+            drop-shadow(0 0 12px rgba(255, 255, 255, 0.8))
             drop-shadow(0 0 24px rgba(255, 255, 255, 0.6))
             drop-shadow(0 0 36px rgba(255, 255, 255, 0.4));
     }
     50% {
-        transform: translate(-50%, -50%) scale(1.05);
-        filter: 
-            drop-shadow(0 0 16px rgba(255, 255, 255, 1.0)) 
+        transform: translate(-50%, -50%);
+        filter:
+            drop-shadow(0 0 16px rgba(255, 255, 255, 1.0))
             drop-shadow(0 0 32px rgba(255, 255, 255, 0.8))
             drop-shadow(0 0 48px rgba(255, 255, 255, 0.6));
     }
     100% {
-        transform: translate(-50%, -50%) scale(1);
-        filter: 
-            drop-shadow(0 0 12px rgba(255, 255, 255, 0.8)) 
+        transform: translate(-50%, -50%);
+        filter:
+            drop-shadow(0 0 12px rgba(255, 255, 255, 0.8))
             drop-shadow(0 0 24px rgba(255, 255, 255, 0.6))
             drop-shadow(0 0 36px rgba(255, 255, 255, 0.4));
     }

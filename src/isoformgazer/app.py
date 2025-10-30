@@ -19,7 +19,12 @@ from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
-from data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, get_all_gene_options, create_custom_spinner, validate_filter_input
+from data_utils import (
+    get_master_table_columns, parse_filter_query, query_master_table, get_gene_options,
+    get_all_gene_options, create_custom_spinner, validate_filter_input,
+    is_cache_valid, load_default_gene_cache, save_default_gene_cache,
+    generate_default_gene_cache, get_default_gene_cache_path
+)
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
     load_atse_data, process_gene_atse_data, create_empty_atse_message, 
@@ -471,6 +476,22 @@ def create_loading_progress_figure():
 # APPLICATION SETUP
 ###################################################################
 db_path = setup_local_database()
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Cache for default gene A1BG-AS1
+DEFAULT_GENE = 'A1BG-AS1'
+default_gene_cache = None
+cache_loaded_from_disk = False
+
+if is_cache_valid(base_dir, db_path):
+    default_gene_cache = load_default_gene_cache(base_dir)
+    cache_loaded_from_disk = True
+
+if not default_gene_cache:
+    default_gene_cache = generate_default_gene_cache(db_path, DEFAULT_GENE)
+    if default_gene_cache:
+        save_default_gene_cache(base_dir, db_path, default_gene_cache)
+
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
 # CSS for styling components with responsive design
@@ -1273,10 +1294,22 @@ app.layout = html.Div(className='app-layout', children=[
 ])
 
 app.layout.children.extend([
-    dcc.Store(id='filtered-isoform-store', data=[]),
-    dcc.Store(id='filtered-junction-store', data=[]),
-    dcc.Store(id='isoform-full-data-store', data=[]),
-    dcc.Store(id='junction-full-data-store', data=[]),
+    dcc.Store(
+        id='filtered-isoform-store',
+        data=default_gene_cache.get('filtered_isoform_ids', []) if default_gene_cache else []
+    ),
+    dcc.Store(
+        id='filtered-junction-store',
+        data=default_gene_cache.get('filtered_junction_ids', []) if default_gene_cache else []
+    ),
+    dcc.Store(
+        id='isoform-full-data-store',
+        data=default_gene_cache.get('isoform_full_data', []) if default_gene_cache else []
+    ),
+    dcc.Store(
+        id='junction-full-data-store',
+        data=default_gene_cache.get('junction_full_data', []) if default_gene_cache else []
+    ),
     dcc.Store(id='table-callback-prevention', data=False),
     dcc.Store(id='initial-loading-complete', data=False),
     dcc.Store(id='exon-color-store', data='#2E86C1'),
@@ -1286,7 +1319,14 @@ app.layout.children.extend([
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='gtf-hash-results-store', data=[]),
     dcc.Store(id='all-gene-options-store', data=get_all_gene_options(db_path)),
-    dcc.Interval(id='loading-delay-interval', interval=1000, n_intervals=0, max_intervals=1, disabled=True),
+    dcc.Store(id='cache-used-store', data=cache_loaded_from_disk),
+    dcc.Interval(
+        id='loading-delay-interval',
+        interval=1000,
+        n_intervals=0,
+        max_intervals=1,
+        disabled=True
+    ),
     dcc.Interval(id='progress-update-interval', interval=50, n_intervals=0, disabled=False)
 ])
 
@@ -1329,16 +1369,16 @@ def update_junction_color_store(color_value):
 def update_loading_progress(progress_intervals, loading_complete):
     """
     Updates white loading progress circle for loading screen with steady time-based progression.
-    Notes: 
-    - We are assuming it takes ~5.65 seconds to load the initial data based on testing
-    - Currently using 50ms interval updates, meaning 113 steps to reach 100% (~0.885% per timestep)
+    (with cache actual load time is ~50ms, without cache actual load time is 1-2 seconds)
     """
     if loading_complete:
         return 100, True
-    
-    new_progress = min(progress_intervals * 0.885, 100)
+
+    progress_rate = 1.667
+
+    new_progress = min(progress_intervals * progress_rate, 100)
     disable_interval = (new_progress >= 100)
-    
+
     return new_progress, disable_interval
 
 
@@ -1347,55 +1387,68 @@ def update_loading_progress(progress_intervals, loading_complete):
     [dash.dependencies.Input('loading-progress-store', 'data')]
 )
 def update_progress_bar(progress):
-    """Updates loading screen circular progress bar based on 
+    """Updates loading screen circular progress bar based on
     timesteps defined in update_loading_progress() callback"""
-    radius = 1.5 
-    theta = np.linspace(0, 2 * np.pi, 100)
+    radius = 1.5
+
+    fig = go.Figure()
+
+    theta = np.linspace(0, 2 * np.pi, 200)
     x_circle = radius * np.cos(theta)
     y_circle = radius * np.sin(theta)
-    
-    # Progress arc (clockwise)
-    progress_theta = np.linspace(-np.pi/2, -np.pi/2 + 2 * np.pi * (progress / 100), max(int(progress), 2))
-    if len(progress_theta) > 0:
-        x_progress = radius * np.cos(progress_theta)
-        y_progress = radius * np.sin(progress_theta)
-    else:
-        x_progress = []
-        y_progress = []
-    
-    fig = go.Figure()
+
     fig.add_trace(go.Scatter(
         x=x_circle, y=y_circle,
         mode='lines',
-        line=dict(color='rgba(255,255,255,0.5)', width=8),
+        line=dict(color='rgba(255,255,255,0.1)', width=4), 
         showlegend=False,
         hoverinfo='none'
     ))
-    
-    if len(x_progress) > 0:
+
+    x_progress = []
+    y_progress = []
+
+    # Only render progress arc if progress is greater than 1%
+    if progress > 1.0:
+        num_points = max(int(progress * 1.5), 5)  
+        progress_theta = np.linspace(-np.pi/2, -np.pi/2 + 2 * np.pi * (progress / 100), num_points)
+        x_progress = radius * np.cos(progress_theta)
+        y_progress = radius * np.sin(progress_theta)
+
+    if len(x_progress) > 0 and progress > 1.0:
         fig.add_trace(go.Scatter(
             x=x_progress, y=y_progress,
             mode='lines',
             line=dict(
-                color='rgba(255,255,255,1.0)', 
+                color='rgba(255,255,255,0.15)',
+                width=32
+            ),
+            showlegend=False,
+            hoverinfo='none'
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=x_progress, y=y_progress,
+            mode='lines',
+            line=dict(
+                color='rgba(255,255,255,0.3)',
+                width=20
+            ),
+            showlegend=False,
+            hoverinfo='none'
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=x_progress, y=y_progress,
+            mode='lines',
+            line=dict(
+                color='rgba(255,255,255,1.0)',
                 width=10
             ),
             showlegend=False,
             hoverinfo='none'
         ))
-        
-        # Glow effect using slightly larger, more transparent line around original
-        fig.add_trace(go.Scatter(
-            x=x_progress, y=y_progress,
-            mode='lines',
-            line=dict(
-                color='rgba(255,255,255,0.4)', 
-                width=16
-            ),
-            showlegend=False,
-            hoverinfo='none'
-        ))
-    
+
     fig.update_layout(
         showlegend=False,
         paper_bgcolor='rgba(0,0,0,0)',
@@ -1412,9 +1465,10 @@ def update_progress_bar(progress):
             'range': [-2.0, 2.0]
         },
         width=450,
-        height=450
+        height=450,
+        hovermode=False
     )
-    
+
     return fig
 
 #######################################################################
