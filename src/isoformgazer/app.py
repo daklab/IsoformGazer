@@ -1134,7 +1134,8 @@ app.layout = html.Div(className='app-layout', children=[
                                             id="loading-top-structure-plot",
                                             type="default",
                                             color='#EDAE49',
-                                            delay_hide=500,
+                                            delay_show=0,
+                                            delay_hide=200,
                                             children=[
                                                 dcc.Graph(
                                                     id='atse-map',
@@ -1158,7 +1159,7 @@ app.layout = html.Div(className='app-layout', children=[
                                             id="loading-top-transcript-plot",
                                             type="default",
                                             color='#EDAE49',
-                                            delay_show=500,
+                                            delay_show=0,
                                             delay_hide=200,
                                             children=[dcc.Graph(
                                                 id='top-barplot',
@@ -1193,7 +1194,7 @@ app.layout = html.Div(className='app-layout', children=[
                                     id="loading-isoform-heatmap",
                                     type="default",
                                     color='#EDAE49',
-                                    delay_show=500,
+                                    delay_show=0,
                                     delay_hide=200,
                                     children=[dcc.Graph(
                                         id='heatmap1',
@@ -1221,7 +1222,8 @@ app.layout = html.Div(className='app-layout', children=[
                                     id="loading-junction-heatmap",
                                     type="default",
                                     color='#EDAE49',
-                                    delay_hide=500,
+                                    delay_show=0,
+                                    delay_hide=200,
                                     children=[
                                         dcc.Graph(
                                             id='heatmap2',
