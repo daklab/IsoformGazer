@@ -10,7 +10,7 @@ import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
-from data_utils import apply_distance_preprocessing
+from data_utils import apply_distance_preprocessing, extract_gtf_attr_val
 from performance_utils import cached, memory_tracker, plot_optimizer
 # suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='Mean of empty slice')
@@ -1592,17 +1592,24 @@ def calculate_single_isoform_hash(tstarts: list, blocksizes: list) -> str:
     return f"{s_id}:{e_id}"
 
 
-def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
+def parse_gtf_and_calculate_hashes(gtf_content: str) -> dict:
     """
     Parse GTF content and calculate hash IDs for all isoforms.
-    Uses sequential parsing logic, i.e. assumes that exons contained 
+    Uses sequential parsing logic, i.e. assumes that exons contained
     within a transcript follow that transcript feature line.
+
+    Transcripts with identical splice junctions (same internal structure) 
+    are collapsed and share the same hash_id, but may have different TSS and TES.
 
     Parameters:
         gtf_content (str): Content of GTF file as string
 
     Returns:
-        list: List of dictionaries with transcript_id, gene_id, and hash_id
+        dict: {
+            'results': List of dicts with gene_id, transcript_id, hash_id, exon_count,
+            'merged_transcripts': Dict mapping hash_id to list of transcripts that were merged,
+            'has_merges': Boolean indicating if any merges occurred
+        }
     """
     results = []
     transcripts = []
@@ -1626,14 +1633,19 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
         start = int(fields[3])
         end = int(fields[4])
         attributes = fields[8]
-
-        # can get gene_id from attributes if available
         gene_id = None
+        transcript_id = None
         for attr in attributes.split(';'):
             attr = attr.strip()
-            if attr.startswith('gene_id'):
-                gene_id = attr.split('"')[1]
-                break
+            if not attr:
+                continue
+            try:
+                if attr.startswith('gene_id'):
+                    gene_id = extract_gtf_attr_val(attr)
+                elif attr.startswith('transcript_id'):
+                    transcript_id = extract_gtf_attr_val(attr)
+            except (ValueError, IndexError):
+                continue
 
         if not gene_id:
             continue
@@ -1641,6 +1653,7 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
         if feature_type == 'transcript':
             current_transcript = {
                 'gene_id': gene_id,
+                'transcript_id': transcript_id,
                 'transcript_start': start,
                 'transcript_end': end,
                 'exons': [],
@@ -1655,6 +1668,9 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
     ###########################################################################
     # Second pass: validate transcript coordinates and calculate hash IDs
     ###########################################################################
+    # Map hash_id to list of transcripts with that hash
+    hash_to_transcripts = {}
+
     for i, transcript_data in enumerate(transcripts):
         exons = sorted(transcript_data['exons'])
 
@@ -1670,20 +1686,37 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
 
                 try:
                     hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
-                    # Use a synthetic transcript_id based on coordinates
-                    transcript_id = f"transcript_{transcript_data['transcript_start']}_{transcript_data['transcript_end']}"
 
-                    results.append({
-                        'transcript_id': transcript_id,
+                    result_entry = {
+                        'transcript_id': transcript_data['transcript_id'],
                         'gene_id': transcript_data['gene_id'],
                         'hash_id': hash_id,
                         'exon_count': len(exons)
-                    })
+                    }
+                    results.append(result_entry)
+
+                    # Track which transcripts share the same hash
+                    if hash_id not in hash_to_transcripts:
+                        hash_to_transcripts[hash_id] = []
+                    hash_to_transcripts[hash_id].append(transcript_data['transcript_id'])
+
                 except Exception as e:
                     print(f"Error calculating hash for transcript {i}: {e}")
                     continue
 
-    return results
+    # Identify merged transcripts (same hash, different TSS/TES)
+    merged_transcripts = {}
+    for hash_id, transcript_ids in hash_to_transcripts.items():
+        if len(transcript_ids) > 1:
+            merged_transcripts[hash_id] = transcript_ids
+
+    has_merges = len(merged_transcripts) > 0
+
+    return {
+        'results': results,
+        'merged_transcripts': merged_transcripts,
+        'has_merges': has_merges
+    }
 
 
 def generate_annotated_gtf(gtf_content: str) -> str:

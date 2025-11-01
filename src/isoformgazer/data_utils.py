@@ -695,3 +695,18 @@ def generate_default_gene_cache(db_path, gene_name='A1BG-AS1'):
     except Exception as e:
         print(f"Warning: Could not generate default gene cache: {e}")
         return None
+
+
+def extract_gtf_attr_val(attr_str):
+    """Extract value from GTF attribute"""
+    parts = attr_str.split(None, 1)
+
+    if len(parts) < 2:
+        return None
+    
+    value = parts[1].strip()
+
+    if value.startswith('"') and value.endswith('"'):
+        value = value[1:-1]
+
+    return value

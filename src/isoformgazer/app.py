@@ -23,7 +23,7 @@ from data_utils import (
     get_master_table_columns, parse_filter_query, query_master_table, get_gene_options,
     get_all_gene_options, create_custom_spinner, validate_filter_input,
     is_cache_valid, load_default_gene_cache, save_default_gene_cache,
-    generate_default_gene_cache, get_default_gene_cache_path
+    generate_default_gene_cache, get_default_gene_cache_path, extract_gtf_attr_val
 )
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
@@ -372,28 +372,147 @@ def setup_local_database(force_rebuild=False):
 
         
         print(f"✓ Processed {total_lines:,} ATSE records!")
-    
+
+        ###############################################################
+        # Load Gencode GTF data for transcript hash ID cross-checking
+        ###############################################################
+        print("Processing Gencode GTF file...")
+        gencode_gtf_file = os.path.join(data_dir, "gencode.v46.basic.annotation.gtf")
+
+        if os.path.exists(gencode_gtf_file):
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS gencode_gtf (
+                    id INTEGER PRIMARY KEY,
+                    gene_id TEXT,
+                    transcript_id TEXT,
+                    gene_name TEXT,
+                    transcript_type TEXT,
+                    exon_number INTEGER,
+                    exon_id TEXT,
+                    chromosome TEXT,
+                    strand TEXT,
+                    exon_start INTEGER,
+                    exon_end INTEGER,
+                    transcript_start INTEGER,
+                    transcript_end INTEGER
+                )
+            """)
+
+            gencode_records = []
+            with open(gencode_gtf_file, 'r') as f:
+                total_gtf_lines = sum(1 for _ in f)
+
+            with tqdm(total=total_gtf_lines, desc="Loading Gencode GTF data", unit="lines") as pbar:
+                with open(gencode_gtf_file, 'r') as f:
+                    for line in f:
+                        pbar.update(1)
+                        if line.startswith('#') or not line.strip():
+                            continue
+
+                        fields = line.strip().split('\t')
+                        if len(fields) < 9:
+                            continue
+
+                        feature_type = fields[2]
+                        if feature_type not in ['transcript', 'exon']:
+                            continue
+
+                        chromosome = fields[0]
+                        strand = fields[6]
+                        start = int(fields[3])
+                        end = int(fields[4])
+                        attributes = fields[8]
+                        gene_id = None
+                        transcript_id = None
+                        gene_name = None
+                        transcript_type = None
+                        exon_number = None
+                        exon_id = None
+
+                        for attr in attributes.split(';'):
+                            attr = attr.strip()
+                            if not attr:
+                                continue
+                            try:
+                                if attr.startswith('gene_id'):
+                                    gene_id = extract_gtf_attr_val(attr)
+                                elif attr.startswith('transcript_id'):
+                                    transcript_id = extract_gtf_attr_val(attr)
+                                elif attr.startswith('gene_name'):
+                                    gene_name = extract_gtf_attr_val(attr)
+                                elif attr.startswith('transcript_type'):
+                                    transcript_type = extract_gtf_attr_val(attr)
+                                elif attr.startswith('exon_number'):
+                                    value = extract_gtf_attr_val(attr)
+                                    if value:
+                                        exon_number = int(value)
+                                elif attr.startswith('exon_id'):
+                                    exon_id = extract_gtf_attr_val(attr)
+                            except (ValueError, IndexError):
+                                continue
+
+                        if gene_id and transcript_id:
+                            if feature_type == 'transcript':
+                                record = {
+                                    'gene_id': gene_id,
+                                    'transcript_id': transcript_id,
+                                    'gene_name': gene_name,
+                                    'transcript_type': transcript_type,
+                                    'exon_number': None,
+                                    'exon_id': None,
+                                    'chromosome': chromosome,
+                                    'strand': strand,
+                                    'exon_start': start,
+                                    'exon_end': end,
+                                    'transcript_start': start,
+                                    'transcript_end': end
+                                }
+                            else:  
+                                record = {
+                                    'gene_id': gene_id,
+                                    'transcript_id': transcript_id,
+                                    'gene_name': gene_name,
+                                    'transcript_type': transcript_type,
+                                    'exon_number': exon_number,
+                                    'exon_id': exon_id,
+                                    'chromosome': chromosome,
+                                    'strand': strand,
+                                    'exon_start': start,
+                                    'exon_end': end,
+                                    'transcript_start': None,
+                                    'transcript_end': None
+                                }
+
+                            gencode_records.append(record)
+
+            if gencode_records:
+                gencode_df = pd.DataFrame(gencode_records)
+                gencode_df.to_sql('gencode_gtf', conn, if_exists='replace', index=False)
+                print(f"✓ Processed {len(gencode_records):,} Gencode GTF records!")
+        else:
+            print(f"Warning: Gencode GTF file not found at {gencode_gtf_file}")
+
         print("Creating optimized database indices...")
         indices = [
             ("idx_junctions_gene", "junctions", "(gene_name, gene_id)"),
-            ("idx_junctions_gene_name", "junctions", "(gene_name)"),  
+            ("idx_junctions_gene_name", "junctions", "(gene_name)"),
             ("idx_isoforms_gene", "isoforms", "(gene_name, gene_id)"),
-            ("idx_isoforms_gene_name", "isoforms", "(gene_name)"), 
-            ("idx_isoforms_id", "isoforms", "(id)"), 
+            ("idx_isoforms_gene_name", "isoforms", "(gene_name)"),
+            ("idx_isoforms_id", "isoforms", "(id)"),
             ("idx_psl_gene", "psl_data", "(gene_id, id)"),
-            ("idx_psl_id", "psl_data", "(id)"),  
+            ("idx_psl_id", "psl_data", "(id)"),
             ("idx_junctions_junction_id", "junctions", "(junction_id)"),
             ("idx_junctions_psi", "junctions", "(gene_name, psi)"),
-            ("idx_junctions_cell_type", "junctions", "(cell_type)"),  
-            ("idx_tpm_id", "tpm_data", "(id)"), 
-            ("idx_ratio_id", "ratio_data", "(id)") 
+            ("idx_junctions_cell_type", "junctions", "(cell_type)"),
+            ("idx_tpm_id", "tpm_data", "(id)"),
+            ("idx_ratio_id", "ratio_data", "(id)")
         ]
-        
-        with tqdm(desc="Creating indices", total=len(indices) + 3, unit="index") as idx_pbar:
+
+        with tqdm(desc="Creating indices", total=len(indices) + 4, unit="index") as idx_pbar:
             for idx_name, table_name, columns in indices:
                 conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name}{columns}")
                 idx_pbar.update(1)
-            
+
             conn.execute("ALTER TABLE atse_data ADD COLUMN gene_id_clean TEXT")
             conn.execute("UPDATE atse_data SET gene_id_clean = SUBSTR(gene_id, 1, INSTR(gene_id, '.') - 1) WHERE gene_id LIKE '%.%'")
             conn.execute("UPDATE atse_data SET gene_id_clean = gene_id WHERE gene_id_clean IS NULL")
@@ -402,7 +521,9 @@ def setup_local_database(force_rebuild=False):
             idx_pbar.update(1)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_coords ON atse_data(chromosome, start, end)")
             idx_pbar.update(1)
-    
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_gencode_transcript ON gencode_gtf(gene_id, transcript_id)")
+            idx_pbar.update(1)
+
     conn.commit()
     conn.close()
     
@@ -831,50 +952,7 @@ app.layout = html.Div(className='app-layout', children=[
 
                         html.H2('Isoform Hash Lookup', className='alignment-settings-section'),
                         html.Div(className='hash-lookup-content', children=[
-                            html.P("Generate hash IDs for isoforms based on their junction coordinates."),
-
-                            html.H3('Coordinate Entry', className='summary-section-header'),
-                            html.Div(className='app-controls-block', children=[
-                                html.Div(className='coordinate-mode-selector', children=[
-                                    html.Label('Input Mode:', className='coordinate-section-label'),
-                                    dcc.RadioItems(
-                                        id='coordinate-input-mode',
-                                        options=[
-                                            {'label': 'Start positions +\nBlock sizes', 'value': 'start_block'},
-                                            {'label': 'Start positions +\nEnd positions', 'value': 'start_end'}
-                                        ],
-                                        value='start_block',
-                                        className='coordinate-radio-items',
-                                        inline=True
-                                    )
-                                ]),
-
-                                html.Div(className='coordinate-input-group', children=[
-                                    html.Label('Exon Start Positions (comma-separated):', className='coordinate-section-label'),
-                                    dcc.Input(
-                                        id='exon-starts-input',
-                                        type='text',
-                                        placeholder='e.g., 1000,2000,3000',
-                                        className='coordinate-input'
-                                    )
-                                ]),
-
-                                html.Div(id='second-input-container', children=[
-                                    html.Div(className='coordinate-input-group', children=[
-                                        html.Label('Block Sizes (comma-separated):', className='coordinate-section-label', id='second-input-label'),
-                                        dcc.Input(
-                                            id='second-coordinate-input',
-                                            type='text',
-                                            placeholder='e.g., 200,300,400',
-                                            className='coordinate-input'
-                                        )
-                                    ])
-                                ]),
-
-                                html.Button('Calculate Hash', id='calculate-hash-btn', className='control-button'),
-                                html.Div(id='hash-result')
-                            ]),
-
+                            html.P("Generate hash IDs for isoforms by uploading a GTF file. A table with gene_id, transcript_id, and hash_id will be generated."),
                             html.H3('GTF File Upload', className='summary-section-header'),
                             html.Div(className='app-controls-block', children=[
                                 dcc.Upload(
@@ -889,8 +967,8 @@ app.layout = html.Div(className='app-layout', children=[
                                 html.Div(id='gtf-upload-status', className='upload-status'),
                                 html.Div(id='gtf-download-section', className='hidden', children=[
                                     html.Div(className='download-buttons-container', children=[
-                                        html.Button('Download Annotated GTF', id='download-annotated-gtf-btn', className='control-button'),
-                                        html.Button('Download Hash Results', id='download-hashes-btn', className='control-button')
+                                        html.Button('Download Hash Results', id='download-hashes-btn', className='control-button'),
+                                        html.Button('Download Annotated GTF', id='download-annotated-gtf-btn', className='control-button')
                                     ]),
                                     dcc.Download(id='download-hashes'),
                                     dcc.Download(id='download-annotated-gtf')
@@ -2604,92 +2682,6 @@ def update_heatmap2_loading_message(selected_gene, filtered_ids):
 ###################################################################
 # ISOFORM HASH LOOKUP CALLBACKS
 ###################################################################
-
-@app.callback(
-    [dash.dependencies.Output('second-input-label', 'children'),
-     dash.dependencies.Output('second-coordinate-input', 'placeholder')],
-    [dash.dependencies.Input('coordinate-input-mode', 'value')]
-)
-def update_second_input_labels(input_mode):
-    """Update the second input field label and placeholder based on selected mode"""
-    if input_mode == 'start_end':
-        return 'Exon End Positions (comma-separated):', 'e.g., 1200,2300,3400'
-    else:  # start_block
-        return 'Block Sizes (comma-separated):', 'e.g., 200,300,400'
-
-
-@app.callback(
-    dash.dependencies.Output('hash-result', 'children'),
-    [dash.dependencies.Input('calculate-hash-btn', 'n_clicks')],
-    [dash.dependencies.State('coordinate-input-mode', 'value'),
-     dash.dependencies.State('exon-starts-input', 'value'),
-     dash.dependencies.State('second-coordinate-input', 'value')]
-)
-def calculate_hash_from_coordinates(n_clicks, input_mode, starts_input, second_input):
-    """Calculate hash ID from user-entered coordinates"""
-    if not n_clicks or not starts_input or not second_input:
-        return html.Div()
-
-    try:
-        # Parse comma-separated inputs
-        tstarts = [int(x.strip()) for x in starts_input.split(',') if x.strip()]
-        second_values = [int(x.strip()) for x in second_input.split(',') if x.strip()]
-
-        if len(tstarts) != len(second_values):
-            error_msg = ("Error: Number of start positions must match number of " +
-                        ("end positions" if input_mode == 'start_end' else "block sizes"))
-            return html.Div([
-                html.P(error_msg, className='error-message')
-            ])
-
-        if len(tstarts) < 2:
-            return html.Div([
-                html.P("Error: At least 2 exons required for hash calculation",
-                       className='error-message')
-            ])
-
-        # Convert end positions to block sizes if needed
-        if input_mode == 'start_end':
-            # second_values are end positions, convert to block sizes
-            blocksizes = [end - start for start, end in zip(tstarts, second_values)]
-            # Validate that all block sizes are positive
-            if any(size <= 0 for size in blocksizes):
-                return html.Div([
-                    html.P("Error: End positions must be greater than start positions",
-                           className='error-message error-message-spaced')
-                ])
-        else:
-            # second_values are already block sizes
-            blocksizes = second_values
-
-        hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
-
-        return html.Div([
-            html.Div("Isoform Hash ID:", className='hash-result-label'),
-            html.Div(className='hash-output', children=[
-                html.Div(className='hash-result-with-copy', children=[
-                    html.Div(hash_id, className='hash-result-box', id='hash-result-value'),
-                    dcc.Clipboard(
-                        target_id="hash-result-value",
-                        title="Copy hash ID to clipboard",
-                        className='hash-copy-button'
-                    )
-                ])
-            ])
-        ])
-
-    except ValueError as e:
-        return html.Div([
-            html.P(f"Error: Invalid input - {str(e)}",
-                   className='error-message')
-        ])
-    except Exception as e:
-        return html.Div([
-            html.P(f"Error calculating hash: {str(e)}",
-                   className='error-message')
-        ])
-
-
 @app.callback(
     [dash.dependencies.Output('gtf-upload-status', 'children'),
      dash.dependencies.Output('gtf-download-section', 'style'),
@@ -2703,11 +2695,14 @@ def handle_gtf_upload(contents, filename):
         return html.Div("No file uploaded", className='app-controls-desc'), {'display': 'none'}, []
 
     try:
-        content_type, content_string = contents.split(',')
+        _, content_string = contents.split(',')
         decoded = base64.b64decode(content_string)
         gtf_content = decoded.decode('utf-8')
 
-        hash_results = parse_gtf_and_calculate_hashes(gtf_content)
+        parse_results = parse_gtf_and_calculate_hashes(gtf_content)
+        hash_results = parse_results['results']
+        merged_transcripts = parse_results['merged_transcripts']
+        has_merges = parse_results['has_merges']
 
         if not hash_results:
             return (
@@ -2723,15 +2718,35 @@ def handle_gtf_upload(contents, filename):
         annotated_gtf = generate_annotated_gtf(gtf_content)
         encoded_gtf = base64.b64encode(annotated_gtf.encode('utf-8')).decode('utf-8')
 
-        upload_status = html.Div([
+        status_children = [
             html.P(f"Loaded '{filename}' successfully.", className='success-message success-message-bold'),
             html.P(f"Number of transcripts processed: {len(hash_results)}")
-        ])
+        ]
+
+        # Show warning if transcripts were merged
+        if has_merges:
+            merge_info_text = "Transcript Merging Detected: The following transcripts share identical internal splice junction structure and have been assigned the same hash ID, but may differ in TSS/TES:\n\n"
+            for hash_id, transcript_ids in merged_transcripts.items():
+                merge_info_text += f"Hash ID {hash_id}:\n"
+                for tid in transcript_ids:
+                    merge_info_text += f"  • {tid}\n"
+                merge_info_text += "\n"
+
+            status_children.append(
+                html.Div([
+                    html.P("Warning: Transcript Merging Detected", className='warning-message warning-message-bold'),
+                    html.P(merge_info_text, className='warning-message', style={'white-space': 'pre-wrap', 'font-family': 'monospace', 'font-size': '12px'})
+                ])
+            )
+
+        upload_status = html.Div(status_children)
 
         combined_data = {
             'hash_results': hash_results,
             'annotated_gtf': encoded_gtf,
-            'original_filename': filename
+            'original_filename': filename,
+            'merged_transcripts': merged_transcripts,
+            'has_merges': has_merges
         }
 
         return upload_status, {'display': 'block'}, combined_data
@@ -2753,7 +2768,7 @@ def handle_gtf_upload(contents, filename):
     [dash.dependencies.State('gtf-hash-results-store', 'data')]
 )
 def download_hash_results(download_clicks, stored_data):
-    """Handle download of hash results"""
+    """Handle download of hash results as TSV with gene_id, transcript_id, gencode_transcript_id, hash_id"""
     if not download_clicks or not stored_data:
         return dash.no_update
 
@@ -2761,17 +2776,41 @@ def download_hash_results(download_clicks, stored_data):
         if isinstance(stored_data, dict) and 'hash_results' in stored_data:
             hash_results = stored_data['hash_results']
         else:
-            hash_results = stored_data  # backwards compatibility
+            hash_results = stored_data
 
-        lines = ["transcript_id\tgene_id\thash_id\texon_count"]
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Results TSV format: gene_id, transcript_id, gencode_transcript_id, hash_id
+        lines = ["gene_id\ttranscript_id\tgencode_transcript_id\thash_id"]
+
         for result in hash_results:
-            lines.append(f"{result['transcript_id']}\t{result['gene_id']}\t{result['hash_id']}\t{result['exon_count']}")
+            gene_id = result['gene_id']
+            transcript_id = result['transcript_id']
+            hash_id = result['hash_id']
 
+            # Look up gencode_transcript_id from gencode_gtf table...
+            # Note: this is version-agnostic matching! (e.g., ENSG00000223972.5 matches ENSG00000223972.6)
+            gene_base = gene_id.split('.')[0] if '.' in gene_id else gene_id
+
+            cursor.execute("""
+                SELECT DISTINCT transcript_id FROM gencode_gtf
+                WHERE gene_id LIKE ?
+                ORDER BY transcript_id
+                LIMIT 1
+            """, (f"{gene_base}.%",))
+
+            gencode_result = cursor.fetchone()
+            gencode_transcript_id = gencode_result[0] if gencode_result else "N/A"
+
+            lines.append(f"{gene_id}\t{transcript_id}\t{gencode_transcript_id}\t{hash_id}")
+
+        conn.close()
         download_content = "\n".join(lines)
 
         return dict(content=download_content, filename="isoform_hashes.tsv")
 
-    except Exception as e:
+    except Exception:
         return dash.no_update
 
 
