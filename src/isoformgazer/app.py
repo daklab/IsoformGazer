@@ -982,7 +982,7 @@ app.layout = html.Div(className='app-layout', children=[
                         #####################################
                         # Isoform-level Event Plot Section
                         #####################################
-                        html.H2('Transcript Plots', className='alignment-settings-section'),
+                        html.H2('Structure Plot', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Plot Height'),
                             dcc.Slider(
@@ -1034,6 +1034,19 @@ app.layout = html.Div(className='app-layout', children=[
                                 )
                             ]),
                             html.Div(className='app-controls-desc', children='Toggle to hide junctions from the structure plot and show transcript structure instead')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Color by Average Abundance', className='app-controls-name toggle-switch-label-wide'),
+                                daq.ToggleSwitch(
+                                    id='color-by-abundance-toggle',
+                                    value=False,
+                                    label={'label': 'Off / On', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='left',
+                                    className='toggle-switch-inline'
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Color transcripts and junctions by their average abundance and usage (TPM/PSI)')
                         ]),
 
                         #####################################
@@ -2400,9 +2413,13 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
      dash.dependencies.Input('exon-color-store', 'data'),
      dash.dependencies.Input('junction-color-store', 'data'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('left-table-validation-store', 'data')]
+     dash.dependencies.Input('left-table-validation-store', 'data'),
+     dash.dependencies.Input('color-by-abundance-toggle', 'value'),
+     dash.dependencies.Input('colorscale-dropdown', 'value')]
 )
-def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, plot_height, exon_color, junction_color, isoform_filter_query, validation_data):
+def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, 
+                              plot_height, exon_color, junction_color, isoform_filter_query, 
+                              validation_data, color_by_abundance, colorscale):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -2424,12 +2441,15 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
         show_labels = False
         
         fig = create_junction_exon_visualization(
-            gene_data, 
+            gene_data,
             height=plot_height,
             show_y_labels=show_labels,
             exon_color=exon_color,
             junction_color=junction_color,
-            filtered_transcript_ids=actual_filtered_transcript_ids
+            filtered_transcript_ids=actual_filtered_transcript_ids,
+            color_by_abundance=color_by_abundance,
+            db_path=db_path,
+            colorscale=colorscale
         )
         return fig
     
@@ -2487,9 +2507,11 @@ def toggle_top_panel_plots(hide_junctions):
      dash.dependencies.Input('exon-color-store', 'data'),
      dash.dependencies.Input('hide-junctions-toggle', 'value'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('left-table-validation-store', 'data')]
+     dash.dependencies.Input('left-table-validation-store', 'data'),
+     dash.dependencies.Input('color-by-abundance-toggle', 'value'),
+     dash.dependencies.Input('colorscale-dropdown', 'value')]
 )
-def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data):
+def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale):
     """Update transcript structure plot in top panel when toggle is activated"""
     # Only update if junctions are hidden (transcript plot should be shown)
     if not hide_junctions:
@@ -2518,7 +2540,9 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
             gene_name=selected_gene,
             height=height_to_use,
             show_y_labels=True,
-            exon_color=exon_color
+            exon_color=exon_color,
+            color_by_abundance=color_by_abundance,
+            colorscale=colorscale
         )
         return fig
 

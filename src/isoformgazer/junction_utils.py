@@ -12,7 +12,7 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
-from data_utils import apply_distance_preprocessing
+from data_utils import apply_distance_preprocessing, get_matplotlib_colormap
 from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height, calculate_clustergram_min_height
 from isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
@@ -889,13 +889,15 @@ def process_transcript_structure(psl_df: pd.DataFrame,
     return pd.DataFrame(transcript_data)
 
 
-@cached(cache_timeout=600)
-def create_junction_exon_visualization(gene_data: dict, 
+def create_junction_exon_visualization(gene_data: dict,
                                        height: int = 600,
                                        show_y_labels: bool = False,
                                        exon_color: str = '#2E86C1',
                                        junction_color: str = '#85929E',
-                                       filtered_transcript_ids: list = None) -> go.Figure:
+                                       filtered_transcript_ids: list = None,
+                                       color_by_abundance: bool = False,
+                                       db_path: str = None,
+                                       colorscale: str = 'Viridis') -> go.Figure:
     """Create junction and exon structure plot for junction master table data"""
     if 'error' in gene_data:
         return create_empty_atse_message(gene_data['error'])
@@ -942,6 +944,19 @@ def create_junction_exon_visualization(gene_data: dict,
         # Reindex transcript_summary to match the original sorted order from database and sort by isoform_average_tpm descending
         transcript_summary = transcript_summary.sort_values('id', key=lambda x: x.map({vid: idx for idx, vid in enumerate(ordered_transcript_ids)})).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
+
+        if color_by_abundance: 
+            conn = sqlite3.connect(db_path)
+            try:
+                tpm_query = """
+                SELECT DISTINCT id, isoform_average_tpm
+                FROM isoforms
+                WHERE gene_name = ?
+                """
+                tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
+                transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+            finally:
+                conn.close()
         
         # Calculate dynamic height if not provided or if using default slider value
         if height is None or height == 600:
@@ -981,30 +996,54 @@ def create_junction_exon_visualization(gene_data: dict,
         exon_hover_x = []
         exon_hover_y = []
         exon_hover_text = []
-        
+
+        # Get color scale for transcripts if enabled
+        if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
+            tpm_values = transcript_summary['isoform_average_tpm'].fillna(0)
+            tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
+            cmap = get_matplotlib_colormap(colorscale)
+
         for _, transcript in transcript_summary.iterrows():
             isoform_id = transcript['id']
             trans_id = transcript['trans_id']
             trans_order = transcript['trans_order']
-            
+
             trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
-            
+
+            if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
+                tpm = transcript.get('isoform_average_tpm', 0)
+
+                if tpm_max > tpm_min:
+                    normalized = (tpm - tpm_min) / (tpm_max - tpm_min)
+                else:
+                    normalized = 0.5
+
+                rgba = cmap(normalized)
+                exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
+
+            else:
+                exon_fill_color = exon_color
+
             for _, exon in trans_exons.iterrows():
                 exon_shapes.append({
                     'type': "rect",
                     'x0': exon['exon_start'], 'y0': trans_order - 0.3,
                     'x1': exon['exon_end'], 'y1': trans_order + 0.3,
-                    'fillcolor': exon_color,
-                    'line': {'color': exon_color, 'width': 1},
+                    'fillcolor': exon_fill_color,
+                    'line': {'color': exon_fill_color, 'width': 1},
                     'opacity': 0.8
                 })
-                
+
                 exon_hover_x.append((exon['exon_start'] + exon['exon_end']) / 2)
                 exon_hover_y.append(trans_order)
-                exon_hover_text.append(
-                    f"Isoform ID: {isoform_id}<br>Transcript ID: {abbreviate_transcript_name(trans_id)}<br>Exon: {exon['exon_number']}<br>"
-                    f"Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
-                )
+
+                # Build hover text with optional TPM info
+                hover_text = f"Isoform ID: {isoform_id}<br>Transcript ID: {abbreviate_transcript_name(trans_id)}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
+                if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
+                    tpm = transcript.get('isoform_average_tpm', None)
+                    if tpm is not None:
+                        hover_text += f"<br>Average TPM: {tpm:.2f}"
+                exon_hover_text.append(hover_text)
         
         junction_y_start = y_max + 0.5
         
@@ -1035,31 +1074,89 @@ def create_junction_exon_visualization(gene_data: dict,
     junction_hover_x = []
     junction_hover_y = []
     junction_hover_text = []
-    
+
+    junction_psi_data = {}
+    if junctions and color_by_abundance:
+        conn = sqlite3.connect(db_path)
+        try:
+            psi_query = """
+            SELECT DISTINCT junction_id, junction_average_psi
+            FROM junctions
+            WHERE gene_name = ?
+            """
+            psi_df = pd.read_sql_query(psi_query, conn, params=[gene_name])
+            # Create a mapping of (start, end) -> junction_average_psi
+            for _, row in psi_df.iterrows():
+                junction_id = row['junction_id']
+                psi = row['junction_average_psi']
+                # Parse junction_id format: chr19_123_456_strand
+                parts = junction_id.rsplit('_', 1)
+                if len(parts) == 2:
+                    coords_part = parts[0]
+                    coord_parts = coords_part.split('_')
+                    if len(coord_parts) >= 3:
+                        try:
+                            start = int(coord_parts[-2])
+                            end = int(coord_parts[-1])
+                            junction_psi_data[(start, end)] = psi
+                        except (ValueError, IndexError):
+                            pass
+        finally:
+            conn.close()
+
+        # Calculate PSI min/max for normalization
+        psi_values = [v for v in junction_psi_data.values() if v is not None]
+        if psi_values:
+            psi_min = min(psi_values)
+            psi_max = max(psi_values)
+        else:
+            psi_min = psi_max = 0
+
+        cmap = get_matplotlib_colormap(colorscale)
+
     if junctions:
         for i, junction in enumerate(junctions):
             start = junction['start']
             end = junction['end']
             junction_y_pos = junction_y_start + (i * 1.0)
-    
+
             junction_id = f"chr{gene_data.get('chromosome', '').replace('chr', '')}_{start}_{end}_{strand}"
             junction_labels.append(junction_id)
             junction_y_positions.append(junction_y_pos)
+
+            if color_by_abundance and (start, end) in junction_psi_data:
+                psi = junction_psi_data[(start, end)]
+                if psi is not None:
+                    if psi_max > psi_min:
+                        normalized = (psi - psi_min) / (psi_max - psi_min)
+                    else:
+                        normalized = 0.5
+                    rgba = cmap(normalized)
+                    junction_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
+                else:
+                    junction_fill_color = junction_color
+            else:
+                junction_fill_color = junction_color
+
             junction_shapes.append({
                 'type': "rect",
                 'x0': start, 'y0': junction_y_pos - 0.15,
                 'x1': end, 'y1': junction_y_pos + 0.15,
-                'fillcolor': junction_color,
-                'line': {'color': junction_color, 'width': 1},
+                'fillcolor': junction_fill_color,
+                'line': {'color': junction_fill_color, 'width': 1},
                 'opacity': 0.8
             })
             
             junction_hover_x.append((start + end) / 2)
             junction_hover_y.append(junction_y_pos)
-            junction_hover_text.append(
-                f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>'
-                f'Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}'
-            )
+
+            # Build hover text with optional PSI info
+            hover_text = f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}'
+            if color_by_abundance and (start, end) in junction_psi_data:
+                psi = junction_psi_data[(start, end)]
+                if psi is not None:
+                    hover_text += f"<br>Average PSI: {psi:.2f}"
+            junction_hover_text.append(hover_text)
     
     all_shapes = exon_shapes + junction_shapes
     if all_shapes:
@@ -1088,9 +1185,74 @@ def create_junction_exon_visualization(gene_data: dict,
             text=junction_hover_text,
             name='Junctions'
         ))
-    
+
+    if color_by_abundance:
+        if colorscale: 
+            selected_colorscale = colorscale
+        else: 
+            selected_colorscale = 'Viridis'
+
+        if junctions and 'psi_min' in locals() and 'psi_max' in locals():
+            # Create invisible scatter trace with colorbar for PSI
+            fig.add_trace(go.Scatter(
+                x=[None], y=[None],
+                mode='markers',
+                marker=dict(
+                    colorscale=selected_colorscale,
+                    cmin=psi_min,
+                    cmax=psi_max,
+                    colorbar=dict(
+                        title=dict(text="Junction<br>Average PSI", font=dict(size=16)),
+                        thickness=20,
+                        len=0.4,
+                        x=1.15,
+                        y=0.7,
+                        tickfont=dict(size=10)
+                    ),
+                    showscale=True,
+                    size=0,
+                    opacity=0
+                ),
+                showlegend=False,
+                hoverinfo='none',
+                name='PSI Scale'
+            ))
+
+        if not transcript_summary.empty and 'isoform_average_tpm' in transcript_summary.columns:
+            tpm_values = transcript_summary['isoform_average_tpm'].dropna()
+            if not tpm_values.empty:
+                tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    marker=dict(
+                        colorscale=selected_colorscale,
+                        cmin=tpm_min,
+                        cmax=tpm_max,
+                        colorbar=dict(
+                            title=dict(text="Transcript<br>Average TPM", font=dict(size=16)),
+                            thickness=20,
+                            len=0.4,
+                            x=1.15,
+                            y=0.25,
+                            tickfont=dict(size=10)
+                        ),
+                        showscale=True,
+                        size=0,
+                        opacity=0
+                    ),
+                    showlegend=False,
+                    hoverinfo='none',
+                    name='TPM Scale'
+                ))
+
     total_y_range = junction_y_start + len(junctions) * 1.0 + 0.5 if junctions else y_max
-    
+
+    if color_by_abundance: 
+        right_margin = 350 
+    else: 
+        right_margin = 200
+
     fig.update_layout(
         title={
             'text': f"Splice Junctions and Exons for Gene {gene_name} ({gene_id})<br>(Coordinates: {min_start} - {max_end}, Strand: {strand})",
@@ -1118,7 +1280,7 @@ def create_junction_exon_visualization(gene_data: dict,
         height=height,
         margin=dict(
             l=MIN_MARGIN,
-            r=200,
+            r=right_margin,
             t=MAX_MARGIN,
             b=MAX_MARGIN+7
         ),

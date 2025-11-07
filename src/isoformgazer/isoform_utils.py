@@ -6,11 +6,12 @@ import warnings
 import pandas as pd
 import numpy as np
 import dash_bio
+import matplotlib.pyplot as plt
 import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
-from data_utils import apply_distance_preprocessing, extract_gtf_attr_val
+from data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap
 from performance_utils import cached, memory_tracker, plot_optimizer
 # suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='Mean of empty slice')
@@ -421,15 +422,16 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
     
     finally:
         conn.close()
-    
 
-@cached(cache_timeout=600)
-def create_transcript_structure_plot(db_path: str, 
-                                     transcript_data: pd.DataFrame, 
-                                     gene_name: str, 
+
+def create_transcript_structure_plot(db_path: str,
+                                     transcript_data: pd.DataFrame,
+                                     gene_name: str,
                                      height: int = 600,
                                      show_y_labels: bool = False,
-                                     exon_color: str = '#2E86C1') -> go.Figure:
+                                     exon_color: str = '#2E86C1',
+                                     color_by_abundance: bool = False,
+                                     colorscale: str = 'Viridis') -> go.Figure:
     """Create transcript structure plot showing all transcripts with 50%+ speed improvement"""
     
     if transcript_data.empty:
@@ -471,7 +473,21 @@ def create_transcript_structure_plot(db_path: str,
     # Reindex transcript_summary to match the original sorted order from database
     transcript_summary = transcript_summary.set_index('id').loc[ordered_transcript_ids].reset_index()
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
-    
+
+    # Fetch isoform_average_tpm data for coloring if enabled
+    if color_by_abundance:
+        conn = sqlite3.connect(db_path)
+        try:
+            tpm_query = """
+            SELECT DISTINCT id, isoform_average_tpm
+            FROM isoforms
+            WHERE gene_name = ?
+            """
+            tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
+            transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+        finally:
+            conn.close()
+
     # Calculate dynamic height if not provided or if using default slider value
     if height is None or height == 600:
         num_transcripts = len(transcript_summary)
@@ -512,31 +528,55 @@ def create_transcript_structure_plot(db_path: str,
     hover_traces_x = []
     hover_traces_y = []
     hover_traces_text = []
-    
+
+    # Get color scale for abundance if enabled
+    if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
+        tpm_values = transcript_summary['isoform_average_tpm'].fillna(0)
+        tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
+        cmap = get_matplotlib_colormap(colorscale)
+
     for _, transcript in transcript_summary.iterrows():
         isoform_id = transcript['id']
         trans_id = transcript['trans_id']
         trans_order = transcript['trans_order']
         trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
-        
+
+        if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
+            tpm = transcript.get('isoform_average_tpm', 0)
+
+            if tpm_max > tpm_min:
+                normalized = (tpm - tpm_min) / (tpm_max - tpm_min)
+            else:
+                normalized = 0.5
+
+            rgba = cmap(normalized)
+            exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
+
+        else:
+            exon_fill_color = exon_color
+
         for _, exon in trans_exons.iterrows():
             # Batch add shapes (way faster than individual add_shape calls)
             shapes.append({
                 'type': "rect",
                 'x0': exon['exon_start'], 'y0': trans_order - 0.3,
                 'x1': exon['exon_end'], 'y1': trans_order + 0.3,
-                'fillcolor': exon_color,
-                'line': {'color': exon_color, 'width': 1},
+                'fillcolor': exon_fill_color,
+                'line': {'color': exon_fill_color, 'width': 1},
                 'opacity': 0.8
             })
             
             # Batch add hover points
             hover_traces_x.append((exon['exon_start'] + exon['exon_end']) / 2)
             hover_traces_y.append(trans_order)
-            hover_traces_text.append(
-                f"Isoform ID: {isoform_id}<br>Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>"
-                f"Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
-            )
+
+            # Build hover text with optional TPM info
+            hover_text = f"Isoform ID: {isoform_id}<br>Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
+            if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
+                tpm = transcript.get('isoform_average_tpm', None)
+                if tpm is not None:
+                    hover_text += f"<br>Average TPM: {tpm:.2f}"
+            hover_traces_text.append(hover_text)
     
     fig.update_layout(shapes=shapes)
 
@@ -550,8 +590,48 @@ def create_transcript_structure_plot(db_path: str,
             hovertemplate='%{text}<extra></extra>',
             text=hover_traces_text
         ))
-    
+
+    if color_by_abundance:
+        if colorscale: 
+            selected_colorscale = colorscale  
+        else:
+            selected_colorscale = 'Viridis'
+
+        if not transcript_summary.empty and 'isoform_average_tpm' in transcript_summary.columns:
+            tpm_values = transcript_summary['isoform_average_tpm'].dropna()
+            if not tpm_values.empty:
+                tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
+                # Create invisible scatter trace with colorbar for TPM
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    marker=dict(
+                        colorscale=selected_colorscale,
+                        cmin=tpm_min,
+                        cmax=tpm_max,
+                        colorbar=dict(
+                            title=dict(text="Transcript<br>Average TPM", font=dict(size=16)),
+                            thickness=20,
+                            len=0.6,
+                            x=1.15,
+                            y=0.5,
+                            tickfont=dict(size=10)
+                        ),
+                        showscale=True,
+                        size=0,
+                        opacity=0
+                    ),
+                    showlegend=False,
+                    hoverinfo='none',
+                    name='TPM Scale'
+                ))
+
     title_text = f"Transcripts for Gene {gene_name} ({gene_ensembl_id})<br>(ORF Perplexity: {orf_perplexity}, Coordinates: {min_start} - {max_end}, Strand: {strand})"
+
+    if color_by_abundance:
+        right_margin = 300
+    else: 
+        right_margin = 200
 
     fig.update_layout(
         title={
@@ -580,13 +660,13 @@ def create_transcript_structure_plot(db_path: str,
         height=height,
         margin=dict(
             l=100,
-            r=200,
+            r=right_margin,
             t=80,
             b=50
         ),
         hovermode='closest',
         plot_bgcolor='white',
-        autosize=True 
+        autosize=True
     )
     
     for _, transcript in transcript_summary.iterrows():

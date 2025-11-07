@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objs as go
 from dash import html
 import dash_bootstrap_components as dbc
+import matplotlib.pyplot as plt
 import os
 import json
 import pickle
@@ -716,3 +717,23 @@ def extract_gtf_attr_val(attr_str):
         value = value[1:-1]
 
     return value
+
+
+def get_matplotlib_colormap(colorscale_name: str):
+    """Convert a Plotly colorscale name to a matplotlib colormap"""
+    colormap_mapping = {
+        'Viridis': plt.cm.viridis,
+        'Plasma': plt.cm.plasma,
+        'Inferno': plt.cm.inferno,
+        'Magma': plt.cm.magma,
+        'Cividis': plt.cm.cividis,
+        'Blues': plt.cm.Blues,
+        'Reds': plt.cm.Reds,
+        'RdBu_r': plt.cm.RdBu_r,
+        'RdYlBu': plt.cm.RdYlBu,
+        'Spectral': plt.cm.Spectral,
+        'YlOrRd': plt.cm.YlOrRd,
+        'Turbo': plt.cm.turbo,
+    }
+
+    return colormap_mapping.get(colorscale_name, plt.cm.viridis)
