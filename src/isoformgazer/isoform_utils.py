@@ -277,17 +277,18 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
         if filtered_ids_int:
             placeholders = ','.join(['?'] * len(filtered_ids_int))
             isoform_query = f"""
-            SELECT id FROM isoforms 
+            SELECT id FROM isoforms
             WHERE gene_id LIKE ? AND id IN ({placeholders})
+            ORDER BY isoform_average_tpm DESC NULLS LAST
             """
             params = [f"{gene_id}%"] + filtered_ids_int
         else:
-            isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ?"
+            isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
             params = [f"{gene_id}%"]
     else:
-        isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ?"
+        isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
         params = [f"{gene_id}%"]
-    
+
     isoform_ids = pd.read_sql_query(isoform_query, conn, params=params)['id'].tolist()
     
     if not isoform_ids:
@@ -385,16 +386,18 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
         table_name = 'ratio_data'
     
     query = f"""
-    SELECT 
+    SELECT
         exp.*,
         psl.trans_id,
-        iso.gene_name
+        iso.gene_name,
+        iso.isoform_average_tpm
     FROM {table_name} exp
     JOIN psl_data psl ON exp.id = psl.id
     JOIN isoforms iso ON exp.id = iso.id
     WHERE iso.gene_name = ?
+    ORDER BY iso.isoform_average_tpm ASC NULLS LAST, psl.trans_id
     """
-    
+
     try:
         df = pd.read_sql_query(query, conn, params=[gene_name])
         df = df.drop(['index'], axis=1)
@@ -436,11 +439,10 @@ def create_transcript_structure_plot(db_path: str,
         #memory_tracker.measure("plot_start")
         
     conn = sqlite3.connect(db_path)
-    metadata_query = """SELECT gene_id, ORF_perplexity FROM isoforms 
+    metadata_query = """SELECT gene_id, ORF_perplexity FROM isoforms
                         WHERE gene_name = ? LIMIT 1"""
     metadata_result = pd.read_sql_query(metadata_query, conn, params=[gene_name])
-    conn.close()
-    
+
     if not metadata_result.empty:
         gene_ensembl_id = metadata_result.iloc[0]['gene_id']
         orf_value = metadata_result.iloc[0]['ORF_perplexity']
@@ -448,21 +450,26 @@ def create_transcript_structure_plot(db_path: str,
     else:
         gene_ensembl_id = "Unknown"
         orf_perplexity = "No data available"
-    
+
+    conn.close()
+
     strand = transcript_data['strand'].iloc[0] if not transcript_data.empty else ""
-    
+
     transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
-    
+    # Get unique transcript IDs in their original order from the database (sorted by isoform_average_tpm DESC)
+    ordered_transcript_ids = transcript_data_opt['id'].drop_duplicates().tolist()
+
     transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
         'trans_id': 'first',
-        'transcript_start': 'min', 
+        'transcript_start': 'min',
         'transcript_end': 'max'
     })
     transcript_summary['transcript_length'] = (
         transcript_summary['transcript_end'] - transcript_summary['transcript_start']
     )
-    
-    transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
+
+    # Reindex transcript_summary to match the original sorted order from database
+    transcript_summary = transcript_summary.set_index('id').loc[ordered_transcript_ids].reset_index()
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
     
     # Calculate dynamic height if not provided or if using default slider value
@@ -545,17 +552,17 @@ def create_transcript_structure_plot(db_path: str,
         ))
     
     title_text = f"Transcripts for Gene {gene_name} ({gene_ensembl_id})<br>(ORF Perplexity: {orf_perplexity}, Coordinates: {min_start} - {max_end}, Strand: {strand})"
-    
+
     fig.update_layout(
         title={
             'text': title_text,
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 14}
+            'font': {'size': 18}
         },
         xaxis=dict(
             title="Genomic Position",
-            range=[min_start, max_end + (max_end - min_start) * 0.3],
+            range=[min_start - 1000, max_end + (max_end - min_start) * 0.3 + 1000],
             showgrid=False,
             tickformat=',',
             rangeslider=dict(visible=False, range=[min_start, max_end]),
@@ -572,9 +579,9 @@ def create_transcript_structure_plot(db_path: str,
         ),
         height=height,
         margin=dict(
-            l=100,  
-            r=160,  
-            t=80, 
+            l=100,
+            r=200,
+            t=80,
             b=50
         ),
         hovermode='closest',
@@ -590,7 +597,7 @@ def create_transcript_structure_plot(db_path: str,
             showarrow=False,
             xanchor='left',
             yanchor='middle',
-            font=dict(size=10)
+            font=dict(size=12)
         )
     
     return fig
@@ -702,7 +709,8 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 hovertemplate='Tissue: %{y}<br>Category: %{customdata}<extra></extra>',
                 customdata=tissue_categories,
                 colorbar=dict(
-                    title=colorbar_title,   
+                    title=dict(text=colorbar_title, font=dict(size=16)),
+                    tickfont=dict(size=10)
                 )
             ),
             row=1, col=1
@@ -715,7 +723,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 x=transcript_names_abbreviated,
                 colorscale=colorscale,
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
-                colorbar=dict(title=data_type, x=1.02)
+                colorbar=dict(title=dict(text=data_type, font=dict(size=16)), x=1.02, tickfont=dict(size=10))
             ),
             row=1, col=2
         )
@@ -735,7 +743,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 x=transcript_names_abbreviated,
                 colorscale=colorscale,
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
-                colorbar=dict(title=data_type)
+                colorbar=dict(title=dict(text=data_type, font=dict(size=16)), tickfont=dict(size=10))
             )
         )
         
@@ -816,13 +824,14 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                                           distance_metric: str = 'euclidean',
                                           linkage_method: str = 'complete',
                                           show_gridlines: bool = False,
-                                          gridline_color: str = '#ffffff') -> go.Figure:
-    """Create responsive clustergram that behaves exactly like junction clustergram"""
+                                          gridline_color: str = '#ffffff',
+                                          db_path: str = None) -> go.Figure:
+    """Create responsive clustergram with transcripts ordered by average TPM (descending)"""
     if data_type == 'TPM' or data_type == 'tpm':
         expression_data = tpm_data
     elif data_type == 'Log TPM' or data_type == 'log_tpm':
         expression_data = log_tpm_data
-    else: 
+    else:
         expression_data = ratio_data
 
     if expression_data.empty or tpm_data.empty or ratio_data.empty:
@@ -835,8 +844,30 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     if expression_data.empty:
         return create_empty_isoform_message(f"No isoform data found for gene {gene_name}.")
 
-    metadata_cols = ['id', 'trans_id', 'transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
+    metadata_cols = ['id', 'trans_id', 'transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob', 'isoform_average_tpm']
     tissue_cols = [col for col in expression_data.columns if col not in metadata_cols]
+
+    if 'isoform_average_tpm' not in expression_data.columns and db_path:
+        conn = sqlite3.connect(db_path)
+        isoform_tpm_query = "SELECT id, isoform_average_tpm FROM isoforms WHERE gene_name = ?"
+        isoform_tpm = pd.read_sql_query(isoform_tpm_query, conn, params=[gene_name])
+        conn.close()
+
+        if not isoform_tpm.empty:
+            expression_data = expression_data.merge(isoform_tpm, on='id', how='left')
+            tpm_data = tpm_data.merge(isoform_tpm, on='id', how='left')
+            ratio_data = ratio_data.merge(isoform_tpm, on='id', how='left')
+            log_tpm_data = log_tpm_data.merge(isoform_tpm, on='id', how='left')
+
+    # Sort all data by isoform_average_tpm (ascending), treating NaNs as 0
+    # Weirdly, Dash Bio displays first row at BOTTOM, so we have to sort in ascending order so highest TPM appears at top...
+    if 'isoform_average_tpm' in expression_data.columns:
+        sort_col = expression_data['isoform_average_tpm'].fillna(0)
+        sort_indices = sort_col.argsort().values
+        expression_data = expression_data.iloc[sort_indices].reset_index(drop=True)
+        tpm_data = tpm_data.iloc[sort_indices].reset_index(drop=True)
+        ratio_data = ratio_data.iloc[sort_indices].reset_index(drop=True)
+        log_tpm_data = log_tpm_data.iloc[sort_indices].reset_index(drop=True)
 
     transcript_names = expression_data['transcript'].tolist() if 'transcript' in expression_data.columns else expression_data.index.tolist()
     transcript_names_abbreviated = abbreviate_transcript_names(transcript_names)
@@ -974,7 +1005,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             height=actual_clustergram_height,
             color_threshold={'row': 0.7, 'col': 0.7},
             hidden_labels='col' if not show_labels else None,
-            cluster='all',
+            cluster='col', 
             color_list={
                 'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
                 'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
@@ -995,7 +1026,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         row_ids = computed_traces['row_ids']
         reordered_organ_list = [organ_list[i] for i in column_ids]
 
-        # Custom hover data with TPM, log10(TPM), and ratio values: need to reorder both TPM and ratio data according to clustering
+        # Custom hover data with TPM, log10(TPM), and ratio values: need to reorder based on column clustering
         if tpm_heatmap_data.shape[0] == len(tissue_cols_for_organs):
             tpm_clustered = tpm_heatmap_data.T[row_ids][:, column_ids]
             ratio_clustered = ratio_heatmap_data.T[row_ids][:, column_ids]
@@ -1036,10 +1067,6 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             "<extra></extra>"
         )
 
-        if show_gridlines:
-            heatmap_trace.xgap = 1
-            heatmap_trace.ygap = 1
-
         # Log TPM NaN clustering workaround: replace the median-filled NaN values back with NaN in the heatmap display
         if show_nan_as_black and clustergram_data_with_nan is not None:
             nan_data_reordered = clustergram_data_with_nan.iloc[row_ids, :].iloc[:, column_ids]
@@ -1056,6 +1083,11 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
+            
+            if show_gridlines:
+                heatmap_trace.xgap = 1
+                heatmap_trace.ygap = 1
+
             if hasattr(heatmap_trace, 'colorbar'):
                 heatmap_trace.colorbar.x = colorbar_x 
                 heatmap_trace.colorbar.y = 1.0     
@@ -1104,12 +1136,12 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             heatmap_trace = clustergram.data[-1]
             if hasattr(heatmap_trace, 'colorbar'):
                 heatmap_trace.colorbar.x = colorbar_x_paper
-                heatmap_trace.colorbar.xpad = colorbar_pixel_offset 
+                heatmap_trace.colorbar.xpad = colorbar_pixel_offset
                 heatmap_trace.colorbar.y = colorbar_y_position
                 heatmap_trace.colorbar.yanchor = 'top'
                 heatmap_trace.colorbar.len = 0.3
                 heatmap_trace.colorbar.thickness = 20
-                heatmap_trace.colorbar.title = data_type
+                heatmap_trace.colorbar.title = dict(text=data_type, font=dict(size=16))
     except Exception as e:
         print(f"Warning: Could not update colorbar position: {e}")
 
@@ -1129,7 +1161,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         showarrow=False,
         xanchor="left",
         yanchor="top",
-        font=dict(size=14, family="Open Sans, verdana, arial, sans-serif")
+        font=dict(size=16, family="Open Sans, verdana, arial, sans-serif")
     )
 
     for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
@@ -1138,12 +1170,12 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             y=legend_y_start - legend_y_step - (i * legend_y_step),
             xref='paper',
             yref='paper',
-            xshift=legend_pixel_offset,  
-            text=f'<span style="color:{color}; font-size:14px">&#9632;</span> {organ}',
+            xshift=legend_pixel_offset,
+            text=f'<span style="color:{color}; font-size:16px">&#9632;</span> {organ}',
             showarrow=False,
             xanchor='left',
             yanchor='top',
-            font=dict(size=11)
+            font=dict(size=13)
         )
     
     clustergram.update_layout(
@@ -1151,7 +1183,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             'text': f"Isoform Expression Clustergram for {gene_name} ({len(transcript_names)} isoforms, {data_type} data)",
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 14 if hide_tissue_labels else 16}
+            'font': {'size': 18 if hide_tissue_labels else 20}
         },
         margin=dict(
                 l=min(20, left_margin + 50),
@@ -1166,7 +1198,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         yaxis=dict(
             automargin=True,
             tickangle=0,
-            tickfont=dict(size=min(11, max(8, int(height/60)))),
+            tickfont=dict(size=min(13, max(10, int(height/60)+2))),
             showgrid=True,
             gridcolor='white',
             gridwidth=1
@@ -1175,7 +1207,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             automargin=True,
             tickangle=45 if show_labels else 0,
             tickfont=dict(
-                size=6 if show_labels else 1,
+                size=8 if show_labels else 1,
                 color='rgba(0,0,0,0)' if not show_labels else None
             ),
             showticklabels=show_labels,
@@ -1208,7 +1240,7 @@ def create_single_transcript_heatmap(heatmap_data, tpm_heatmap_data, ratio_heatm
         x=transcript_names,
         y=tissue_display_names,
         colorscale=colorscale,
-        colorbar=dict(title=data_type),
+        colorbar=dict(title=dict(text=data_type, font=dict(size=16)), tickfont=dict(size=10)),
         customdata=customdata,
         hovertemplate='<b>Transcript:</b> %{x}<br><b>Tissue:</b> %{y}<br><b>TPM:</b> %{customdata[0]:.2f}<br><b>Ratio:</b> %{customdata[1]:.2f}<extra></extra>'
     ))

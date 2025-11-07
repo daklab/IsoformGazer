@@ -680,7 +680,7 @@ html, body {
 
 .panel-header {
     font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
-    font-size: 1.1rem;
+    font-size: 1.42rem;
     font-weight: 700;
     letter-spacing: 0.5px;
     color: white;
@@ -704,7 +704,7 @@ html, body {
 .top-panel-header {
     width: 100%;
     font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
-    font-size: 1.1rem;
+    font-size: 1.42rem;
     font-weight: 700;
     letter-spacing: 0.5px;
     color: white;
@@ -962,7 +962,7 @@ html, body {
 
 .about-tab-header {
     font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
-    font-size: 1.1rem;
+    font-size: 1.54rem;
     font-weight: 700;
     letter-spacing: 0.5px;
     color: #622e9d;
@@ -1120,6 +1120,7 @@ html, body {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
     transition: all 0.3s ease !important;
     background: white !important;
+    font-size: 15px !important;
 }
 
 .Select-control:hover {
@@ -1135,6 +1136,7 @@ html, body {
 .Select-placeholder {
     color: #506784 !important;
     font-style: italic !important;
+    font-size: 15px !important;
 }
 
 .Select-menu-outer {
@@ -1142,6 +1144,7 @@ html, body {
     border-radius: 8px !important;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15) !important;
     z-index: 10000 !important;
+    font-size: 15px !important;
 }
 
 /* Ensure all Dash dropdown menus are above other content */
@@ -1191,21 +1194,29 @@ html, body {
 
 .Select-option {
     transition: all 0.2s ease !important;
+    font-size: 15px !important;
 }
 
 .Select-option:hover {
     background-color: #f8f9fa !important;
     color: #301279 !important;
+    font-size: 15px !important;
 }
 
 .Select-option.is-selected {
     background-color: #301279 !important;
     color: white !important;
+    font-size: 15px !important;
 }
 
 .Select-option.is-focused {
     background-color: #EDAE49 !important;
     color: #301279 !important;
+    font-size: 15px !important;
+}
+
+.Select-menu {
+    font-size: 15px !important;
 }
 
 .app-controls-block .daq-ToggleSwitch {
@@ -1311,8 +1322,8 @@ html, body {
     border-radius: 2px 2px 0 0;
 }
 
-div[data-value="tab-1"], 
-div[data-value="tab-2"], 
+div[data-value="tab-1"],
+div[data-value="tab-2"],
 div[data-value="tab-3"] {
     background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%) !important;
     border: 1px solid #e1e5e9 !important;
@@ -1321,7 +1332,7 @@ div[data-value="tab-3"] {
     margin: 0 4px !important;
     font-family: "Inter", "Segoe UI", "SF Pro Display", "Roboto", "Helvetica Neue", sans-serif !important;
     font-weight: 500 !important;
-    font-size: 13px !important;
+    font-size: 17px !important;
     letter-spacing: 0.3px !important;
     color: #506784 !important;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
@@ -1351,6 +1362,30 @@ div[data-value="tab-3"]:hover {
     padding: 0 10px !important;
     display: flex !important;
     align-items: flex-end !important;
+    font-size: 17px !important;
+}
+
+.dash-tabs * {
+    font-size: 17px !important;
+}
+
+#tabs div[data-value="tab-1"],
+#tabs div[data-value="tab-2"],
+#tabs div[data-value="tab-3"] {
+    font-size: 17px !important;
+}
+
+/* Ensure tab label text is sized correctly */
+.tabs-full-height > div > div {
+    font-size: 17px !important;
+}
+
+.tabs-full-height > div > div > div {
+    font-size: 17px !important;
+}
+
+.tabs-full-height {
+    font-size: 17px !important;
 }
 
 /* ######################################################################################

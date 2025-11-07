@@ -57,13 +57,19 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
     
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
-    
+
     if sort_by:
         order_clauses = []
         for col, direction in sort_by:
             order_clauses.append(f"{col} {'ASC' if direction == 'asc' else 'DESC'}")
         if order_clauses:
             query += " ORDER BY " + ", ".join(order_clauses)
+    else:
+        # Default sort order: isoforms by isoform_average_tpm DESC, junctions by junction_average_psi DESC
+        if table_name.lower() == 'isoforms':
+            query += " ORDER BY isoform_average_tpm DESC NULLS LAST"
+        elif table_name.lower() == 'junctions':
+            query += " ORDER BY junction_average_psi DESC NULLS LAST"
     
     if where_clauses:
         count_where = " WHERE " + " AND ".join(where_clauses)

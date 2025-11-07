@@ -240,7 +240,7 @@ def setup_local_database(force_rebuild=False):
     column_order = [
         'gene_symbol',
         'gene_id',
-        'event_id', 
+        'event_id',
         'junction_id',
         'junction_id_index',
         'atse_count',
@@ -248,6 +248,7 @@ def setup_local_database(force_rebuild=False):
         'cell_type',
         'n_cells',
         'psi',
+        'junction_average_psi',
         'matched_transcript_ids'
     ]
     
@@ -263,7 +264,6 @@ def setup_local_database(force_rebuild=False):
             
             final_column_order = available_columns + remaining_columns
             chunk = chunk[final_column_order]
-
 
             if first_chunk:
                 chunk.to_sql('junctions', conn, if_exists='replace', index=False)
@@ -748,7 +748,7 @@ left_data_table = dash_table.DataTable(
 right_data_table = dash_table.DataTable(
     id='right_data_table',
     columns=get_master_table_columns(db_path, table_name='junctions'),
-    hidden_columns=['id', 'matched_transcript_ids'],
+    hidden_columns=['id', 'matched_transcript_ids', 'junction_average_psi'],
     data=[],
     editable=False,
     filter_action="custom",
@@ -2348,13 +2348,15 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
 
         filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
 
-        filtered_ratio_data = ratio_data.copy()
-        filtered_tpm_data = tpm_data.copy()
-        filtered_log_tpm_data = log_tpm_data.copy()
-
-        filtered_ratio_data = filtered_ratio_data[filtered_ratio_data['id'].isin(filtered_ids)] if filtered_ids else filtered_ratio_data
-        filtered_tpm_data = filtered_tpm_data[filtered_tpm_data['id'].isin(filtered_ids)] if filtered_ids else filtered_tpm_data
-        filtered_log_tpm_data = filtered_log_tpm_data[filtered_log_tpm_data['id'].isin(filtered_ids)] if filtered_ids else filtered_log_tpm_data
+        if filtered_ids:
+            # Filter while preserving the sorted order from the database
+            filtered_ratio_data = ratio_data[ratio_data['id'].isin(filtered_ids)].copy()
+            filtered_tpm_data = tpm_data[tpm_data['id'].isin(filtered_ids)].copy()
+            filtered_log_tpm_data = log_tpm_data[log_tpm_data['id'].isin(filtered_ids)].copy()
+        else:
+            filtered_ratio_data = ratio_data.copy()
+            filtered_tpm_data = tpm_data.copy()
+            filtered_log_tpm_data = log_tpm_data.copy()
 
         fig = create_isoform_expression_clustergram(
             tpm_data=filtered_tpm_data,
@@ -2369,7 +2371,8 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
             distance_metric=distance_metric,
             linkage_method=linkage_method,
             show_gridlines=show_gridlines,
-            gridline_color=gridline_color
+            gridline_color=gridline_color,
+            db_path=db_path
         )
         fig.update_layout(
             autosize=True,
@@ -2379,7 +2382,9 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
         return fig
     
     except Exception as e:
+        import traceback
         print(f"Error creating isoform clustergram: {e}")
+        traceback.print_exc()
         return create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
 
 
