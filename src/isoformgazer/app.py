@@ -1345,14 +1345,26 @@ app.layout = html.Div(className='app-layout', children=[
             html.Div(className='tables-section', children=[
                 html.Div(className='table-container', id='table1-container', children=[
                     html.Div(className='table-header-controls', children=[
-                        dbc.Button(
-                            "Clear Filters",
-                            id='clear-left-filters',
-                            color="secondary",
-                            size="sm",
-                            className="clear-filters-btn",
-                            disabled=True
-                        )
+                        html.Div(children=[
+                            dbc.Button(
+                                "Clear Filters",
+                                id='clear-left-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True
+                            )
+                        ]),
+                        html.Div(children=[
+                            dbc.Button(
+                                "Download CSV",
+                                id='download-left-table-button',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn"
+                            ),
+                            dcc.Download(id='download-left-table')
+                        ], style={'marginLeft': 'auto'})
                     ]),
                     # Isoform table filter error popup
                     html.Div(
@@ -1364,14 +1376,26 @@ app.layout = html.Div(className='app-layout', children=[
                 ]),
                 html.Div(className='table-container', id='table2-container', children=[
                     html.Div(className='table-header-controls', children=[
-                        dbc.Button(
-                            "Clear Filters",
-                            id='clear-right-filters',
-                            color="secondary",
-                            size="sm",
-                            className="clear-filters-btn",
-                            disabled=True
-                        )
+                        html.Div(children=[
+                            dbc.Button(
+                                "Clear Filters",
+                                id='clear-right-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True
+                            )
+                        ]),
+                        html.Div(children=[
+                            dbc.Button(
+                                "Download CSV",
+                                id='download-right-table-button',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn"
+                            ),
+                            dcc.Download(id='download-right-table')
+                        ], style={'marginLeft': 'auto'})
                     ]),
                     # Junction table filter error popup
                     html.Div(
@@ -2868,6 +2892,53 @@ def download_annotated_gtf(download_clicks, stored_data):
 
     except Exception as e:
         return dash.no_update
+
+
+######################################################################
+# MASTER TABLE CSV DOWNLOAD CALLBACKS
+######################################################################
+@app.callback(
+    dash.dependencies.Output('download-left-table', 'data'),
+    dash.dependencies.Input('download-left-table-button', 'n_clicks'),
+    dash.dependencies.State('isoform-full-data-store', 'data'),
+    dash.dependencies.State('gene-search-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def download_isoform_table(n_clicks, full_data, selected_gene):
+    """Download current isoform master table view as CSV"""
+    if not n_clicks or not full_data or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        df = pd.DataFrame(full_data)
+        filename = f"{selected_gene}_isoforms_master_table.csv"
+        return dcc.send_data_frame(df.to_csv, filename, index=False)
+    
+    except Exception as e:
+        print(f"Error downloading isoform table: {e}")
+        raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('download-right-table', 'data'),
+    dash.dependencies.Input('download-right-table-button', 'n_clicks'),
+    dash.dependencies.State('junction-full-data-store', 'data'),
+    dash.dependencies.State('gene-search-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def download_junction_table(n_clicks, full_data, selected_gene):
+    """Download current junction master table view as CSV"""
+    if not n_clicks or not full_data or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        df = pd.DataFrame(full_data)
+        filename = f"{selected_gene}_junctions_master_table.csv"
+        return dcc.send_data_frame(df.to_csv, filename, index=False)
+    
+    except Exception as e:
+        print(f"Error downloading junction table: {e}")
+        raise PreventUpdate
 
 
 ###################################################################
