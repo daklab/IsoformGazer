@@ -1234,7 +1234,11 @@ app.layout = html.Div(className='app-layout', children=[
                                                     config={
                                                         'responsive': True,
                                                         'displayModeBar': True,
-                                                        'scrollZoom': False
+                                                        'scrollZoom': False,
+                                                        'toImageButtonOptions': {
+                                                            'format': 'svg',
+                                                            'filename': 'isoformgazer_plot'
+                                                        }
                                                     },
                                                     className='graph-full-size'
                                                 )
@@ -1257,7 +1261,11 @@ app.layout = html.Div(className='app-layout', children=[
                                                 config={
                                                     'responsive': True,
                                                     'displayModeBar': True,
-                                                    'scrollZoom': False
+                                                    'scrollZoom': False,
+                                                    'toImageButtonOptions': {
+                                                        'format': 'svg',
+                                                        'filename': 'isoformgazer_structure_plot'
+                                                    }
                                                 }
                                             )]
                                         ),
@@ -1289,8 +1297,25 @@ app.layout = html.Div(className='app-layout', children=[
                                     delay_hide=200,
                                     children=[dcc.Graph(
                                         id='heatmap1',
+                                        figure={
+                                            'data': [],
+                                            'layout': go.Layout(
+                                                title={'text': 'Loading isoform expression data...', 'font': {'size': 14}},
+                                                plot_bgcolor='white',
+                                                margin=dict(l=40, r=40, t=40, b=40)
+                                            )
+                                        },
                                         className='graph-full-size',
-                                        config={'responsive': True}
+                                        config={
+                                            'responsive': True,
+                                            'displayModeBar': True,
+                                            'scrollZoom': False,
+                                            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                                            'toImageButtonOptions': {
+                                                'format': 'svg',
+                                                'filename': 'isoformgazer_long_read_clustergram'
+                                            }
+                                        }
                                     )]
                                 ),
                                 html.Div(id="heatmap1-loading-message", className="custom-loading-message")
@@ -1326,7 +1351,16 @@ app.layout = html.Div(className='app-layout', children=[
                                                     margin=dict(l=40, r=40, t=40, b=40)
                                                 )
                                             },
-                                            config={'responsive': True},
+                                            config={
+                                                'responsive': True,
+                                                'displayModeBar': True,
+                                                'scrollZoom': False,
+                                                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                                                'toImageButtonOptions': {
+                                                    'format': 'svg',
+                                                    'filename': 'isoformgazer_short_read_clustergram'
+                                                }
+                                            },
                                             className='graph-full-size'
                                         )
                                     ]
@@ -2240,7 +2274,8 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
 # HEATMAP PROCESSING CALLBACKS
 ######################################################################
 @app.callback(
-    dash.dependencies.Output('heatmap2', 'figure'),
+    [dash.dependencies.Output('heatmap2', 'figure'),
+     dash.dependencies.Output('heatmap2', 'config')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
@@ -2289,11 +2324,33 @@ def update_junction_clustergram(selected_gene, colorscale,
                 width=None,
                 transition_duration=200
             )
-            return fig
+            default_config = {
+                'responsive': True,
+                'displayModeBar': True,
+                'scrollZoom': False,
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'toImageButtonOptions': {
+                    'format': 'svg',
+                    'filename': 'isoformgazer_short_read_clustergram'
+                }
+            }
+            return fig, default_config
+        
         except Exception as e:
             print(f"Error creating summary clustergram: {e}")
-            return create_empty_clustergram_message("Error loading summary data")
-    
+            empty_fig = create_empty_clustergram_message("Error loading summary data")
+            default_config = {
+                'responsive': True,
+                'displayModeBar': True,
+                'scrollZoom': False,
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'toImageButtonOptions': {
+                    'format': 'svg',
+                    'filename': 'isoformgazer_short_read_clustergram'
+                }
+            }
+            return empty_fig, default_config
+
     try:
         fig = create_gene_clustergram(
             db_path,
@@ -2311,15 +2368,39 @@ def update_junction_clustergram(selected_gene, colorscale,
             width=None,
             transition_duration=200
         )
-        return fig
-    
+        # Create config with gene name in filename
+        gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+        config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': f'{gene_clean}_isoformgazer_short_read_clustergram'
+            }
+        }
+        return fig, config
+
     except Exception as e:
         print(f"Error creating gene clustergram: {e}")
-        return create_empty_clustergram_message(f"Error loading data for {selected_gene}")
+        empty_fig = create_empty_clustergram_message(f"Error loading data for {selected_gene}")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': 'isoformgazer_short_read_clustergram'
+            }
+        }
+        return empty_fig, default_config
     
 
 @app.callback(
-    dash.dependencies.Output('heatmap1', 'figure'),
+    [dash.dependencies.Output('heatmap1', 'figure'),
+     dash.dependencies.Output('heatmap1', 'config')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('isoform-data-type-switch', 'value'),
@@ -2337,6 +2418,27 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
                           clustergram_height, distance_metric, linkage_method, filtered_junction_ids,
                           show_gridlines):
     """Update isoform clustergram with unified height based on both isoform and junction data"""
+    # Return empty figure if no gene selected
+    if not selected_gene:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            title={'text': 'Select a gene to view isoform expression data', 'font': {'size': 14}},
+            plot_bgcolor='white',
+            margin=dict(l=40, r=40, t=40, b=40),
+            height=710
+        )
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': 'isoformgazer_long_read_clustergram'
+            }
+        }
+        return empty_fig, default_config
+
     gridline_color = '#ffffff'
 
     ratio_data = load_expression_data(db_path=db_path,
@@ -2416,20 +2518,43 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
             width=None
         )
 
-        return fig
-    
+        gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+        config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': f'{gene_clean}_isoformgazer_long_read_clustergram'
+            }
+        }
+        return fig, config
+
     except Exception as e:
         import traceback
         print(f"Error creating isoform clustergram: {e}")
         traceback.print_exc()
-        return create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
+        empty_fig = create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
+        error_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': 'isoformgazer_long_read_clustergram'
+            }
+        }
+        return empty_fig, error_config
 
 
 ######################################################################
 # STRUCTURE-LEVEL VISUALIZATIONS CALLBACKS
 ######################################################################
 @app.callback(
-    dash.dependencies.Output('atse-map', 'figure'),
+    [dash.dependencies.Output('atse-map', 'figure'),
+     dash.dependencies.Output('atse-map', 'config')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
@@ -2441,8 +2566,8 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
      dash.dependencies.Input('color-by-abundance-toggle', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value')]
 )
-def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, 
-                              plot_height, exon_color, junction_color, isoform_filter_query, 
+def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids,
+                              plot_height, exon_color, junction_color, isoform_filter_query,
                               validation_data, color_by_abundance, colorscale):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
@@ -2453,17 +2578,24 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
     actual_filtered_transcript_ids = filtered_transcript_ids if has_isoform_filter else None
 
     if not selected_gene:
-        return create_empty_atse_message("Select a gene to view splice junctions and exons")
-    
+        empty_fig = create_empty_atse_message("Select a gene to view splice junctions and exons")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_plot'}
+        }
+        return empty_fig, default_config
+
     try:
         gene_data = process_gene_atse_data(
-            selected_gene, 
+            selected_gene,
             db_path,
             filtered_junction_ids=filtered_junction_ids
         )
 
         show_labels = False
-        
+
         fig = create_junction_exon_visualization(
             gene_data,
             height=plot_height,
@@ -2475,11 +2607,30 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             db_path=db_path,
             colorscale=colorscale
         )
-        return fig
-    
+
+        # Create config with gene name in filename
+        gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+        config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': f'{gene_clean}_isoformgazer_structure_plot'
+            }
+        }
+        return fig, config
+
     except Exception as e:
         print(f"Error creating ATSE visualization: {e}")
-        return create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
+        empty_fig = create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_plot'}
+        }
+        return empty_fig, default_config
 
 
 def empty_fig(height=200):
@@ -2524,7 +2675,8 @@ def toggle_top_panel_plots(hide_junctions):
 
 
 @app.callback(
-    dash.dependencies.Output('top-barplot', 'figure'),
+    [dash.dependencies.Output('top-barplot', 'figure'),
+     dash.dependencies.Output('top-barplot', 'config')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('bar-height-slider', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
@@ -2546,7 +2698,14 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
         raise PreventUpdate
 
     if not selected_gene:
-        return create_empty_isoform_message("Select a gene to view transcript structures")
+        empty_fig = create_empty_isoform_message("Select a gene to view transcript structures")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_structure_plot'}
+        }
+        return empty_fig, default_config
 
     try:
         filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
@@ -2568,11 +2727,30 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
             color_by_abundance=color_by_abundance,
             colorscale=colorscale
         )
-        return fig
+
+        # Create config with gene name in filename
+        gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+        config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': f'{gene_clean}_isoformgazer_structure_plot'
+            }
+        }
+        return fig, config
 
     except Exception as e:
         print(f"Error creating top transcript plot: {e}")
-        return create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
+        empty_fig = create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_structure_plot'}
+        }
+        return empty_fig, default_config
 
 
 @app.callback(
