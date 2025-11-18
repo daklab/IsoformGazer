@@ -11,12 +11,15 @@ import matplotlib
 matplotlib.use('Agg')
 from pathlib import Path
 import dash
-from dash import html, dcc, dash_table
+from dash import html, dcc, dash_table, callback_context
 import dash_bootstrap_components as dbc
 import dash_daq as daq
 import plotly.graph_objs as go
+import plotly.io as pio
+import kaleido
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
+import traceback
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
 from data_utils import (
@@ -35,7 +38,7 @@ from isoform_utils import (
     load_expression_data, process_transcript_structure, create_transcript_structure_plot,
     create_isoform_expression_clustergram, create_empty_isoform_message,
     calculate_unified_plot_height, calculate_clustergram_min_height, calculate_single_isoform_hash,
-    parse_gtf_and_calculate_hashes, generate_annotated_gtf
+    calculate_dynamic_structure_plot_height, parse_gtf_and_calculate_hashes, generate_annotated_gtf
 )
 
 RANDOM_SEED = 18
@@ -1196,12 +1199,121 @@ app.layout = html.Div(className='app-layout', children=[
                                 value='ward'
                             ),
                             html.Div(className='app-controls-desc', children='Hierarchical clustering algorithm used for both clustergrams')
+                        ]),
+
+                        #####################################
+                        # Plot Exports Section
+                        #####################################
+                        html.H2('Export Plot', className='alignment-settings-section'),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='app-controls-name', children='Dimensions'),
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Label("Width:", style={'fontWeight': '600', 'fontSize': '14px', 'color': '#301279'}),
+                                dcc.Input(
+                                    id='export-width-value',
+                                    type='number',
+                                    placeholder='Enter width',
+                                    value=800,
+                                    style={'width': 'calc(100% - 20px)', 'padding': '8px', 'marginTop': '5px', 'marginRight': '10px', 'border': '1px solid #ddd', 'borderRadius': '4px'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Label("Height:", style={'fontWeight': '600', 'fontSize': '14px', 'color': '#301279'}),
+                                dcc.Input(
+                                    id='export-height-value',
+                                    type='number',
+                                    placeholder='Enter height',
+                                    value=600,
+                                    style={'width': 'calc(100% - 20px)', 'padding': '8px', 'marginTop': '5px', 'marginRight': '10px', 'border': '1px solid #ddd', 'borderRadius': '4px'}
+                                )
+                            ]),
+
+                            # Unit section
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Div('Unit', className='app-controls-name', style={'marginBottom': '10px'}),
+                                dcc.RadioItems(
+                                    id='export-unit-toggle',
+                                    options=[
+                                        {'label': ' Pixels (px)', 'value': 'px'},
+                                        {'label': ' Inches (in)', 'value': 'in'}
+                                    ],
+                                    value='px',
+                                    className='radio-items-vertical',
+                                    labelStyle={'display': 'block', 'marginLeft': '6px', 'marginBottom': '5px', 'fontSize': '14px', 'color': '#506784'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Label("Title Font Size:", style={'fontWeight': '600', 'fontSize': '14px', 'color': '#301279'}),
+                                dcc.Input(
+                                    id='export-title-legend-font-size',
+                                    type='number',
+                                    placeholder='Enter font size',
+                                    value=16,
+                                    style={'width': 'calc(100% - 20px)', 'padding': '8px', 'marginTop': '5px', 'marginRight': '10px', 'border': '1px solid #ddd', 'borderRadius': '4px'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Label("Axis Labels Font Size:", style={'fontWeight': '600', 'fontSize': '14px', 'color': '#301279'}),
+                                dcc.Input(
+                                    id='export-axis-labels-font-size',
+                                    type='number',
+                                    placeholder='Enter font size',
+                                    value=12,
+                                    style={'width': 'calc(100% - 20px)', 'padding': '8px', 'marginTop': '5px', 'marginRight': '10px', 'border': '1px solid #ddd', 'borderRadius': '4px'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '20px'}, children=[
+                                html.Div('Plot to Export', className='app-controls-name toggle-switch-label-narrow', style={'marginBottom': '10px'}),
+                                dcc.RadioItems(
+                                    id='export-plot-selection',
+                                    options=[
+                                        {'label': ' Structure Plot', 'value': 'structure'},
+                                        {'label': ' Isoform Clustergram', 'value': 'isoform'},
+                                        {'label': ' Junction Clustergram', 'value': 'junction'}
+                                    ],
+                                    value='structure',
+                                    className='radio-items-vertical',
+                                    labelStyle={'display': 'block', 'marginLeft': '6px', 'marginBottom': '5px', 'fontSize': '12px', 'color': '#506784'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '20px'}, children=[
+                                dbc.Button(
+                                    "Download Plot",
+                                    id='export-unified-btn',
+                                    color='primary',
+                                    style={
+                                        'backgroundColor': '#301279',
+                                        'color': 'white',
+                                        'padding': '10px 24px',
+                                        'borderRadius': '4px',
+                                        'border': 'none',
+                                        'fontWeight': '600',
+                                        'fontSize': '14px',
+                                        'transition': 'all 0.2s ease'
+                                    }
+                                ),
+                                dcc.Download(id="download-structure-plot"),
+                                dcc.Download(id="download-isoform-clustergram"),
+                                dcc.Download(id="download-junction-clustergram"),
+                                dcc.Interval(id='export-status-timer', interval=7500, n_intervals=0, disabled=True)
+                            ]),
+                            html.Div(
+                                id='export-status-message',
+                                style={
+                                    'marginTop': '15px',
+                                    'fontSize': '14px',
+                                    'color': '#301279',
+                                    'fontWeight': '600',
+                                    'display': 'none'
+                                },
+                                children='Download in Progress...'
+                            )
                         ])
                     ])
                 ])
             ])
         ]),
-        
+
         #####################################
         # Main content section
         #####################################
@@ -2532,7 +2644,6 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
         return fig, config
 
     except Exception as e:
-        import traceback
         print(f"Error creating isoform clustergram: {e}")
         traceback.print_exc()
         empty_fig = create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
@@ -2829,7 +2940,6 @@ def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_jun
         transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
 
         if hide_junctions:
-            from isoform_utils import calculate_dynamic_structure_plot_height
             num_transcripts = len(transcript_data['id'].unique()) if not transcript_data.empty else 0
             calculated_height = calculate_dynamic_structure_plot_height(num_transcripts)
         else:
@@ -3113,9 +3223,174 @@ def download_junction_table(n_clicks, full_data, selected_gene):
         df = pd.DataFrame(full_data)
         filename = f"{selected_gene}_junctions_master_table.csv"
         return dcc.send_data_frame(df.to_csv, filename, index=False)
-    
+
     except Exception as e:
         print(f"Error downloading junction table: {e}")
+        raise PreventUpdate
+
+
+######################################################################
+# FIGURE EXPORT OPTIONS CALLBACKS
+######################################################################
+def convert_dimensions(width, height, from_unit, to_unit='px', dpi=96):
+    """
+    Convert dimensions between pixels and inches.
+    DPI is assumed to be 96 for screen displays (TBD: better way to 
+    fetch this automatically for each user's screen?)
+    """
+    if from_unit == to_unit:
+        return width, height
+
+    if from_unit == 'px' and to_unit == 'in':
+        return width / dpi, height / dpi
+    
+    elif from_unit == 'in' and to_unit == 'px':
+        return width * dpi, height * dpi
+
+    return width, height
+
+
+@app.callback(
+    [dash.dependencies.Output('export-status-message', 'style'),
+     dash.dependencies.Output('export-status-timer', 'disabled')],
+    [dash.dependencies.Input('export-unified-btn', 'n_clicks'),
+     dash.dependencies.Input('export-status-timer', 'n_intervals')],
+    [dash.dependencies.State('export-width-value', 'value'),
+     dash.dependencies.State('export-height-value', 'value'),
+     dash.dependencies.State('gene-search-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
+    """Manage download status message display and timer"""
+    if not callback_context.triggered:
+        raise PreventUpdate
+
+    triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
+
+    if triggered_id == 'export-unified-btn':
+        if not n_clicks or not width or not height or not selected_gene:
+            raise PreventUpdate
+
+        return (
+            {
+                'marginTop': '15px',
+                'fontSize': '12px',
+                'color': '#301279',
+                'fontWeight': '600',
+                'display': 'block'
+            },
+            False
+        )
+
+    elif triggered_id == 'export-status-timer':
+        if not n_intervals:
+            raise PreventUpdate
+
+        return (
+            {
+                'marginTop': '15px',
+                'fontSize': '12px',
+                'color': '#301279',
+                'fontWeight': '600',
+                'display': 'none'
+            },
+            True
+        )
+
+
+@app.callback(
+    [dash.dependencies.Output("download-structure-plot", "data"),
+     dash.dependencies.Output("download-isoform-clustergram", "data"),
+     dash.dependencies.Output("download-junction-clustergram", "data")],
+    dash.dependencies.Input('export-unified-btn', 'n_clicks'),
+    [dash.dependencies.State('export-plot-selection', 'value'),
+     dash.dependencies.State('heatmap1', 'figure'),
+     dash.dependencies.State('heatmap2', 'figure'),
+     dash.dependencies.State('export-width-value', 'value'),
+     dash.dependencies.State('export-height-value', 'value'),
+     dash.dependencies.State('export-unit-toggle', 'value'),
+     dash.dependencies.State('export-title-legend-font-size', 'value'),
+     dash.dependencies.State('export-axis-labels-font-size', 'value'),
+     dash.dependencies.State('gene-search-dropdown', 'value'),
+     dash.dependencies.State('filtered-isoform-store', 'data'),
+     dash.dependencies.State('exon-color-store', 'data'),
+     dash.dependencies.State('color-by-abundance-toggle', 'value'),
+     dash.dependencies.State('colorscale-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, colorscale):
+    """Export selected plot with custom dimensions as SVG"""
+    if not n_clicks or not width or not height or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        if unit == 'in':
+            width_px, height_px = convert_dimensions(width, height, 'in', 'px')
+        else:
+            width_px, height_px = int(width), int(height)
+
+        download_data = None
+        filename = ""
+
+        if plot_selection == 'structure':
+            filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+
+            fig = create_transcript_structure_plot(
+                db_path,
+                transcript_data,
+                gene_name=selected_gene,
+                height=None,
+                show_y_labels=True,
+                exon_color=exon_color,
+                color_by_abundance=color_by_abundance,
+                colorscale=colorscale
+            )
+            filename = f"{selected_gene}_structure_plot.svg"
+
+        elif plot_selection == 'isoform':
+            if not isoform_fig:
+                print("No figure data available for isoform clustergram - please select a gene first")
+                raise PreventUpdate
+            fig = go.Figure(isoform_fig)
+            filename = f"{selected_gene}_isoform_clustergram.svg"
+
+        elif plot_selection == 'junction':
+            if not junction_fig:
+                print("No figure data available for junction clustergram - please select a gene first")
+                raise PreventUpdate
+            fig = go.Figure(junction_fig)
+            filename = f"{selected_gene}_junction_clustergram.svg"
+
+        fig.update_layout(width=int(width_px), height=int(height_px), autosize=False)
+
+        if title_legend_font_size:
+            fig.update_layout(title={'font': {'size': title_legend_font_size}})
+
+        if axis_labels_font_size:
+            fig.update_xaxes(tickfont={'size': axis_labels_font_size})
+            fig.update_yaxes(tickfont={'size': axis_labels_font_size})
+
+        svg_bytes = fig.to_image(format='svg')
+        svg_str = svg_bytes.decode('utf-8')
+
+        download_data = dict(
+            content=svg_str,
+            filename=filename
+        )
+
+        if plot_selection == 'structure':
+            return download_data, None, None
+        
+        elif plot_selection == 'isoform':
+            return None, download_data, None
+        
+        else:
+            return None, None, download_data
+
+    except Exception as e:
+        print(f"Error exporting plot: {e}")
+        traceback.print_exc()
         raise PreventUpdate
 
 

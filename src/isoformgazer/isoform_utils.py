@@ -1204,12 +1204,11 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     colorbar_pixel_offset = 150 
     colorbar_y_position = 1.005
 
-    # Calculate legend step size in paper coordinates to maintain consistent pixel spacing
-    pixels_between_items = 25
-    legend_y_step = pixels_between_items / height
-
-    vertical_offset_pixels = 7
-    legend_y_start = colorbar_y_position - (vertical_offset_pixels / height)
+    # Use pixel-based positioning for legend items to keep spacing constant regardless of height
+    # yshift works in pixels, not in paper coordinates, so spacing remains fixed
+    pixels_between_items = 25  # Pixel distance between legend items
+    vertical_offset_pixels = 7  # Pixel offset from top before first item
+    legend_y_start = colorbar_y_position  # Fixed paper coordinate (top of plot)
 
     try:
         if len(clustergram.data) > 0:
@@ -1237,6 +1236,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         xref="paper",
         yref="paper",
         xshift=legend_pixel_offset,  # Shift by pixels instead of paper coords
+        yshift=-vertical_offset_pixels,  # Negative shifts down in pixels
         text="Organ Legend",
         showarrow=False,
         xanchor="left",
@@ -1247,10 +1247,11 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
         clustergram.add_annotation(
             x=legend_base_x,
-            y=legend_y_start - legend_y_step - (i * legend_y_step),
+            y=legend_y_start,
             xref='paper',
             yref='paper',
             xshift=legend_pixel_offset,
+            yshift=-(vertical_offset_pixels + 30 + (i * pixels_between_items)),  # Title height (30px) + item spacing
             text=f'<span style="color:{color}; font-size:16px">&#9632;</span> {organ}',
             showarrow=False,
             xanchor='left',
