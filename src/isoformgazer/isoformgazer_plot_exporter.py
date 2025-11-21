@@ -7,10 +7,10 @@ This script allows users to export plots from IsoformGazer for multiple genes in
 - Data from CSV files or gene name lists
 
 Example usage:
-    python bulk_export_plots.py --genes "FUS,TARDBP,RBFOX2" --format png --output-dir ./exports
-    python bulk_export_plots.py --gene-file genes.txt --format pdf --output-dir ./exports
-    python bulk_export_plots.py --genes "FUS" --format svg --output-dir ./exports
-    python bulk_export_plots.py --genes "FUS" --format html --output-dir ./exports --data-dir /path/to/data
+    python3 isoformgazer_plot_exporter.py --genes "FUS,TARDBP,RBFOX2" --format png --output-dir ./exports
+    python3 isoformgazer_plot_exporter.py --gene-file genes.txt --format pdf --output-dir ./exports
+    python3 isoformgazer_plot_exporter.py --genes "FUS" --format svg --output-dir ./exports
+    python3 isoformgazer_plot_exporter.py --genes "FUS" --format html --output-dir ./exports --data-dir /path/to/data
 """
 
 import argparse
@@ -606,16 +606,16 @@ def main():
 
         Quick Examples:
             # Export PNG plots for multiple genes
-            python bulk_export_plots.py --genes "FUS,TARDBP,RBFOX2" --format png --output-dir ./exports
+            python3 isoformgazer_plot_exporter.py --genes "FUS,TARDBP,RBFOX2" --format png --output-dir ./exports
 
             # Export SVG plots for a single gene
-            python bulk_export_plots.py --genes "FUS" --format svg --output-dir ./svg_exports
+            python3 isoformgazer_plot_exporter.py --genes "FUS" --format svg --output-dir ./svg_exports
 
             # Export all formats from a gene file
-            python bulk_export_plots.py --gene-file genes.txt --format html --output-dir ./html_plots
+            python3 isoformgazer_plot_exporter.py --gene-file genes.txt --format html --output-dir ./html_plots
 
             # Export with custom clustering and styling
-            python bulk_export_plots.py --genes "FUS" --format png --distance-metric correlation \\
+            python3 isoformgazer_plot_exporter.py --genes "FUS" --format png --distance-metric correlation \\
                 --colorscale Plasma --title-font-size 18 --output-dir ./styled_exports
 
         Customization Options:
