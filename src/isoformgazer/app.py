@@ -63,12 +63,18 @@ def check_database_status():
     return False
 
 
-def setup_local_database(force_rebuild=False):
+def setup_local_database(data_dir=None, force_rebuild=False):
     """
     Sets up SQLite database from data files.
+
+    Args:
+        data_dir: Optional path to data directory. Defaults to src/isoformgazer/data
+        force_rebuild: If True, rebuild the database even if it exists
     """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(base_dir, "data")
+    if data_dir is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(base_dir, "data")
+
     os.makedirs(data_dir, exist_ok=True)
     
     db_path = os.path.join(data_dir, "isoformgazer.db")

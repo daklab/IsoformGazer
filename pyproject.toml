@@ -29,11 +29,15 @@ dependencies = [
     "urllib3 (>=2.5.0,<3.0.0)",
     "psutil (>=7.0.0,<8.0.0)",
     "memory-profiler (>=0.61.0,<0.62.0)",
-    "line-profiler (>=5.0.0,<6.0.0)"
+    "line-profiler (>=5.0.0,<6.0.0)",
+    "pypdf2 (>=3.0.1,<4.0.0)"
 ]
 
 [tool.poetry]
 packages = [{include = "isoformgazer", from = "src"}]
+
+[tool.poetry.scripts]
+bulk-export-plots = "isoformgazer.bulk_export_plots:main"
 
 
 [build-system]

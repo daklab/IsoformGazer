@@ -1187,10 +1187,14 @@ def create_junction_exon_visualization(gene_data: dict,
         ))
 
     if color_by_abundance:
-        if colorscale: 
+        if colorscale:
             selected_colorscale = colorscale
-        else: 
+        else:
             selected_colorscale = 'Viridis'
+
+        # Use colorbar.xpad for fixed pixel-based offset from plot edge
+        # This keeps the colorbar at a fixed distance regardless of plot width
+        colorbar_xpad = 200  # Fixed pixel distance from right edge of plot
 
         if junctions and 'psi_min' in locals() and 'psi_max' in locals():
             # Create invisible scatter trace with colorbar for PSI
@@ -1205,7 +1209,8 @@ def create_junction_exon_visualization(gene_data: dict,
                         title=dict(text="Junction<br>Average PSI", font=dict(size=16)),
                         thickness=20,
                         len=0.4,
-                        x=1.15,
+                        x=1.0,
+                        xpad=colorbar_xpad,
                         y=0.7,
                         tickfont=dict(size=10)
                     ),
@@ -1233,7 +1238,8 @@ def create_junction_exon_visualization(gene_data: dict,
                             title=dict(text="Transcript<br>Average TPM", font=dict(size=16)),
                             thickness=20,
                             len=0.4,
-                            x=1.15,
+                            x=1.0,
+                            xpad=colorbar_xpad,
                             y=0.25,
                             tickfont=dict(size=10)
                         ),
@@ -1248,10 +1254,13 @@ def create_junction_exon_visualization(gene_data: dict,
 
     total_y_range = junction_y_start + len(junctions) * 1.0 + 0.5 if junctions else y_max
 
-    if color_by_abundance: 
+    # Use fixed pixel-based margins and positioning to keep labels and colorbars at fixed distance
+    if color_by_abundance:
         right_margin = 350 
-    else: 
+        label_xshift_pixels = 10
+    else:
         right_margin = 200
+        label_xshift_pixels = 10
 
     fig.update_layout(
         title={
@@ -1289,12 +1298,13 @@ def create_junction_exon_visualization(gene_data: dict,
         autosize=True,
         uirevision='constant'
     )
-    
+
     for idx, transcript in enumerate(transcript_labels):
         y_pos = transcript_y_positions[idx]
         fig.add_annotation(
-            x=1.01,
+            x=1.0,
             xref='paper',
+            xshift=label_xshift_pixels,
             y=y_pos,
             text=transcript,
             showarrow=False,
@@ -1306,8 +1316,9 @@ def create_junction_exon_visualization(gene_data: dict,
     for idx, junction in enumerate(junction_labels):
         y_pos = junction_y_positions[idx]
         fig.add_annotation(
-            x=1.01,
+            x=1.0,
             xref='paper',
+            xshift=label_xshift_pixels,
             y=y_pos,
             text=junction,
             showarrow=False,

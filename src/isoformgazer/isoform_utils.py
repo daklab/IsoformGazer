@@ -841,7 +841,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
         
         fig.update_xaxes(
             showticklabels=True,
-            tickangle=45,
+            tickangle=90,
             tickfont=dict(size=8),
             automargin=True,
             tickmode='array',
@@ -1286,7 +1286,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         ),
         xaxis=dict(
             automargin=True,
-            tickangle=45 if show_labels else 0,
+            tickangle=90 if show_labels else 0,
             tickfont=dict(
                 size=8 if show_labels else 1,
                 color='rgba(0,0,0,0)' if not show_labels else None
@@ -1585,7 +1585,7 @@ def create_organ_annotation_bar(tissue_cols, height=20):
         
         organ_list.append(organ)
         color_list.append(color)
-    
+
     return organ_list, color_list
 
 
