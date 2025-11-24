@@ -13,15 +13,55 @@ from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
 from data_utils import apply_distance_preprocessing, get_matplotlib_colormap
-from isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height, calculate_clustergram_min_height
+from isoform_utils import (load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name,
+                           calculate_dynamic_structure_plot_height, calculate_clustergram_min_height,
+                           get_tissue_tpm_for_isoforms, get_organ_tpm_for_isoforms)
 from isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
 ###################################################################
 # MARGIN PRESETS FOR FIGURES
 ###################################################################
-MIN_MARGIN = 8 
+MIN_MARGIN = 8
 MAX_MARGIN = 55
 MAX_MARGIN_LABELS = 65
+
+###################################################################
+# TEXT WRAPPING UTILITIES
+###################################################################
+def wrap_colorbar_title(name_text, label_text, char_limit=15):
+    """
+    Formatting method for colorscale titles to wrap colorbar title 
+    at char_limit (default: 15), with Tissue TPM / Organ TPM label 
+    on its own separate line at the end."""
+    words = name_text.split()
+    lines = []
+    current_line = []
+    current_length = 0
+
+    for word in words:
+        # Check if adding this word would exceed the limit
+        potential_length = current_length + len(word) + (1 if current_line else 0)
+
+        # Case 1: word fits in the current line
+        if potential_length <= char_limit:
+            current_line.append(word)
+            current_length = potential_length
+
+        # Case 2: word doesn't fit, so start a new line
+        else:
+            if current_line:
+                lines.append(' '.join(current_line))
+            current_line = [word]
+            current_length = len(word)
+
+    # Add the last line of name
+    if current_line:
+        lines.append(' '.join(current_line))
+
+    # Always add label on its own line
+    lines.append(label_text)
+
+    return '<br>'.join(lines)
 
 ###################################################################
 # VISUALIZATION METHODS
@@ -896,8 +936,12 @@ def create_junction_exon_visualization(gene_data: dict,
                                        junction_color: str = '#85929E',
                                        filtered_transcript_ids: list = None,
                                        color_by_abundance: bool = False,
+                                       color_junctions_by_psi: bool = True,
                                        db_path: str = None,
-                                       colorscale: str = 'Viridis') -> go.Figure:
+                                       colorscale: str = 'Viridis',
+                                       abundance_type: str = 'average',
+                                       tissue_name: str = None,
+                                       organ_name: str = None) -> go.Figure:
     """Create junction and exon structure plot for junction master table data"""
     if 'error' in gene_data:
         return create_empty_atse_message(gene_data['error'])
@@ -998,10 +1042,28 @@ def create_junction_exon_visualization(gene_data: dict,
         exon_hover_text = []
 
         # Get color scale for transcripts if enabled
-        if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
-            tpm_values = transcript_summary['isoform_average_tpm'].fillna(0)
-            tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
-            cmap = get_matplotlib_colormap(colorscale)
+        transcript_tpm_dict = None
+        tpm_min, tpm_max = 0, 0
+        cmap = None
+
+        if color_by_abundance:
+            if abundance_type == 'tissue' and tissue_name:
+                transcript_tpm_dict = get_tissue_tpm_for_isoforms(db_path, gene_data['gene_name'], tissue_name)
+
+            elif abundance_type == 'organ' and organ_name:
+                transcript_tpm_dict = get_organ_tpm_for_isoforms(db_path, gene_data['gene_name'], organ_name)
+
+            else:
+                if 'isoform_average_tpm' in transcript_summary.columns:
+                    transcript_tpm_dict = {row['id']: row.get('isoform_average_tpm', 0)
+                                          for _, row in transcript_summary.iterrows()}
+
+            # Get min/max for normalization
+            if transcript_tpm_dict:
+                tpm_values = [v for v in transcript_tpm_dict.values() if v is not None]
+                if tpm_values:
+                    tpm_min, tpm_max = min(tpm_values), max(tpm_values)
+                    cmap = get_matplotlib_colormap(colorscale)
 
         for _, transcript in transcript_summary.iterrows():
             isoform_id = transcript['id']
@@ -1010,13 +1072,15 @@ def create_junction_exon_visualization(gene_data: dict,
 
             trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
 
-            if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
-                tpm = transcript.get('isoform_average_tpm', 0)
+            if color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
+                tpm = transcript_tpm_dict[isoform_id]
 
                 if tpm_max > tpm_min:
                     normalized = (tpm - tpm_min) / (tpm_max - tpm_min)
+
+                # When all values are equal, use 0.0 to show the minimum color on the scale
                 else:
-                    normalized = 0.5
+                    normalized = 0.0
 
                 rgba = cmap(normalized)
                 exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
@@ -1039,10 +1103,19 @@ def create_junction_exon_visualization(gene_data: dict,
 
                 # Build hover text with optional TPM info
                 hover_text = f"Isoform ID: {isoform_id}<br>Transcript ID: {abbreviate_transcript_name(trans_id)}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
-                if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
-                    tpm = transcript.get('isoform_average_tpm', None)
+                if color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
+                    tpm = transcript_tpm_dict[isoform_id]
                     if tpm is not None:
-                        hover_text += f"<br>Average TPM: {tpm:.2f}"
+                        if abundance_type == 'tissue' and tissue_name:
+                            formatted_tissue = ' '.join(word.capitalize() for word in tissue_name.split())
+                            hover_text += f"<br>{formatted_tissue} TPM: {tpm:.2f}"
+
+                        elif abundance_type == 'organ' and organ_name:
+                            formatted_organ = ' '.join(word.capitalize() for word in organ_name.split())
+                            hover_text += f"<br>{formatted_organ} TPM: {tpm:.2f}"
+
+                        else:
+                            hover_text += f"<br>Average TPM: {tpm:.2f}"
                 exon_hover_text.append(hover_text)
         
         junction_y_start = y_max + 0.5
@@ -1076,7 +1149,7 @@ def create_junction_exon_visualization(gene_data: dict,
     junction_hover_text = []
 
     junction_psi_data = {}
-    if junctions and color_by_abundance:
+    if junctions and color_junctions_by_psi:
         conn = sqlite3.connect(db_path)
         try:
             psi_query = """
@@ -1124,7 +1197,7 @@ def create_junction_exon_visualization(gene_data: dict,
             junction_labels.append(junction_id)
             junction_y_positions.append(junction_y_pos)
 
-            if color_by_abundance and (start, end) in junction_psi_data:
+            if (start, end) in junction_psi_data:
                 psi = junction_psi_data[(start, end)]
                 if psi is not None:
                     if psi_max > psi_min:
@@ -1146,13 +1219,13 @@ def create_junction_exon_visualization(gene_data: dict,
                 'line': {'color': junction_fill_color, 'width': 1},
                 'opacity': 0.8
             })
-            
+
             junction_hover_x.append((start + end) / 2)
             junction_hover_y.append(junction_y_pos)
 
             # Build hover text with optional PSI info
             hover_text = f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}'
-            if color_by_abundance and (start, end) in junction_psi_data:
+            if (start, end) in junction_psi_data:
                 psi = junction_psi_data[(start, end)]
                 if psi is not None:
                     hover_text += f"<br>Average PSI: {psi:.2f}"
@@ -1186,61 +1259,81 @@ def create_junction_exon_visualization(gene_data: dict,
             name='Junctions'
         ))
 
-    if color_by_abundance:
-        if colorscale:
-            selected_colorscale = colorscale
-        else:
-            selected_colorscale = 'Viridis'
+    # Setup colorscale (needed for both junction and transcript colorbars)
+    if colorscale:
+        selected_colorscale = colorscale
+    else:
+        selected_colorscale = 'Viridis'
 
-        # Use colorbar.xpad for fixed pixel-based offset from plot edge
-        # This keeps the colorbar at a fixed distance regardless of plot width
-        colorbar_xpad = 200  # Fixed pixel distance from right edge of plot
-
-        if junctions and 'psi_min' in locals() and 'psi_max' in locals():
-            # Create invisible scatter trace with colorbar for PSI
-            fig.add_trace(go.Scatter(
-                x=[None], y=[None],
-                mode='markers',
-                marker=dict(
-                    colorscale=selected_colorscale,
-                    cmin=psi_min,
-                    cmax=psi_max,
-                    colorbar=dict(
-                        title=dict(text="Junction<br>Average PSI", font=dict(size=16)),
-                        thickness=20,
-                        len=0.4,
-                        x=1.0,
-                        xpad=colorbar_xpad,
-                        y=0.7,
-                        tickfont=dict(size=10)
-                    ),
-                    showscale=True,
-                    size=0,
-                    opacity=0
+    # Create PSI colorbar for junctions (independent of transcript coloring)
+    if junctions and color_junctions_by_psi and 'psi_min' in locals() and 'psi_max' in locals():
+        # Create invisible scatter trace with colorbar for PSI
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='markers',
+            marker=dict(
+                colorscale=selected_colorscale,
+                cmin=psi_min,
+                cmax=psi_max,
+                colorbar=dict(
+                    title=dict(text="Junction<br>Average PSI", font=dict(size=16)),
+                    thickness=20,
+                    len=0.4,
+                    x=1.22,
+                    xpad=0,
+                    y=0.78,
+                    tickfont=dict(size=10)
                 ),
-                showlegend=False,
-                hoverinfo='none',
-                name='PSI Scale'
-            ))
+                showscale=True,
+                size=0,
+                opacity=0
+            ),
+            showlegend=False,
+            hoverinfo='none',
+            name='PSI Scale'
+        ))
 
-        if not transcript_summary.empty and 'isoform_average_tpm' in transcript_summary.columns:
-            tpm_values = transcript_summary['isoform_average_tpm'].dropna()
-            if not tpm_values.empty:
-                tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
+    if color_by_abundance:
+        if not transcript_summary.empty:
+            if tpm_min is not None and tpm_max is not None:
+                if abundance_type == 'tissue' and tissue_name:
+                    formatted_tissue = ' '.join(word.capitalize() for word in tissue_name.split())
+                    colorbar_title = wrap_colorbar_title(formatted_tissue, "Tissue TPM")
+                elif abundance_type == 'organ' and organ_name:
+                    formatted_organ = ' '.join(word.capitalize() for word in organ_name.split())
+                    colorbar_title = wrap_colorbar_title(formatted_organ, "Organ TPM")
+                else:
+                    colorbar_title = "Transcript<br>Average TPM"
+
+                if tpm_max > tpm_min:
+                    cmin_val = tpm_min
+                    cmax_val = tpm_max
+
+                else:
+                    # When all values are 0, just use a small range for display so colorbar is still visible
+                    cmin_val = 0
+                    cmax_val = 1
+
+                # If junctions are not colored by PSI, move transcript colorbar up
+                if not color_junctions_by_psi: 
+                    transcript_colorbar_y = 0.78 
+                else: 
+                    transcript_colorbar_y = 0.33
+
                 fig.add_trace(go.Scatter(
                     x=[None], y=[None],
                     mode='markers',
                     marker=dict(
                         colorscale=selected_colorscale,
-                        cmin=tpm_min,
-                        cmax=tpm_max,
+                        cmin=cmin_val,
+                        cmax=cmax_val,
                         colorbar=dict(
-                            title=dict(text="Transcript<br>Average TPM", font=dict(size=16)),
+                            title=dict(text=colorbar_title, font=dict(size=16)),
                             thickness=20,
                             len=0.4,
-                            x=1.0,
-                            xpad=colorbar_xpad,
-                            y=0.25,
+                            x=1.22,
+                            xpad=0,
+                            y=transcript_colorbar_y,
                             tickfont=dict(size=10)
                         ),
                         showscale=True,
@@ -1254,9 +1347,9 @@ def create_junction_exon_visualization(gene_data: dict,
 
     total_y_range = junction_y_start + len(junctions) * 1.0 + 0.5 if junctions else y_max
 
-    # Use fixed pixel-based margins and positioning to keep labels and colorbars at fixed distance
-    if color_by_abundance:
-        right_margin = 350 
+    # keep labels and colorbars at fixed distance away from y-axis labels (accounting for length of isoform hashes)
+    if color_by_abundance or color_junctions_by_psi:
+        right_margin = 250
         label_xshift_pixels = 10
     else:
         right_margin = 200

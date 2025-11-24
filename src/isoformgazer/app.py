@@ -38,7 +38,8 @@ from isoform_utils import (
     load_expression_data, process_transcript_structure, create_transcript_structure_plot,
     create_isoform_expression_clustergram, create_empty_isoform_message,
     calculate_unified_plot_height, calculate_clustergram_min_height, calculate_single_isoform_hash,
-    calculate_dynamic_structure_plot_height, parse_gtf_and_calculate_hashes, generate_annotated_gtf
+    calculate_dynamic_structure_plot_height, parse_gtf_and_calculate_hashes, generate_annotated_gtf,
+    get_unique_tissues_for_gene, get_unique_organs_for_gene
 )
 
 RANDOM_SEED = 18
@@ -1046,7 +1047,20 @@ app.layout = html.Div(className='app-layout', children=[
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='toggle-switch-row', children=[
-                                html.Div('Color by Average Abundance', className='app-controls-name toggle-switch-label-wide'),
+                                html.Div('Color by Average PSI', className='app-controls-name toggle-switch-label-wide'),
+                                daq.ToggleSwitch(
+                                    id='color-junctions-by-psi-toggle',
+                                    value=False,
+                                    label={'label': 'Off / On', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='left',
+                                    className='toggle-switch-inline'
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Color junctions by their average PSI (percent spliced in)')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Color by Abundance', className='app-controls-name toggle-switch-label-wide'),
                                 daq.ToggleSwitch(
                                     id='color-by-abundance-toggle',
                                     value=False,
@@ -1055,7 +1069,48 @@ app.layout = html.Div(className='app-layout', children=[
                                     className='toggle-switch-inline'
                                 )
                             ]),
-                            html.Div(className='app-controls-desc', children='Color transcripts and junctions by their average abundance and usage (TPM/PSI)')
+                            html.Div(className='app-controls-desc', children='Color transcripts by their abundance (TPM)'),
+                            html.Div(id='abundance-color-options-container', style={'display': 'none'}, children=[
+                                html.Div(style={'marginTop': '15px'}, children=[
+                                    dcc.RadioItems(
+                                        id='abundance-color-type-radio',
+                                        options=[
+                                            {'label': ' Average Abundance', 'value': 'average'},
+                                            {'label': ' Tissue Abundance', 'value': 'tissue'},
+                                            {'label': ' Organ Abundance', 'value': 'organ'}
+                                        ],
+                                        value='average',
+                                        className='radio-items-vertical',
+                                        labelStyle={'display': 'block', 'marginBottom': '8px', 'fontSize': '12px', 'color': '#506784'}
+                                    )
+                                ]),
+                                html.Div(id='tissue-dropdown-container', style={'marginTop': '10px', 'display': 'none'}, children=[
+                                    html.Div(className='app-controls-block', children=[
+                                        html.Div('Select Tissue', className='app-controls-name'),
+                                        dcc.Dropdown(
+                                            id='tissue-abundance-dropdown',
+                                            className='app-controls-block-dropdown',
+                                            options=[],
+                                            value=None,
+                                            clearable=False
+                                        ),
+                                        html.Div(className='app-controls-desc', children='Choose which tissue to color transcripts by')
+                                    ])
+                                ]),
+                                html.Div(id='organ-dropdown-container', style={'marginTop': '10px', 'display': 'none'}, children=[
+                                    html.Div(className='app-controls-block', children=[
+                                        html.Div('Select Organ', className='app-controls-name'),
+                                        dcc.Dropdown(
+                                            id='organ-abundance-dropdown',
+                                            className='app-controls-block-dropdown',
+                                            options=[],
+                                            value=None,
+                                            clearable=False
+                                        ),
+                                        html.Div(className='app-controls-desc', children='Choose which organ to color transcripts by')
+                                    ])
+                                ])
+                            ])
                         ]),
 
                         #####################################
@@ -2680,12 +2735,17 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
      dash.dependencies.Input('junction-color-store', 'data'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('left-table-validation-store', 'data'),
+     dash.dependencies.Input('color-junctions-by-psi-toggle', 'value'),
      dash.dependencies.Input('color-by-abundance-toggle', 'value'),
-     dash.dependencies.Input('colorscale-dropdown', 'value')]
+     dash.dependencies.Input('colorscale-dropdown', 'value'),
+     dash.dependencies.Input('abundance-color-type-radio', 'value'),
+     dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
+     dash.dependencies.Input('organ-abundance-dropdown', 'value')]
 )
 def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids,
                               plot_height, exon_color, junction_color, isoform_filter_query,
-                              validation_data, color_by_abundance, colorscale):
+                              validation_data, color_junctions_by_psi, color_by_abundance, 
+                              colorscale, abundance_type, tissue_name, organ_name):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -2721,8 +2781,12 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             junction_color=junction_color,
             filtered_transcript_ids=actual_filtered_transcript_ids,
             color_by_abundance=color_by_abundance,
+            color_junctions_by_psi=color_junctions_by_psi,
             db_path=db_path,
-            colorscale=colorscale
+            colorscale=colorscale,
+            abundance_type=abundance_type,
+            tissue_name=tissue_name,
+            organ_name=organ_name
         )
 
         # Create config with gene name in filename
@@ -2802,9 +2866,12 @@ def toggle_top_panel_plots(hide_junctions):
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('left-table-validation-store', 'data'),
      dash.dependencies.Input('color-by-abundance-toggle', 'value'),
-     dash.dependencies.Input('colorscale-dropdown', 'value')]
+     dash.dependencies.Input('colorscale-dropdown', 'value'),
+     dash.dependencies.Input('abundance-color-type-radio', 'value'),
+     dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
+     dash.dependencies.Input('organ-abundance-dropdown', 'value')]
 )
-def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale):
+def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name):
     """Update transcript structure plot in top panel when toggle is activated"""
     # Only update if junctions are hidden (transcript plot should be shown)
     if not hide_junctions:
@@ -2842,7 +2909,10 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
             show_y_labels=True,
             exon_color=exon_color,
             color_by_abundance=color_by_abundance,
-            colorscale=colorscale
+            colorscale=colorscale,
+            abundance_type=abundance_type,
+            tissue_name=tissue_name,
+            organ_name=organ_name
         )
 
         # Create config with gene name in filename
@@ -3321,10 +3391,13 @@ def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
      dash.dependencies.State('filtered-isoform-store', 'data'),
      dash.dependencies.State('exon-color-store', 'data'),
      dash.dependencies.State('color-by-abundance-toggle', 'value'),
-     dash.dependencies.State('colorscale-dropdown', 'value')],
+     dash.dependencies.State('colorscale-dropdown', 'value'),
+     dash.dependencies.State('abundance-color-type-radio', 'value'),
+     dash.dependencies.State('tissue-abundance-dropdown', 'value'),
+     dash.dependencies.State('organ-abundance-dropdown', 'value')],
     prevent_initial_call=True
 )
-def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, colorscale):
+def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name):
     """Export selected plot with custom dimensions as SVG"""
     if not n_clicks or not width or not height or not selected_gene:
         raise PreventUpdate
@@ -3350,7 +3423,10 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
                 show_y_labels=True,
                 exon_color=exon_color,
                 color_by_abundance=color_by_abundance,
-                colorscale=colorscale
+                colorscale=colorscale,
+                abundance_type=abundance_type,
+                tissue_name=tissue_name,
+                organ_name=organ_name
             )
             filename = f"{selected_gene}_structure_plot.svg"
 
@@ -3398,6 +3474,64 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
         print(f"Error exporting plot: {e}")
         traceback.print_exc()
         raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('abundance-color-options-container', 'style'),
+    dash.dependencies.Input('color-by-abundance-toggle', 'value')
+)
+def toggle_abundance_options(toggle_value):
+    """Show/hide abundance options when toggle is turned on/off"""
+    if toggle_value:
+        return {'display': 'block'}
+    
+    else:
+        return {'display': 'none'}
+
+
+@app.callback(
+    [dash.dependencies.Output('tissue-abundance-dropdown', 'options'),
+     dash.dependencies.Output('tissue-abundance-dropdown', 'value'),
+     dash.dependencies.Output('tissue-dropdown-container', 'style'),
+     dash.dependencies.Output('organ-abundance-dropdown', 'options'),
+     dash.dependencies.Output('organ-abundance-dropdown', 'value'),
+     dash.dependencies.Output('organ-dropdown-container', 'style')],
+    [dash.dependencies.Input('abundance-color-type-radio', 'value'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')],
+    prevent_initial_call=False
+)
+def update_abundance_dropdowns(color_type, selected_gene):
+    """Update tissue and organ dropdown options and visibility based on selected coloring type"""
+    tissue_options = []
+    tissue_value = None
+    tissue_style = {'display': 'none', 'marginTop': '10px'}
+    organ_options = []
+    organ_value = None
+    organ_style = {'display': 'none', 'marginTop': '10px'}
+
+    if color_type == 'tissue' and selected_gene:
+        try:
+            tissues = get_unique_tissues_for_gene(db_path, selected_gene)
+            if tissues:
+                tissue_options = [{'label': f' {tissue}', 'value': tissue} for tissue in tissues]
+                tissue_value = tissue_options[0]['value'] if tissue_options else None
+                tissue_style = {'display': 'block', 'marginTop': '10px'}
+
+        except Exception as e:
+            traceback.print_exc()
+
+    elif color_type == 'organ' and selected_gene:
+        try:
+            organs = get_unique_organs_for_gene(db_path, selected_gene)
+            if organs:
+                organ_options = [{'label': f' {organ}', 'value': organ} for organ in organs]
+                organ_value = organ_options[0]['value'] if organ_options else None
+                organ_style = {'display': 'block', 'marginTop': '10px'}
+
+        except Exception as e:
+            traceback.print_exc()
+
+    return tissue_options, tissue_value, tissue_style, organ_options, organ_value, organ_style
 
 
 ###################################################################

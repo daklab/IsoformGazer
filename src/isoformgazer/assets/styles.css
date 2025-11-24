@@ -1191,6 +1191,31 @@ html, body {
     position: relative !important;
 }
 
+#tissue-abundance-dropdown,
+#tissue-abundance-dropdown .Select,
+#tissue-abundance-dropdown .Select-control,
+#tissue-abundance-dropdown .Select-menu-outer,
+#tissue-abundance-dropdown .Select-menu {
+    z-index: 10050 !important;
+    position: relative !important;
+}
+
+#organ-abundance-dropdown,
+#organ-abundance-dropdown .Select,
+#organ-abundance-dropdown .Select-control,
+#organ-abundance-dropdown .Select-menu-outer,
+#organ-abundance-dropdown .Select-menu {
+    z-index: 10040 !important;
+    position: relative !important;
+}
+
+#tissue-dropdown-container .app-controls-block {
+    border-left: 4px solid #622e9d;
+}
+
+#organ-dropdown-container .app-controls-block {
+    border-left: 4px solid #622e9d;
+}
 
 .Select-option {
     transition: all 0.2s ease !important;

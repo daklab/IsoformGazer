@@ -3,6 +3,7 @@ import re
 import hashlib
 import sqlite3
 import warnings
+import traceback
 import pandas as pd
 import numpy as np
 import dash_bio
@@ -431,7 +432,10 @@ def create_transcript_structure_plot(db_path: str,
                                      show_y_labels: bool = False,
                                      exon_color: str = '#2E86C1',
                                      color_by_abundance: bool = False,
-                                     colorscale: str = 'Viridis') -> go.Figure:
+                                     colorscale: str = 'Viridis',
+                                     abundance_type: str = 'average',
+                                     tissue_name: str = None,
+                                     organ_name: str = None) -> go.Figure:
     """Create transcript structure plot showing all transcripts with 50%+ speed improvement"""
     
     if transcript_data.empty:
@@ -474,19 +478,29 @@ def create_transcript_structure_plot(db_path: str,
     transcript_summary = transcript_summary.set_index('id').loc[ordered_transcript_ids].reset_index()
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
 
-    # Fetch isoform_average_tpm data for coloring if enabled
     if color_by_abundance:
-        conn = sqlite3.connect(db_path)
-        try:
-            tpm_query = """
-            SELECT DISTINCT id, isoform_average_tpm
-            FROM isoforms
-            WHERE gene_name = ?
-            """
-            tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
-            transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
-        finally:
-            conn.close()
+        if abundance_type == 'tissue' and tissue_name:
+            tissue_tpm_dict = get_tissue_tpm_for_isoforms(db_path, gene_name, tissue_name)
+            transcript_summary['abundance_tpm'] = transcript_summary['id'].map(tissue_tpm_dict).fillna(0)
+
+        elif abundance_type == 'organ' and organ_name:
+            organ_tpm_dict = get_organ_tpm_for_isoforms(db_path, gene_name, organ_name)
+            transcript_summary['abundance_tpm'] = transcript_summary['id'].map(organ_tpm_dict).fillna(0)
+
+        else:
+            conn = sqlite3.connect(db_path)
+            try:
+                tpm_query = """
+                SELECT DISTINCT id, isoform_average_tpm
+                FROM isoforms
+                WHERE gene_name = ?
+                """
+                tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
+                transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+                transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
+
+            finally:
+                conn.close()
 
     # Calculate dynamic height if not provided or if using default slider value
     if height is None or height == 600:
@@ -529,9 +543,8 @@ def create_transcript_structure_plot(db_path: str,
     hover_traces_y = []
     hover_traces_text = []
 
-    # Get color scale for abundance if enabled
-    if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
-        tpm_values = transcript_summary['isoform_average_tpm'].fillna(0)
+    if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
+        tpm_values = transcript_summary['abundance_tpm'].fillna(0)
         tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
         cmap = get_matplotlib_colormap(colorscale)
 
@@ -541,13 +554,14 @@ def create_transcript_structure_plot(db_path: str,
         trans_order = transcript['trans_order']
         trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
 
-        if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
-            tpm = transcript.get('isoform_average_tpm', 0)
+        if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
+            tpm = transcript.get('abundance_tpm', 0)
 
             if tpm_max > tpm_min:
                 normalized = (tpm - tpm_min) / (tpm_max - tpm_min)
             else:
-                normalized = 0.5
+                # When all values are equal, use 0.0 to show the minimum color on the scale
+                normalized = 0.0
 
             rgba = cmap(normalized)
             exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
@@ -572,10 +586,18 @@ def create_transcript_structure_plot(db_path: str,
 
             # Build hover text with optional TPM info
             hover_text = f"Isoform ID: {isoform_id}<br>Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
-            if color_by_abundance and 'isoform_average_tpm' in transcript_summary.columns:
-                tpm = transcript.get('isoform_average_tpm', None)
+            if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
+                tpm = transcript.get('abundance_tpm', None)
                 if tpm is not None:
-                    hover_text += f"<br>Average TPM: {tpm:.2f}"
+                    if abundance_type == 'tissue' and tissue_name:
+                        hover_text += f"<br>{tissue_name} Tissue TPM: {tpm:.2f}"
+
+                    elif abundance_type == 'organ' and organ_name:
+                        hover_text += f"<br>{organ_name.capitalize()} Organ TPM: {tpm:.2f}"
+
+                    else:
+                        hover_text += f"<br>Average TPM: {tpm:.2f}"
+
             hover_traces_text.append(hover_text)
     
     fig.update_layout(shapes=shapes)
@@ -592,29 +614,49 @@ def create_transcript_structure_plot(db_path: str,
         ))
 
     if color_by_abundance:
-        if colorscale: 
-            selected_colorscale = colorscale  
+        if colorscale:
+            selected_colorscale = colorscale
         else:
             selected_colorscale = 'Viridis'
 
-        if not transcript_summary.empty and 'isoform_average_tpm' in transcript_summary.columns:
-            tpm_values = transcript_summary['isoform_average_tpm'].dropna()
+        if not transcript_summary.empty and 'abundance_tpm' in transcript_summary.columns:
+            tpm_values = transcript_summary['abundance_tpm'].dropna()
             if not tpm_values.empty:
                 tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
-                # Create invisible scatter trace with colorbar for TPM
+
+                if abundance_type == 'tissue' and tissue_name:
+                    formatted_tissue = ' '.join(word.capitalize() for word in tissue_name.split())
+                    colorbar_title = f"{formatted_tissue}<br>Tissue TPM"
+
+                elif abundance_type == 'organ' and organ_name:
+                    formatted_organ = ' '.join(word.capitalize() for word in organ_name.split())
+                    colorbar_title = f"{formatted_organ}<br>Organ TPM"
+
+                else:
+                    colorbar_title = "Transcript<br>Average TPM"
+
+                # case where all TPM values are 0 (tpm_min == tpm_max)
+                if tpm_max > tpm_min:
+                    cmin_val = tpm_min
+                    cmax_val = tpm_max
+                else:
+                    # When all values are 0 or the same, need to use a small range for colorbar to still show up...
+                    cmin_val = 0
+                    cmax_val = 1
+
                 fig.add_trace(go.Scatter(
                     x=[None], y=[None],
                     mode='markers',
                     marker=dict(
                         colorscale=selected_colorscale,
-                        cmin=tpm_min,
-                        cmax=tpm_max,
+                        cmin=cmin_val,
+                        cmax=cmax_val,
                         colorbar=dict(
-                            title=dict(text="Transcript<br>Average TPM", font=dict(size=16)),
+                            title=dict(text=colorbar_title, font=dict(size=16)),
                             thickness=20,
                             len=0.6,
                             x=1.15,
-                            y=0.5,
+                            y=0.78,
                             tickfont=dict(size=10)
                         ),
                         showscale=True,
@@ -1561,10 +1603,9 @@ def extract_tissue_name_from_column(column_name):
         tissue_name = '.'.join(column_name.split('.')[1:])
     else:
         tissue_name = column_name
-    
+
     tissue_name = (
         tissue_name.replace('_', ' ')
-                  .replace('.', '-')
                   .strip()
     )
     return tissue_name
@@ -1587,6 +1628,143 @@ def create_organ_annotation_bar(tissue_cols, height=20):
         color_list.append(color)
 
     return organ_list, color_list
+
+
+def get_tissue_tpm_for_isoforms(db_path: str, gene_name: str, tissue_name: str) -> dict:
+    """
+    Get TPM values averaged by tissue for all isoforms of a gene.
+    Returns a dictionary mapping isoform_id -> tissue_average_tpm
+    """
+    try:
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+
+        if tpm_data.empty:
+            return {}
+
+        tissue_cols = [col for col in tpm_data.columns
+                      if col.startswith('ENCFF') and extract_tissue_name_from_column(col) == tissue_name]
+
+        if not tissue_cols:
+            return {}
+
+        # Calculate average TPM across tissue replicates for each isoform
+        tissue_tpm_dict = {}
+        for _, row in tpm_data.iterrows():
+            isoform_id = row['id']
+            tissue_tpm_values = [row[col] for col in tissue_cols if col in tpm_data.columns]
+            # Calculate mean, ignoring NaN values
+            tissue_tpm_values = [v for v in tissue_tpm_values if pd.notna(v)]
+
+            if tissue_tpm_values:
+                tissue_tpm_dict[isoform_id] = sum(tissue_tpm_values) / len(tissue_tpm_values)
+
+            else:
+                tissue_tpm_dict[isoform_id] = 0
+
+        return tissue_tpm_dict
+
+    except Exception as e:
+        print(f"Error calculating tissue TPM for {tissue_name}: {e}")
+        return {}
+
+
+def get_organ_tpm_for_isoforms(db_path: str, gene_name: str, organ_name: str) -> dict:
+    """
+    Get TPM values averaged by organ for all isoforms of a gene.
+    Returns a dictionary mapping isoform_id -> organ_average_tpm
+    """
+    try:
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+
+        if tpm_data.empty:
+            return {}
+
+        tissue_to_organ = get_tissue_to_organ_mapping()
+
+        organ_cols = []
+        for col in tpm_data.columns:
+            if col.startswith('ENCFF'):
+                tissue_name = extract_tissue_name_from_column(col)
+                if tissue_to_organ.get(tissue_name, '').lower() == organ_name.lower():
+                    organ_cols.append(col)
+
+        if not organ_cols:
+            return {}
+
+        organ_tpm_dict = {}
+        for _, row in tpm_data.iterrows():
+            isoform_id = row['id']
+            organ_tpm_values = [row[col] for col in organ_cols if col in tpm_data.columns]
+            # Calculate mean, ignoring NaN values
+            organ_tpm_values = [v for v in organ_tpm_values if pd.notna(v)]
+
+            if organ_tpm_values:
+                organ_tpm_dict[isoform_id] = sum(organ_tpm_values) / len(organ_tpm_values)
+
+            else:
+                organ_tpm_dict[isoform_id] = 0
+
+        return organ_tpm_dict
+
+    except Exception as e:
+        print(f"Error calculating organ TPM for {organ_name}: {e}")
+        return {}
+
+
+def get_unique_tissues_for_gene(db_path: str, gene_name: str) -> list:
+    """Get list of unique tissues for a given gene"""
+    try:
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+
+        if tpm_data.empty:
+            return []
+
+        tissues = set()
+        exclude_cols = {'id', 'transcript', 'trans_id', 'gene', 'gene_name', 'isoform_average_tpm',
+                       'index', 'tpm average', 'tpm sum'}
+        tissue_cols = [col for col in tpm_data.columns
+                      if col not in exclude_cols and col.startswith('ENCFF')]
+
+        for col in tissue_cols:
+            tissue_name = extract_tissue_name_from_column(col)
+            tissues.add(tissue_name)
+
+        return sorted(list(tissues))
+
+    except Exception as e:
+        print(f"Error getting unique tissues: {e}")
+        traceback.print_exc()
+        return []
+
+
+def get_unique_organs_for_gene(db_path: str, gene_name: str) -> list:
+    """Get list of unique organs for a given gene"""
+    try:
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+
+        if tpm_data.empty:
+            return []
+
+        tissue_to_organ = get_tissue_to_organ_mapping()
+
+        organs = set()
+        exclude_cols = {'id', 'transcript', 'trans_id', 'gene', 'gene_name', 'isoform_average_tpm',
+                       'index', 'tpm average', 'tpm sum'}
+        tissue_cols = [col for col in tpm_data.columns
+                      if col not in exclude_cols and col.startswith('ENCFF')]
+
+        for col in tissue_cols:
+            tissue_name = extract_tissue_name_from_column(col)
+            organ = tissue_to_organ.get(tissue_name, 'unknown')
+            if organ != 'unknown':
+                organs.add(organ)
+
+        return sorted(list(organs))
+
+    except Exception as e:
+        print(f"Error getting unique organs: {e}")
+        traceback.print_exc()
+        return []
 
 
 def create_empty_isoform_message(message: str) -> go.Figure:
