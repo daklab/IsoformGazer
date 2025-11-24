@@ -1043,7 +1043,7 @@ app.layout = html.Div(className='app-layout', children=[
                                     className='toggle-switch-inline'
                                 )
                             ]),
-                            html.Div(className='app-controls-desc', children='Toggle to hide junctions from the structure plot and show transcript structure instead')
+                            html.Div(className='app-controls-desc', children='Toggle to hide junctions from the structure plot')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='toggle-switch-row', children=[
@@ -1110,6 +1110,31 @@ app.layout = html.Div(className='app-layout', children=[
                                         html.Div(className='app-controls-desc', children='Choose which organ to color transcripts by')
                                     ])
                                 ])
+                            ])
+                        ]),
+                        html.Div(id='structure-plot-colorscale-container', style={'display': 'none'}, children=[
+                            html.Div(className='app-controls-block', children=[
+                                html.Div(className='app-controls-name', children='Colorscale'),
+                                dcc.Dropdown(
+                                    id='structure-plot-colorscale-dropdown',
+                                    className='app-controls-block-dropdown',
+                                    options=[
+                                        {'label': 'RdBu_r', 'value': 'RdBu_r'},
+                                        {'label': 'Viridis', 'value': 'Viridis'},
+                                        {'label': 'Plasma', 'value': 'Plasma'},
+                                        {'label': 'Spectral', 'value': 'Spectral'},
+                                        {'label': 'Turbo', 'value': 'Turbo'},
+                                        {'label': 'Cividis', 'value': 'Cividis'},
+                                        {'label': 'Blues', 'value': 'Blues'},
+                                        {'label': 'Reds', 'value': 'Reds'},
+                                        {'label': 'YlOrRd', 'value': 'YlOrRd'},
+                                        {'label': 'RdYlBu', 'value': 'RdYlBu'},
+                                        {'label': 'Inferno', 'value': 'Inferno'},
+                                        {'label': 'Magma', 'value': 'Magma'}
+                                    ],
+                                    value='Viridis'
+                                ),
+                                html.Div(className='app-controls-desc', children='Choose the color theme for the structure plot')
                             ])
                         ]),
 
@@ -2737,15 +2762,15 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
      dash.dependencies.Input('left-table-validation-store', 'data'),
      dash.dependencies.Input('color-junctions-by-psi-toggle', 'value'),
      dash.dependencies.Input('color-by-abundance-toggle', 'value'),
-     dash.dependencies.Input('colorscale-dropdown', 'value'),
+     dash.dependencies.Input('structure-plot-colorscale-dropdown', 'value'),
      dash.dependencies.Input('abundance-color-type-radio', 'value'),
      dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
      dash.dependencies.Input('organ-abundance-dropdown', 'value')]
 )
 def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids,
                               plot_height, exon_color, junction_color, isoform_filter_query,
-                              validation_data, color_junctions_by_psi, color_by_abundance, 
-                              colorscale, abundance_type, tissue_name, organ_name):
+                              validation_data, color_junctions_by_psi, color_by_abundance,
+                              structure_colorscale, abundance_type, tissue_name, organ_name):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -2783,7 +2808,7 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             color_by_abundance=color_by_abundance,
             color_junctions_by_psi=color_junctions_by_psi,
             db_path=db_path,
-            colorscale=colorscale,
+            colorscale=structure_colorscale,
             abundance_type=abundance_type,
             tissue_name=tissue_name,
             organ_name=organ_name
@@ -3391,13 +3416,13 @@ def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
      dash.dependencies.State('filtered-isoform-store', 'data'),
      dash.dependencies.State('exon-color-store', 'data'),
      dash.dependencies.State('color-by-abundance-toggle', 'value'),
-     dash.dependencies.State('colorscale-dropdown', 'value'),
+     dash.dependencies.State('structure-plot-colorscale-dropdown', 'value'),
      dash.dependencies.State('abundance-color-type-radio', 'value'),
      dash.dependencies.State('tissue-abundance-dropdown', 'value'),
      dash.dependencies.State('organ-abundance-dropdown', 'value')],
     prevent_initial_call=True
 )
-def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name):
+def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, structure_colorscale, abundance_type, tissue_name, organ_name):
     """Export selected plot with custom dimensions as SVG"""
     if not n_clicks or not width or not height or not selected_gene:
         raise PreventUpdate
@@ -3423,7 +3448,7 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
                 show_y_labels=True,
                 exon_color=exon_color,
                 color_by_abundance=color_by_abundance,
-                colorscale=colorscale,
+                colorscale=structure_colorscale,
                 abundance_type=abundance_type,
                 tissue_name=tissue_name,
                 organ_name=organ_name
@@ -3483,6 +3508,20 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
 def toggle_abundance_options(toggle_value):
     """Show/hide abundance options when toggle is turned on/off"""
     if toggle_value:
+        return {'display': 'block'}
+
+    else:
+        return {'display': 'none'}
+
+
+@app.callback(
+    dash.dependencies.Output('structure-plot-colorscale-container', 'style'),
+    [dash.dependencies.Input('color-junctions-by-psi-toggle', 'value'),
+     dash.dependencies.Input('color-by-abundance-toggle', 'value')]
+)
+def toggle_structure_plot_colorscale(color_junctions_by_psi, color_by_abundance):
+    """Show/hide structure plot colorscale when either coloring option is enabled"""
+    if color_junctions_by_psi or color_by_abundance:
         return {'display': 'block'}
     
     else:

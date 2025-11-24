@@ -1217,6 +1217,19 @@ html, body {
     border-left: 4px solid #622e9d;
 }
 
+#structure-plot-colorscale-container .app-controls-block {
+    border-left: 4px solid #EDAE49;
+}
+
+#structure-plot-colorscale-dropdown,
+#structure-plot-colorscale-dropdown .Select,
+#structure-plot-colorscale-dropdown .Select-control,
+#structure-plot-colorscale-dropdown .Select-menu-outer,
+#structure-plot-colorscale-dropdown .Select-menu {
+    z-index: 10030 !important;
+    position: relative !important;
+}
+
 .Select-option {
     transition: all 0.2s ease !important;
     font-size: 15px !important;
