@@ -183,12 +183,12 @@ html, body {
     display: flex;
     justify-content: center;
     align-items: center;
-    transition: opacity 0.5s ease-out;
 }
 
 .loading-overlay.hidden {
     opacity: 0;
     pointer-events: none;
+    z-index: 0;
 }
 
 .loading-content {
@@ -2595,3 +2595,15 @@ div[data-value="tab-3"]:hover {
     color: red;
 }
 
+
+/* CRUCIAL FIXES TO PREVENT LOADING SCREEN OVERLAY INTERACTION ISSUES WITH ISOFORM MASTER TABLE*/
+/* When loading is complete, allow clicks to pass through the overlay after fade completes */
+#loading-overlay.hidden {
+    z-index: 0 !important;
+}
+
+/* Safe fallback: ensure constellation and decorative layers do not capture user click events */
+.constellation, .transcript-star {
+    pointer-events: none !important;
+    z-index: 0 !important;
+}

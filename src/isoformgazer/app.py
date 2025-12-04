@@ -690,8 +690,7 @@ left_data_table = dash_table.DataTable(
     style_cell={
         'overflow': 'hidden',
         'textOverflow': 'ellipsis',
-        'minWidth': '100px', 
-        'maxWidth': '220px',
+        'minWidth': '150px',
         'padding': '10px 8px',
         'whiteSpace': 'normal',
         'font-family': '"Open Sans", sans-serif',
@@ -701,7 +700,9 @@ left_data_table = dash_table.DataTable(
     },
     style_table={
         'overflowY': 'visible',
-        'height': 'auto'
+        'overflowX': 'auto', 
+        'minWidth': '100%',
+        'height': 'auto'     
     },
     style_header={
         'backgroundColor': '#301279',
@@ -774,8 +775,8 @@ right_data_table = dash_table.DataTable(
     style_cell={
         'overflow': 'hidden',
         'textOverflow': 'ellipsis',
-        'minWidth': '100px', 
-        'maxWidth': '220px',
+        'minWidth': '150px', 
+        #'maxWidth': '220px',
         'padding': '10px 8px',
         'whiteSpace': 'normal',
         'font-family': '"Open Sans", sans-serif',
@@ -1877,7 +1878,7 @@ def validate_right_table_filters(current_filter_query):
         return {'display': 'none'}, [], {'valid': True, 'errors': {}, 'query': current_filter_query}
 
 #######################################################################
-# INITIAL LOADING SCREEN CALLBACK
+# INITIAL LOADING SCREEN CALLBACKS
 #######################################################################
 @app.callback(
     [dash.dependencies.Output('loading-overlay', 'className'),
@@ -1892,14 +1893,15 @@ def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_co
     """Hide the initial loading screen with a 2-second delay after initial data has loaded"""
     if loading_complete:
         return 'loading-overlay hidden', True, True
-    
+
     data_loaded = bool(isoform_data and junction_data)
     if data_loaded and timer_intervals == 0:
-        return 'loading-overlay', False, False 
-    
+        return 'loading-overlay', False, False
+
+    # CRUCIAL: moves position of loading overlay to back to prevent interaction issues with master tables once app layout loaded
     if data_loaded and timer_intervals > 0:
         return 'loading-overlay hidden', True, True
-    
+
     # Data not loaded yet so keep showing loading screen
     return 'loading-overlay', False, True
 
