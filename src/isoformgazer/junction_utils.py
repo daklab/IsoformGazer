@@ -941,7 +941,8 @@ def create_junction_exon_visualization(gene_data: dict,
                                        colorscale: str = 'Viridis',
                                        abundance_type: str = 'average',
                                        tissue_name: str = None,
-                                       organ_name: str = None) -> go.Figure:
+                                       organ_name: str = None,
+                                       individual_junction_colors: dict = None) -> go.Figure:
     """Create junction and exon structure plot for junction master table data"""
     if 'error' in gene_data:
         return create_empty_atse_message(gene_data['error'])
@@ -1197,7 +1198,8 @@ def create_junction_exon_visualization(gene_data: dict,
             junction_labels.append(junction_id)
             junction_y_positions.append(junction_y_pos)
 
-            if (start, end) in junction_psi_data:
+            # Color priority: Average PSI color > user selected individual junction color > global color
+            if color_junctions_by_psi and (start, end) in junction_psi_data:
                 psi = junction_psi_data[(start, end)]
                 if psi is not None:
                     if psi_max > psi_min:
@@ -1207,7 +1209,15 @@ def create_junction_exon_visualization(gene_data: dict,
                     rgba = cmap(normalized)
                     junction_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
                 else:
-                    junction_fill_color = junction_color
+                    # PSI coloring enabled but no PSI data: so use individual color if available, otherwise global color
+                    if individual_junction_colors and junction_id in individual_junction_colors:
+                        junction_fill_color = individual_junction_colors[junction_id]
+                    else:
+                        junction_fill_color = junction_color
+
+            # Check if junction has an individual color override
+            elif individual_junction_colors and junction_id in individual_junction_colors:
+                junction_fill_color = individual_junction_colors[junction_id]
             else:
                 junction_fill_color = junction_color
 
@@ -1240,7 +1250,8 @@ def create_junction_exon_visualization(gene_data: dict,
             x=exon_hover_x,
             y=exon_hover_y,
             mode='markers',
-            marker=dict(size=8, opacity=0),
+            marker=dict(size=8, opacity=0.05, color='rgba(100,100,100,0.05)',
+                       line=dict(width=0)),
             showlegend=False,
             hovertemplate='%{text}<extra></extra>',
             text=exon_hover_text,
@@ -1252,7 +1263,8 @@ def create_junction_exon_visualization(gene_data: dict,
             x=junction_hover_x,
             y=junction_hover_y,
             mode='markers',
-            marker=dict(size=10, opacity=0),
+            marker=dict(size=15, opacity=0, color='rgba(100,100,255,0)',
+                       line=dict(width=0, color='rgba(100,100,255,0)')),
             showlegend=False,
             hovertemplate='%{text}<extra></extra>',
             text=junction_hover_text,
@@ -1387,6 +1399,7 @@ def create_junction_exon_visualization(gene_data: dict,
             b=MAX_MARGIN+7
         ),
         hovermode='closest',
+        dragmode='select',
         plot_bgcolor='white',
         autosize=True,
         uirevision='constant'

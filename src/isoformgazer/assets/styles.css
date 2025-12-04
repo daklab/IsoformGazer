@@ -1602,8 +1602,18 @@ div[data-value="tab-3"]:hover {
     box-shadow: none !important;
 }
 .clear-filters-btn:hover:not(:disabled) {
-    background-color: #5a6268 !important;
+    background-color: #D49A2B !important;
+    border-color: #D49A2B !important;
     transform: translateY(-1px);
+}
+.clear-filters-btn:active:not(:disabled) {
+    background-color: #8f6214 !important;
+    border-color: #8f6214 !important;
+    transform: translateY(0);
+}
+.clear-filters-btn:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 3px rgba(237, 174, 73, 0.25) !important;
 }
 .clear-filters-btn:disabled {
     opacity: 0.5;
@@ -2038,6 +2048,11 @@ div[data-value="tab-3"]:hover {
 }
 
 #junction-color-picker .daq-colorpicker--light__chromepicker {
+    border-radius: 0% !important;
+    border: none !important;
+}
+
+#junction-individual-color-picker .daq-colorpicker--light__chromepicker {
     border-radius: 0% !important;
     border: none !important;
 }
@@ -2606,4 +2621,69 @@ div[data-value="tab-3"]:hover {
 .constellation, .transcript-star {
     pointer-events: none !important;
     z-index: 0 !important;
+}
+
+/* ######################################################################################
+   # Individual Junction Color Picker Popup Styling
+   ###################################################################################### */
+
+#junction-color-picker-popup {
+    position: fixed;
+    z-index: 10000;
+    background-color: #ffffff;
+    border: 2px solid #EDAE49;
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 8px 24px rgba(90, 42, 145, 0.4);
+    display: none;
+    width: 280px;
+}
+
+.junction-header-container {
+    margin-bottom: 10px;
+}
+
+.junction-color-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #622e9d;
+    font-family: "Inter", "Segoe UI", "SF Pro Display", "Roboto", "Helvetica Neue", sans-serif;
+    letter-spacing: -0.3px;
+    text-transform: uppercase;
+}
+
+.junction-color-bar {
+    width: 60px;
+    height: 2px;
+    background: linear-gradient(90deg, #EDAE49 0%, #f2c668 100%);
+    border-radius: 1px;
+    margin: 5px 0;
+}
+
+#junction-id-display {
+    font-size: 11px;
+    font-weight: 600;
+    color: #506784;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-family: "Inter", "Segoe UI", "SF Pro Display", "Roboto", "Helvetica Neue", sans-serif;
+    word-break: break-word;
+    margin-bottom: 4px;
+}
+
+.junction-color-picker-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 16px;
+}
+
+.junction-color-buttons-container {
+    display: flex;
+    gap: 8px;
+}
+
+.junction-color-btn {
+    flex: 1;
+    padding: 6px 12px;
+    font-size: 0.85rem;
 }

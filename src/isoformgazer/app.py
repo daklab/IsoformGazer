@@ -1418,8 +1418,8 @@ app.layout = html.Div(className='app-layout', children=[
                         html.Div(id='top-panel-body', className='top-panel', children=[
                             html.Div(className='graph-wrapper', children=[
                                 # ATSE/Junction Structure Plot
-                                html.Div(id='top-junction-structure-plot-container', className='atse-container', children=[
-                                    html.Div(className='loading-container plot-container-full-height', id='top-structure-plot-container-style', children=[
+                                html.Div(id='top-junction-structure-plot-container', className='atse-container', style={'position': 'relative'}, children=[
+                                    html.Div(className='loading-container plot-container-full-height', id='top-structure-plot-container-style', style={'position': 'relative'}, children=[
                                         dcc.Loading(
                                             id="loading-top-structure-plot",
                                             type="default",
@@ -1444,7 +1444,62 @@ app.layout = html.Div(className='app-layout', children=[
                                             ]
                                         ),
                                         html.Div(id="atse-map-loading-message", className="custom-loading-message")
-                                    ])
+                                    ]),
+                                    html.Div(
+                                        id='junction-color-picker-popup',
+                                        children=[
+                                            html.Div(
+                                                className='junction-header-container',
+                                                children=[
+                                                    html.Div(
+                                                        className='junction-color-title',
+                                                        children='Junction Color'
+                                                    ),
+                                                    html.Div(
+                                                        className='junction-color-bar'
+                                                    ),
+                                                    html.Div(
+                                                        id='junction-id-display',
+                                                        children=''
+                                                    )
+                                                ]
+                                            ),
+                                            html.Div(
+                                                style={
+                                                    'marginBottom': '12px'
+                                                }
+                                            ),
+                                            html.Div(
+                                                className='junction-color-picker-container',
+                                                children=[
+                                                    daq.ColorPicker(
+                                                        id='junction-individual-color-picker',
+                                                        value={'hex': '#85929E'},
+                                                        size=160,
+                                                        theme=None,
+                                                        className='color-picker'
+                                                    )
+                                                ]
+                                            ),
+                                            html.Div(
+                                                className='junction-color-buttons-container',
+                                                children=[
+                                                    dbc.Button(
+                                                        "Apply",
+                                                        id='junction-color-apply-btn',
+                                                        className='clear-filters-btn junction-color-btn'
+                                                    ),
+                                                    dbc.Button(
+                                                        "Reset",
+                                                        id='junction-color-reset-btn',
+                                                        className='clear-filters-btn junction-color-btn'
+                                                    )
+                                                ]
+                                            )
+                                        ]
+                                    ),
+                                    # Store for currently selected junction
+                                    dcc.Store(id='selected-junction-info', data={})
                                 ]),
                                 # Transcript Structure Plot (hidden by default)
                                 html.Div(id='top-transcript-structure-plot-container', className='barplot-container hidden', children=[
@@ -1664,6 +1719,7 @@ app.layout.children.extend([
     dcc.Store(id='initial-loading-complete', data=False),
     dcc.Store(id='exon-color-store', data='#2E86C1'),
     dcc.Store(id='junction-color-store', data='#85929E'),
+    dcc.Store(id='individual-junction-colors', data={}),
     dcc.Store(id='loading-progress-store', data=0),
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
@@ -1705,6 +1761,162 @@ def update_junction_color_store(color_value):
     if color_value and 'hex' in color_value:
         return color_value['hex']
     return '#85929E'
+
+
+#######################################################################
+# INDIVIDUAL JUNCTION COLOR PICKER CALLBACKS
+#######################################################################
+@app.callback(
+    [dash.dependencies.Output('selected-junction-info', 'data'),
+     dash.dependencies.Output('junction-individual-color-picker', 'value'),
+     dash.dependencies.Output('junction-color-picker-popup', 'style')],
+    [dash.dependencies.Input('atse-map', 'clickData')],
+    [dash.dependencies.State('individual-junction-colors', 'data'),
+     dash.dependencies.State('junction-color-store', 'data')],
+    prevent_initial_call=True
+)
+def handle_junction_click(clickData, individual_colors, global_junction_color):
+    """
+    Handle junction clicks to open the color picker popup.
+    Extract junction ID from the hover text.
+    """
+    if not clickData or 'points' not in clickData or len(clickData['points']) == 0:
+        raise PreventUpdate
+
+    point = clickData['points'][0]
+
+    # Extract junction ID from the hover text
+    text = point.get('text', '')
+    if 'Junction ID:' not in text:
+        raise PreventUpdate
+
+    junction_id = None
+    parts = text.split('<br>')
+    for part in parts:
+        if 'Junction ID:' in part:
+            junction_id = part.replace('Junction ID:', '').strip()
+            break
+
+    if not junction_id:
+        raise PreventUpdate
+
+    # Get junction coordinates from point
+    x = point.get('x')
+    y = point.get('y')
+
+    if x is None or y is None:
+        raise PreventUpdate
+
+    if individual_colors: 
+        current_color_hex = individual_colors.get(junction_id, global_junction_color)
+    else: 
+        current_color_hex = global_junction_color
+
+    current_color = {'hex': current_color_hex}
+
+    selected_junction = {
+        'id': junction_id,
+        'x': x,
+        'y': y
+    }
+
+    # need bounding box of clicked junction point to position the popup
+    bbox = point.get('bbox', {})
+    x_pos = bbox.get('x1', 0) + 10 
+    y_pos = bbox.get('y0', 0)
+
+    popup_style = {
+        'position': 'fixed',
+        'zIndex': 10000,
+        'backgroundColor': '#ffffff',
+        'border': '2px solid #EDAE49',
+        'borderRadius': '10px',
+        'padding': '16px',
+        'boxShadow': '0 8px 24px rgba(90, 42, 145, 0.4)',
+        'display': 'block',
+        'width': '280px',
+        'left': f"{x_pos}px",
+        'top': f"{y_pos}px"
+    }
+
+    return selected_junction, current_color, popup_style
+
+
+@app.callback(
+    dash.dependencies.Output('junction-id-display', 'children'),
+    [dash.dependencies.Input('selected-junction-info', 'data')],
+    prevent_initial_call=True
+)
+def update_junction_id_display(selected_junction):
+    """
+    Update the junction ID display in the popup.
+    """
+    if not selected_junction or 'id' not in selected_junction:
+        return ''
+
+    junction_id = selected_junction['id']
+    return junction_id
+
+
+@app.callback(
+    [dash.dependencies.Output('individual-junction-colors', 'data'),
+     dash.dependencies.Output('junction-color-picker-popup', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('junction-color-apply-btn', 'n_clicks'),
+     dash.dependencies.Input('junction-color-reset-btn', 'n_clicks'),
+     dash.dependencies.Input('junction-color-store', 'data')],
+    [dash.dependencies.State('selected-junction-info', 'data'),
+     dash.dependencies.State('junction-individual-color-picker', 'value'),
+     dash.dependencies.State('individual-junction-colors', 'data')],
+    prevent_initial_call=True
+)
+def manage_individual_junction_colors(apply_clicks, reset_clicks, global_color,
+                                      selected_junction, color_value, individual_colors):
+    """
+    Manage individual junction colors: apply custom colors, reset to global,
+    or clear all when global color changes.
+    """
+    individual_colors = individual_colors or {}
+    triggered_id = callback_context.triggered_id if callback_context.triggered else None
+    hidden_style = {
+        'position': 'fixed',
+        'zIndex': 10000,
+        'backgroundColor': '#ffffff',
+        'border': '2px solid #EDAE49',
+        'borderRadius': '10px',
+        'padding': '16px',
+        'boxShadow': '0 8px 24px rgba(90, 42, 145, 0.4)',
+        'display': 'none',
+        'width': '280px'
+    }
+
+    if triggered_id == 'junction-color-apply-btn':
+        if selected_junction and 'id' in selected_junction:
+            if color_value and 'hex' in color_value:
+                individual_colors[selected_junction['id']] = color_value['hex']
+            return individual_colors, hidden_style
+
+    elif triggered_id == 'junction-color-reset-btn':
+        if selected_junction and 'id' in selected_junction:
+            individual_colors.pop(selected_junction['id'], None)
+            return individual_colors, hidden_style
+
+    elif triggered_id == 'junction-color-store':
+        return {}, hidden_style
+
+    raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('atse-map', 'clickData'),
+    [dash.dependencies.Input('junction-color-apply-btn', 'n_clicks'),
+     dash.dependencies.Input('junction-color-reset-btn', 'n_clicks')],
+    prevent_initial_call=True
+)
+def reset_click_data(apply_clicks, reset_clicks):
+    """
+    Reset clickData after color operations to allow re-clicking the same junction.
+    """
+    return None
 
 
 #######################################################################
@@ -2767,12 +2979,14 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
      dash.dependencies.Input('structure-plot-colorscale-dropdown', 'value'),
      dash.dependencies.Input('abundance-color-type-radio', 'value'),
      dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
-     dash.dependencies.Input('organ-abundance-dropdown', 'value')]
+     dash.dependencies.Input('organ-abundance-dropdown', 'value'),
+     dash.dependencies.Input('individual-junction-colors', 'data')]
 )
 def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids,
                               plot_height, exon_color, junction_color, isoform_filter_query,
                               validation_data, color_junctions_by_psi, color_by_abundance,
-                              structure_colorscale, abundance_type, tissue_name, organ_name):
+                              structure_colorscale, abundance_type, tissue_name, organ_name,
+                              individual_junction_colors):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -2813,7 +3027,8 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             colorscale=structure_colorscale,
             abundance_type=abundance_type,
             tissue_name=tissue_name,
-            organ_name=organ_name
+            organ_name=organ_name,
+            individual_junction_colors=individual_junction_colors
         )
 
         # Create config with gene name in filename
