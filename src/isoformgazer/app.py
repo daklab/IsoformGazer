@@ -66,7 +66,7 @@ def check_database_status():
 
 def setup_local_database(data_dir=None, force_rebuild=False):
     """
-    Sets up SQLite database from data files.
+    Sets up SQLite database from data files for both human and mouse data.
 
     Args:
         data_dir: Optional path to data directory. Defaults to src/isoformgazer/data
@@ -77,33 +77,69 @@ def setup_local_database(data_dir=None, force_rebuild=False):
         data_dir = os.path.join(base_dir, "data")
 
     os.makedirs(data_dir, exist_ok=True)
-    
+
     db_path = os.path.join(data_dir, "isoformgazer.db")
     if Path(db_path).exists() and not force_rebuild:
         return db_path
-    
+
     print()
     print(f"Creating new database at {db_path}.")
     print()
 
     if Path(db_path).exists():
         os.remove(db_path)
-    
+
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL") 
-    conn.execute("PRAGMA cache_size = 50000") 
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA cache_size = 50000")
     conn.execute("PRAGMA temp_store = MEMORY")
+
+    human_data_dir = os.path.join(data_dir, "human")
+    load_species_data(conn, human_data_dir, table_prefix="", species_name="Human")
+
+    mouse_data_dir = os.path.join(data_dir, "mouse")
+    load_species_data(conn, mouse_data_dir, table_prefix="mouse_", species_name="Mouse")
+
+    conn.commit()
+    conn.close()
+
+    print("Database setup complete!")
+    print()
+
+    return db_path
+
+
+def load_species_data(conn, species_data_dir, table_prefix="", species_name="Human"):
+    """
+    Load data files for a specific species into the database.
+
+    Args:
+        conn: SQLite connection object
+        species_data_dir: Path to species-specific data directory
+        table_prefix: Prefix to add to table names (e.g., "mouse_" for mouse tables)
+        species_name: Name of species for logging purposes
+    """
+    print(f"\n{'='*80}")
+    print(f"Loading {species_name} data from {species_data_dir}")
+    print(f"{'='*80}\n")
 
     ########################################################
     # Load isoform master table data
     ########################################################
-    isoform_file = os.path.join(data_dir, "mt_isoform_gazers_250828.tsv")
-    
-    with tqdm(desc="Loading isoform master table data", unit=" rows") as pbar:
+    # Determine the correct isoform file based on species
+    if species_name == "Human":
+        isoform_file = os.path.join(species_data_dir, "mt_isoform_gazers_250828.tsv")
+    elif species_name == "Mouse":
+        isoform_file = os.path.join(species_data_dir, "mt_isoform_gazers_mouse_250929.tsv")
+
+    with tqdm(desc=f"Loading {species_name} isoform master table data", unit=" rows") as pbar:
         df_isoform = pd.read_csv(isoform_file, sep='\t')
         df_isoform['id'] = df_isoform.index # IMPORTANT: we need this to match PSL file 1-based indexing!
         df_isoform['gene_id'] = df_isoform['gene'].str.split('.').str[0]
+
+        if 'gene_name' in df_isoform.columns:
+            df_isoform['gene_name'] = df_isoform['gene_name'].astype(str).str.upper()
 
         columns_to_drop = ['gene_total_tpm', 'gene_gencode_v46_basic_transcript_counts']
         existing_columns_to_drop = [col for col in columns_to_drop if col in df_isoform.columns]
@@ -111,19 +147,24 @@ def setup_local_database(data_dir=None, force_rebuild=False):
             df_isoform = df_isoform.drop(columns=existing_columns_to_drop)
 
         pbar.update(len(df_isoform))
-    
-    with tqdm(desc="Writing isoform master table data to local database", unit="rows", total=len(df_isoform)) as pbar:
-        df_isoform.to_sql('isoforms', conn, if_exists='replace', index=False)
+
+    isoforms_table = f"{table_prefix}isoforms"
+    with tqdm(desc=f"Writing {species_name} isoform master table data to local database", unit="rows", total=len(df_isoform)) as pbar:
+        df_isoform.to_sql(isoforms_table, conn, if_exists='replace', index=False)
         pbar.update(len(df_isoform))
-    
-    print(f"✓ Processed all {len(df_isoform):,} rows from isoform master table!")
+
+    print(f" Processed all {len(df_isoform):,} rows from {species_name} isoform master table!")
     print()
 
     ########################################################
     # Load isoform PSL data
     ########################################################
-    print("Processing PSL data...")
-    psl_file = os.path.join(data_dir, "all_samples_sp_collapse_all_chr_no_treatment_hashid_isoform_full.psl")
+    print(f"Processing {species_name} PSL data...")
+    if species_name == "Human":
+        psl_file = os.path.join(species_data_dir, "all_samples_sp_collapse_all_chr_no_treatment_hashid_isoform_full.psl")
+    elif species_name == "Mouse":  
+        psl_file = os.path.join(species_data_dir, "all_samples_sp_collapse_all_chr_full.psl")
+
     psl_columns = [
         'matches', 'misMatches', 'repMatches', 'nCount', 'qNumInsert', 'qBaseInsert',
         'tNumInsert', 'tBaseInsert', 'strand', 'qName', 'qSize', 'qStart', 'qEnd',
@@ -131,11 +172,12 @@ def setup_local_database(data_dir=None, force_rebuild=False):
     ]
 
     # Get total PSL rows for progress tracking
-    total_psl_rows = sum(1 for _ in open(psl_file, 'r')) 
+    total_psl_rows = sum(1 for _ in open(psl_file, 'r'))
     chunk_size = 100000
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS psl_data (
+    psl_table = f"{table_prefix}psl_data"
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {psl_table} (
             id INTEGER PRIMARY KEY,
             matches INTEGER,
             misMatches INTEGER,
@@ -158,7 +200,7 @@ def setup_local_database(data_dir=None, force_rebuild=False):
             blockSizes TEXT,
             qStarts TEXT,
             tStarts TEXT,
-            gene_id TEXT,       
+            gene_id TEXT,
             trans_id TEXT,
             transcript_length INTEGER
         )
@@ -190,51 +232,87 @@ def setup_local_database(data_dir=None, force_rebuild=False):
             
             if 'index' in chunk.columns:
                 chunk.drop(columns=['index'], inplace=True)
-                
-            chunk.to_sql('psl_data', conn, if_exists='append', index=False)
+
+            chunk.to_sql(psl_table, conn, if_exists='append', index=False)
             pbar.update(len(chunk))
 
-    print("Processing isoform TPM data...")
-    tpm_file = os.path.join(data_dir, "all_tpm_250828.tsv")
+    print(f"Processing {species_name} isoform TPM data...")
+    if species_name == "Human":
+        tpm_file = os.path.join(species_data_dir, "all_tpm_250828.tsv")
+    elif species_name == "Mouse": 
+        tpm_file = os.path.join(species_data_dir, "all_tpm_mouse.tsv")
+
     tpm_df = pd.read_csv(tpm_file, sep='\t')
     tpm_df['id'] = tpm_df.index
-    tpm_df.to_sql('tpm_data', conn, if_exists='replace')
 
-    print("Processing isoform ratio data...")
-    ratio_file = os.path.join(data_dir, "all_quant_ratio_250828.tsv")
+    if 'gene_name' in tpm_df.columns:
+        tpm_df['gene_name'] = tpm_df['gene_name'].astype(str).str.upper()
+    if 'gene' in tpm_df.columns:
+        tpm_df['gene'] = tpm_df['gene'].astype(str).str.upper()
+
+    tpm_table = f"{table_prefix}tpm_data"
+    tpm_df.to_sql(tpm_table, conn, if_exists='replace')
+
+    print(f"Processing {species_name} isoform ratio data...")
+    if species_name == "Human":
+        ratio_file = os.path.join(species_data_dir, "all_quant_ratio_250828.tsv")
+    elif species_name == "Mouse":
+        ratio_file = os.path.join(species_data_dir, "all_quant_ratio_mouse.tsv")
+
     ratio_df = pd.read_csv(ratio_file, sep='\t')
     ratio_df['id'] = ratio_df.index
-    ratio_df.to_sql('ratio_data', conn, if_exists='replace')
 
-    print("Processing isoform log TPM data...")
-    log_tpm_file = os.path.join(data_dir, "all_tpm_log10_250828.tsv")
+    if 'gene_name' in ratio_df.columns:
+        ratio_df['gene_name'] = ratio_df['gene_name'].astype(str).str.upper()
+    if 'gene' in ratio_df.columns:
+        ratio_df['gene'] = ratio_df['gene'].astype(str).str.upper()
+
+    ratio_table = f"{table_prefix}ratio_data"
+    ratio_df.to_sql(ratio_table, conn, if_exists='replace')
+
+    print(f"Processing {species_name} isoform log TPM data...")
+    if species_name == "Human":
+        log_tpm_file = os.path.join(species_data_dir, "all_tpm_log10_250828.tsv")
+    elif species_name == "Mouse":
+        log_tpm_file = os.path.join(species_data_dir, "all_tpm_log10_mouse.tsv")
+
     log_tpm_df = pd.read_csv(log_tpm_file, sep='\t')
     log_tpm_df['id'] = log_tpm_df.index
-    log_tpm_df.to_sql('log_tpm_data', conn, if_exists='replace')
+    
+    if 'gene_name' in log_tpm_df.columns:
+        log_tpm_df['gene_name'] = log_tpm_df['gene_name'].astype(str).str.upper()
+    if 'gene' in log_tpm_df.columns:
+        log_tpm_df['gene'] = log_tpm_df['gene'].astype(str).str.upper()
 
-    print("Updating isoform transcript names with full names from PSL data...")
-    conn.execute("""
-        UPDATE isoforms 
+    log_tpm_table = f"{table_prefix}log_tpm_data"
+    log_tpm_df.to_sql(log_tpm_table, conn, if_exists='replace')
+
+    print(f"Updating {species_name} isoform transcript names with full names from PSL data...")
+    conn.execute(f"""
+        UPDATE {isoforms_table}
         SET transcript = (
-            SELECT psl.trans_id 
-            FROM psl_data psl 
-            WHERE psl.id = isoforms.id
+            SELECT psl.trans_id
+            FROM {psl_table} psl
+            WHERE psl.id = {isoforms_table}.id
         )
         WHERE EXISTS (
-            SELECT 1 FROM psl_data psl WHERE psl.id = isoforms.id
+            SELECT 1 FROM {psl_table} psl WHERE psl.id = {isoforms_table}.id
         )
     """)
     conn.commit()
 
-    print("Creating isoform indexes...")
-    conn.execute("CREATE INDEX idx_psl_gene ON psl_data(id)")
-    conn.execute("CREATE INDEX idx_iso_gene ON isoforms(gene_name, id)")
+    print(f"Creating {species_name} isoform indexes...")
+    conn.execute(f"CREATE INDEX {table_prefix}idx_psl_gene ON {psl_table}(id)")
+    conn.execute(f"CREATE INDEX {table_prefix}idx_iso_gene ON {isoforms_table}(gene_name, id)")
     conn.commit()
 
     ########################################################
     # Load junction master table data
     ########################################################
-    junction_file = os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250623_171456_withmappings.csv")
+    if species_name == "Human":
+        junction_file = os.path.join(species_data_dir, "pseudobulk_final_broad_cell_type_20250623_171456_withmappings.csv")
+    if species_name == "Mouse":
+        junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_20251119_144144_withmappings.csv")
     
     # Need to count total lines (minus header) to estimate progress
     with open(junction_file, 'r') as f:
@@ -242,8 +320,8 @@ def setup_local_database(data_dir=None, force_rebuild=False):
     
     chunk_size = 100000
     estimated_chunks = (total_lines // chunk_size) + 1
-    
-    print(f"Loading {total_lines:,} rows of junction data in groupings of {chunk_size:,} rows...")
+
+    print(f"Loading {total_lines:,} rows of {species_name} junction data in groupings of {chunk_size:,} rows...")
     first_chunk = True
     row_count = 0
 
@@ -261,48 +339,56 @@ def setup_local_database(data_dir=None, force_rebuild=False):
         'junction_average_psi',
         'matched_transcript_ids'
     ]
-    
-    with tqdm(desc="Writing junction master table data to local database", 
-              unit="chunk", 
+
+    junctions_table = f"{table_prefix}junctions"
+    with tqdm(desc=f"Writing {species_name} junction master table data to local database",
+              unit="chunk",
               total=estimated_chunks) as chunk_pbar:
-            
-        for i, chunk in enumerate(pd.read_csv(junction_file, 
+
+        for i, chunk in enumerate(pd.read_csv(junction_file,
                                               chunksize=chunk_size,
                                               low_memory=False)):
+            if 'gene_symbol' in chunk.columns:
+                chunk['gene_symbol'] = chunk['gene_symbol'].astype(str).str.upper()
+
             available_columns = [col for col in column_order if col in chunk.columns]
             remaining_columns = [col for col in chunk.columns if col not in column_order]
-            
+
             final_column_order = available_columns + remaining_columns
             chunk = chunk[final_column_order]
 
             if first_chunk:
-                chunk.to_sql('junctions', conn, if_exists='replace', index=False)
+                chunk.to_sql(junctions_table, conn, if_exists='replace', index=False)
                 first_chunk = False
             else:
-                chunk.to_sql('junctions', conn, if_exists='append', index=False)
-            
+                chunk.to_sql(junctions_table, conn, if_exists='append', index=False)
+
             row_count += len(chunk)
             chunk_pbar.update(1)
-            
+
             chunk_pbar.set_postfix({
                 'rows': f"{row_count:,}",
                 'chunk': f"{i+1}/{estimated_chunks}"
             })
-    
-    print(f"✓ Processed all {row_count:,} rows from junction master table!")
+
+    print(f" Processed all {row_count:,} rows from {species_name} junction master table!")
     # rename 'gene_symbol' to 'gene_name' for more consistency in junctions table (match isoforms table)
-    conn.execute("ALTER TABLE junctions RENAME COLUMN gene_symbol TO gene_name")
+    conn.execute(f"ALTER TABLE {junctions_table} RENAME COLUMN gene_symbol TO gene_name")
     print()
 
     ########################################################
     # Load ATSE data into database
     ########################################################
-    atse_file = os.path.join(data_dir, "TMS_atse_file_unanno_also_2025-05-11_06-23-05.tsv")
+    if species_name == "Human":
+        atse_file = os.path.join(species_data_dir, "TMS_atse_file_unanno_also_2025-05-11_06-23-05.tsv")
+    elif species_name == "Mouse":
+        atse_file = os.path.join(species_data_dir, "MOUSE_FOUNDATION_ATSE_FILE_unanno_also_2025-10-01_21-36-40.tsv")
     
     if os.path.exists(atse_file):
-        print("Processing ATSE data...")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS atse_data (
+        print(f"Processing {species_name} ATSE data...")
+        atse_table = f"{table_prefix}atse_data"
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {atse_table} (
                 event_id TEXT,
                 gene_id TEXT,
                 gene_name TEXT,
@@ -357,7 +443,10 @@ def setup_local_database(data_dir=None, force_rebuild=False):
                     'strand': 'event_strand',
                     'strand.1': 'junction_strand'
                 })
-                
+
+                if 'gene_name' in chunk.columns:
+                    chunk['gene_name'] = chunk['gene_name'].astype(str).str.upper()
+
                 required_columns = [
                     'event_id', 'gene_id', 'gene_name', 'gene_types', 'num_junctions',
                     'event_type', 'chromosome', 'event_strand', 'atse_start', 'atse_end',
@@ -376,171 +465,195 @@ def setup_local_database(data_dir=None, force_rebuild=False):
                 for col in required_columns:
                     if col not in chunk.columns:
                         chunk[col] = np.nan
-                
-                chunk[required_columns].to_sql('atse_data', conn, if_exists='append', index=False)
+
+                chunk[required_columns].to_sql(atse_table, conn, if_exists='append', index=False)
                 pbar.update(len(chunk))
 
-        
-        print(f"✓ Processed {total_lines:,} ATSE records!")
 
-        ###############################################################
-        # Load Gencode GTF data for transcript hash ID cross-checking
-        ###############################################################
-        print("Processing Gencode GTF file...")
-        gencode_gtf_file = os.path.join(data_dir, "gencode.v46.basic.annotation.gtf")
+        print(f" Processed {total_lines:,} {species_name} ATSE records!")
 
-        if os.path.exists(gencode_gtf_file):
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS gencode_gtf (
-                    id INTEGER PRIMARY KEY,
-                    gene_id TEXT,
-                    transcript_id TEXT,
-                    gene_name TEXT,
-                    transcript_type TEXT,
-                    exon_number INTEGER,
-                    exon_id TEXT,
-                    chromosome TEXT,
-                    strand TEXT,
-                    exon_start INTEGER,
-                    exon_end INTEGER,
-                    transcript_start INTEGER,
-                    transcript_end INTEGER
-                )
-            """)
+    ###############################################################
+    # Load Gencode GTF data for transcript hash ID cross-checking
+    ###############################################################
+    if species_name == "Human":
+        gencode_gtf_file = os.path.join(species_data_dir, "gencode.v46.basic.annotation.gtf")
+    elif species_name == "Mouse":
+        gencode_gtf_file = os.path.join(species_data_dir, "gencode.vM25.annotation.gtf")
 
-            gencode_records = []
-            with open(gencode_gtf_file, 'r') as f:
-                total_gtf_lines = sum(1 for _ in f)
+    print(f"Processing {species_name} Gencode GTF file...")
+    gencode_table = f"{table_prefix}gencode_gtf"
+    if os.path.exists(gencode_gtf_file):
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {gencode_table} (
+            id INTEGER PRIMARY KEY,
+            gene_id TEXT,
+            transcript_id TEXT,
+            gene_name TEXT,
+            transcript_type TEXT,
+            exon_number INTEGER,
+            exon_id TEXT,
+            chromosome TEXT,
+            strand TEXT,
+            exon_start INTEGER,
+            exon_end INTEGER,
+            transcript_start INTEGER,
+            transcript_end INTEGER
+        )
+    """)
 
-            with tqdm(total=total_gtf_lines, desc="Loading Gencode GTF data", unit="lines") as pbar:
-                with open(gencode_gtf_file, 'r') as f:
-                    for line in f:
-                        pbar.update(1)
-                        if line.startswith('#') or not line.strip():
-                            continue
+    gencode_records = []
+    with open(gencode_gtf_file, 'r') as f:
+        total_gtf_lines = sum(1 for _ in f)
 
-                        fields = line.strip().split('\t')
-                        if len(fields) < 9:
-                            continue
+    with tqdm(total=total_gtf_lines, desc="Loading Gencode GTF data", unit="lines") as pbar:
+        with open(gencode_gtf_file, 'r') as f:
+            for line in f:
+                pbar.update(1)
+                if line.startswith('#') or not line.strip():
+                    continue
 
-                        feature_type = fields[2]
-                        if feature_type not in ['transcript', 'exon']:
-                            continue
+                fields = line.strip().split('\t')
+                if len(fields) < 9:
+                    continue
 
-                        chromosome = fields[0]
-                        strand = fields[6]
-                        start = int(fields[3])
-                        end = int(fields[4])
-                        attributes = fields[8]
-                        gene_id = None
-                        transcript_id = None
-                        gene_name = None
-                        transcript_type = None
-                        exon_number = None
-                        exon_id = None
+                feature_type = fields[2]
+                if feature_type not in ['transcript', 'exon']:
+                    continue
 
-                        for attr in attributes.split(';'):
-                            attr = attr.strip()
-                            if not attr:
-                                continue
-                            try:
-                                if attr.startswith('gene_id'):
-                                    gene_id = extract_gtf_attr_val(attr)
-                                elif attr.startswith('transcript_id'):
-                                    transcript_id = extract_gtf_attr_val(attr)
-                                elif attr.startswith('gene_name'):
-                                    gene_name = extract_gtf_attr_val(attr)
-                                elif attr.startswith('transcript_type'):
-                                    transcript_type = extract_gtf_attr_val(attr)
-                                elif attr.startswith('exon_number'):
-                                    value = extract_gtf_attr_val(attr)
-                                    if value:
-                                        exon_number = int(value)
-                                elif attr.startswith('exon_id'):
-                                    exon_id = extract_gtf_attr_val(attr)
-                            except (ValueError, IndexError):
-                                continue
+                chromosome = fields[0]
+                strand = fields[6]
+                start = int(fields[3])
+                end = int(fields[4])
+                attributes = fields[8]
+                gene_id = None
+                transcript_id = None
+                gene_name = None
+                transcript_type = None
+                exon_number = None
+                exon_id = None
 
-                        if gene_id and transcript_id:
-                            if feature_type == 'transcript':
-                                record = {
-                                    'gene_id': gene_id,
-                                    'transcript_id': transcript_id,
-                                    'gene_name': gene_name,
-                                    'transcript_type': transcript_type,
-                                    'exon_number': None,
-                                    'exon_id': None,
-                                    'chromosome': chromosome,
-                                    'strand': strand,
-                                    'exon_start': start,
-                                    'exon_end': end,
-                                    'transcript_start': start,
-                                    'transcript_end': end
-                                }
-                            else:  
-                                record = {
-                                    'gene_id': gene_id,
-                                    'transcript_id': transcript_id,
-                                    'gene_name': gene_name,
-                                    'transcript_type': transcript_type,
-                                    'exon_number': exon_number,
-                                    'exon_id': exon_id,
-                                    'chromosome': chromosome,
-                                    'strand': strand,
-                                    'exon_start': start,
-                                    'exon_end': end,
-                                    'transcript_start': None,
-                                    'transcript_end': None
-                                }
+                for attr in attributes.split(';'):
+                    attr = attr.strip()
+                    if not attr:
+                        continue
+                    try:
+                        if attr.startswith('gene_id'):
+                            gene_id = extract_gtf_attr_val(attr)
+                        elif attr.startswith('transcript_id'):
+                            transcript_id = extract_gtf_attr_val(attr)
+                        elif attr.startswith('gene_name'):
+                            gene_name = extract_gtf_attr_val(attr)
+                        elif attr.startswith('transcript_type'):
+                            transcript_type = extract_gtf_attr_val(attr)
+                        elif attr.startswith('exon_number'):
+                            value = extract_gtf_attr_val(attr)
+                            if value:
+                                exon_number = int(value)
+                        elif attr.startswith('exon_id'):
+                            exon_id = extract_gtf_attr_val(attr)
+                    except (ValueError, IndexError):
+                        continue
 
-                            gencode_records.append(record)
+                if gene_id and transcript_id:
+                    if feature_type == 'transcript':
+                        record = {
+                            'gene_id': gene_id,
+                            'transcript_id': transcript_id,
+                            'gene_name': gene_name,
+                            'transcript_type': transcript_type,
+                            'exon_number': None,
+                            'exon_id': None,
+                            'chromosome': chromosome,
+                            'strand': strand,
+                            'exon_start': start,
+                            'exon_end': end,
+                            'transcript_start': start,
+                            'transcript_end': end
+                        }
+                    else:
+                        record = {
+                            'gene_id': gene_id,
+                            'transcript_id': transcript_id,
+                            'gene_name': gene_name,
+                            'transcript_type': transcript_type,
+                            'exon_number': exon_number,
+                            'exon_id': exon_id,
+                            'chromosome': chromosome,
+                            'strand': strand,
+                            'exon_start': start,
+                            'exon_end': end,
+                            'transcript_start': None,
+                            'transcript_end': None
+                        }
 
-            if gencode_records:
-                gencode_df = pd.DataFrame(gencode_records)
-                gencode_df.to_sql('gencode_gtf', conn, if_exists='replace', index=False)
-                print(f"✓ Processed {len(gencode_records):,} Gencode GTF records!")
-        else:
-            print(f"Warning: Gencode GTF file not found at {gencode_gtf_file}")
+                    gencode_records.append(record)
 
-        print("Creating optimized database indices...")
-        indices = [
-            ("idx_junctions_gene", "junctions", "(gene_name, gene_id)"),
-            ("idx_junctions_gene_name", "junctions", "(gene_name)"),
-            ("idx_isoforms_gene", "isoforms", "(gene_name, gene_id)"),
-            ("idx_isoforms_gene_name", "isoforms", "(gene_name)"),
-            ("idx_isoforms_id", "isoforms", "(id)"),
-            ("idx_psl_gene", "psl_data", "(gene_id, id)"),
-            ("idx_psl_id", "psl_data", "(id)"),
-            ("idx_junctions_junction_id", "junctions", "(junction_id)"),
-            ("idx_junctions_psi", "junctions", "(gene_name, psi)"),
-            ("idx_junctions_cell_type", "junctions", "(cell_type)"),
-            ("idx_tpm_id", "tpm_data", "(id)"),
-            ("idx_ratio_id", "ratio_data", "(id)")
-        ]
+        if gencode_records:
+            gencode_df = pd.DataFrame(gencode_records)
 
-        with tqdm(desc="Creating indices", total=len(indices) + 4, unit="index") as idx_pbar:
-            for idx_name, table_name, columns in indices:
-                conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name}{columns}")
-                idx_pbar.update(1)
+            if 'gene_name' in gencode_df.columns:
+                gencode_df['gene_name'] = gencode_df['gene_name'].astype(str).str.upper()
 
-            conn.execute("ALTER TABLE atse_data ADD COLUMN gene_id_clean TEXT")
-            conn.execute("UPDATE atse_data SET gene_id_clean = SUBSTR(gene_id, 1, INSTR(gene_id, '.') - 1) WHERE gene_id LIKE '%.%'")
-            conn.execute("UPDATE atse_data SET gene_id_clean = gene_id WHERE gene_id_clean IS NULL")
+            gencode_df.to_sql(gencode_table, conn, if_exists='replace', index=False)
+            print(f" Processed {len(gencode_records):,} {species_name} Gencode GTF records!")
+
+    print(f"Creating optimized {species_name} database indices...")
+    indices = [
+        (f"{table_prefix}idx_junctions_gene", junctions_table, "(gene_name, gene_id)"),
+        (f"{table_prefix}idx_junctions_gene_name", junctions_table, "(gene_name)"),
+        (f"{table_prefix}idx_isoforms_gene", isoforms_table, "(gene_name, gene_id)"),
+        (f"{table_prefix}idx_isoforms_gene_name", isoforms_table, "(gene_name)"),
+        (f"{table_prefix}idx_isoforms_id", isoforms_table, "(id)"),
+        (f"{table_prefix}idx_psl_gene", psl_table, "(gene_id, id)"),
+        (f"{table_prefix}idx_psl_id", psl_table, "(id)"),
+        (f"{table_prefix}idx_junctions_junction_id", junctions_table, "(junction_id)"),
+        (f"{table_prefix}idx_junctions_psi", junctions_table, "(gene_name, psi)"),
+        (f"{table_prefix}idx_junctions_cell_type", junctions_table, "(cell_type)"),
+        (f"{table_prefix}idx_tpm_id", tpm_table, "(id)"),
+        (f"{table_prefix}idx_ratio_id", ratio_table, "(id)")
+    ]
+
+    # Add gencode index only for human
+    extra_indices = 4 if species_name == "Human" else 3
+
+    with tqdm(desc=f"Creating {species_name} indices", total=len(indices) + extra_indices, unit="index") as idx_pbar:
+        for idx_name, table_name, columns in indices:
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name}{columns}")
             idx_pbar.update(1)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_gene ON atse_data(gene_id_clean, gene_name)")
-            idx_pbar.update(1)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_coords ON atse_data(chromosome, start, end)")
-            idx_pbar.update(1)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_gencode_transcript ON gencode_gtf(gene_id, transcript_id)")
+
+        conn.execute(f"ALTER TABLE {atse_table} ADD COLUMN gene_id_clean TEXT")
+        conn.execute(f"UPDATE {atse_table} SET gene_id_clean = SUBSTR(gene_id, 1, INSTR(gene_id, '.') - 1) WHERE gene_id LIKE '%.%'")
+        conn.execute(f"UPDATE {atse_table} SET gene_id_clean = gene_id WHERE gene_id_clean IS NULL")
+        idx_pbar.update(1)
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_gene ON {atse_table}(gene_id_clean, gene_name)")
+        idx_pbar.update(1)
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_coords ON {atse_table}(chromosome, start, end)")
+        idx_pbar.update(1)
+        if species_name == "Human":
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_gencode_transcript ON {gencode_table}(gene_id, transcript_id)")
             idx_pbar.update(1)
 
     conn.commit()
-    conn.close()
-    
-    print("✓ Database setup complete!")
-    print() 
+    print(f" {species_name} data loading complete!")
+    print()
 
-    return db_path
+
+def verify_database_schema(db_path):
+    """Verify database schema has required columns"""
+    conn = sqlite3.connect(db_path)
+    
+    iso_schema = pd.read_sql("PRAGMA table_info(isoforms)", conn)
+    print("Isoforms table columns:", iso_schema['name'].tolist())
+    
+    psl_schema = pd.read_sql("PRAGMA table_info(psl_data)", conn)
+    print("PSL data table columns:", psl_schema['name'].tolist())
+    
+    if 'id' not in iso_schema['name'].values:
+        print("ERROR: Missing 'id' column in isoforms table")
+    if 'id' not in psl_schema['name'].values:
+        print("ERROR: Missing 'id' column in psl_data table")
+    
+    conn.close()
 
 
 def verify_database_schema(db_path):
