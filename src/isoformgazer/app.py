@@ -11,15 +11,23 @@ import matplotlib
 matplotlib.use('Agg')
 from pathlib import Path
 import dash
-from dash import html, dcc, dash_table
+from dash import html, dcc, dash_table, callback_context
 import dash_bootstrap_components as dbc
 import dash_daq as daq
 import plotly.graph_objs as go
+import plotly.io as pio
+import kaleido
 from dash.exceptions import PreventUpdate
 from colorama import Fore, Style, init
+import traceback
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
-from src.isoformgazer.data_utils import get_master_table_columns, parse_filter_query, query_master_table, get_gene_options, create_custom_spinner, validate_filter_input
+from src.isoformgazer.data_utils import (
+    get_master_table_columns, parse_filter_query, query_master_table, get_gene_options,
+    get_all_gene_options, create_custom_spinner, validate_filter_input,
+    is_cache_valid, load_default_gene_cache, save_default_gene_cache,
+    generate_default_gene_cache, get_default_gene_cache_path, extract_gtf_attr_val
+)
 from src.isoformgazer.junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
     load_atse_data, process_gene_atse_data, create_empty_atse_message, 
@@ -30,7 +38,8 @@ from src.isoformgazer.isoform_utils import (
     load_expression_data, process_transcript_structure, create_transcript_structure_plot,
     create_isoform_expression_clustergram, create_empty_isoform_message,
     calculate_unified_plot_height, calculate_clustergram_min_height, calculate_single_isoform_hash,
-    parse_gtf_and_calculate_hashes, generate_annotated_gtf
+    calculate_dynamic_structure_plot_height, parse_gtf_and_calculate_hashes, generate_annotated_gtf,
+    get_unique_tissues_for_gene, get_unique_organs_for_gene
 )
 
 RANDOM_SEED = 18
@@ -55,40 +64,82 @@ def check_database_status():
     return False
 
 
-def setup_local_database(force_rebuild=False):
+def setup_local_database(data_dir=None, force_rebuild=False):
     """
-    Sets up SQLite database from data files.
+    Sets up SQLite database from data files for both human and mouse data.
+
+    Args:
+        data_dir: Optional path to data directory. Defaults to src/isoformgazer/data
+        force_rebuild: If True, rebuild the database even if it exists
     """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(base_dir, "data")
+    if data_dir is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(base_dir, "data")
+
     os.makedirs(data_dir, exist_ok=True)
-    
+
     db_path = os.path.join(data_dir, "isoformgazer.db")
     if Path(db_path).exists() and not force_rebuild:
         return db_path
-    
+
     print()
     print(f"Creating new database at {db_path}.")
     print()
 
     if Path(db_path).exists():
         os.remove(db_path)
-    
+
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL") 
-    conn.execute("PRAGMA cache_size = 50000") 
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA cache_size = 50000")
     conn.execute("PRAGMA temp_store = MEMORY")
+
+    human_data_dir = os.path.join(data_dir, "human")
+    load_species_data(conn, human_data_dir, table_prefix="", species_name="Human")
+
+    mouse_data_dir = os.path.join(data_dir, "mouse")
+    load_species_data(conn, mouse_data_dir, table_prefix="mouse_", species_name="Mouse")
+
+    conn.commit()
+    conn.close()
+
+    print("Database setup complete!")
+    print()
+
+    return db_path
+
+
+def load_species_data(conn, species_data_dir, table_prefix="", species_name="Human"):
+    """
+    Load data files for a specific species into the database.
+
+    Args:
+        conn: SQLite connection object
+        species_data_dir: Path to species-specific data directory
+        table_prefix: Prefix to add to table names (e.g., "mouse_" for mouse tables)
+        species_name: Name of species for logging purposes
+    """
+    print(f"\n{'='*80}")
+    print(f"Loading {species_name} data from {species_data_dir}")
+    print(f"{'='*80}\n")
 
     ########################################################
     # Load isoform master table data
     ########################################################
-    isoform_file = os.path.join(data_dir, "mt_isoform_gazers_250828.tsv")
-    
-    with tqdm(desc="Loading isoform master table data", unit=" rows") as pbar:
+    # Determine the correct isoform file based on species
+    if species_name == "Human":
+        isoform_file = os.path.join(species_data_dir, "mt_isoform_gazers_250828.tsv")
+    elif species_name == "Mouse":
+        isoform_file = os.path.join(species_data_dir, "mt_isoform_gazers_mouse_250929.tsv")
+
+    with tqdm(desc=f"Loading {species_name} isoform master table data", unit=" rows") as pbar:
         df_isoform = pd.read_csv(isoform_file, sep='\t')
         df_isoform['id'] = df_isoform.index # IMPORTANT: we need this to match PSL file 1-based indexing!
         df_isoform['gene_id'] = df_isoform['gene'].str.split('.').str[0]
+
+        if 'gene_name' in df_isoform.columns:
+            df_isoform['gene_name'] = df_isoform['gene_name'].astype(str).str.upper()
 
         columns_to_drop = ['gene_total_tpm', 'gene_gencode_v46_basic_transcript_counts']
         existing_columns_to_drop = [col for col in columns_to_drop if col in df_isoform.columns]
@@ -96,19 +147,24 @@ def setup_local_database(force_rebuild=False):
             df_isoform = df_isoform.drop(columns=existing_columns_to_drop)
 
         pbar.update(len(df_isoform))
-    
-    with tqdm(desc="Writing isoform master table data to local database", unit="rows", total=len(df_isoform)) as pbar:
-        df_isoform.to_sql('isoforms', conn, if_exists='replace', index=False)
+
+    isoforms_table = f"{table_prefix}isoforms"
+    with tqdm(desc=f"Writing {species_name} isoform master table data to local database", unit="rows", total=len(df_isoform)) as pbar:
+        df_isoform.to_sql(isoforms_table, conn, if_exists='replace', index=False)
         pbar.update(len(df_isoform))
-    
-    print(f"✓ Processed all {len(df_isoform):,} rows from isoform master table!")
+
+    print(f" Processed all {len(df_isoform):,} rows from {species_name} isoform master table!")
     print()
 
     ########################################################
     # Load isoform PSL data
     ########################################################
-    print("Processing PSL data...")
-    psl_file = os.path.join(data_dir, "all_samples_sp_collapse_all_chr_no_treatment_hashid_isoform_full.psl")
+    print(f"Processing {species_name} PSL data...")
+    if species_name == "Human":
+        psl_file = os.path.join(species_data_dir, "all_samples_sp_collapse_all_chr_no_treatment_hashid_isoform_full.psl")
+    elif species_name == "Mouse":  
+        psl_file = os.path.join(species_data_dir, "all_samples_sp_collapse_all_chr_full.psl")
+
     psl_columns = [
         'matches', 'misMatches', 'repMatches', 'nCount', 'qNumInsert', 'qBaseInsert',
         'tNumInsert', 'tBaseInsert', 'strand', 'qName', 'qSize', 'qStart', 'qEnd',
@@ -116,11 +172,12 @@ def setup_local_database(force_rebuild=False):
     ]
 
     # Get total PSL rows for progress tracking
-    total_psl_rows = sum(1 for _ in open(psl_file, 'r')) 
+    total_psl_rows = sum(1 for _ in open(psl_file, 'r'))
     chunk_size = 100000
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS psl_data (
+    psl_table = f"{table_prefix}psl_data"
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS {psl_table} (
             id INTEGER PRIMARY KEY,
             matches INTEGER,
             misMatches INTEGER,
@@ -143,7 +200,7 @@ def setup_local_database(force_rebuild=False):
             blockSizes TEXT,
             qStarts TEXT,
             tStarts TEXT,
-            gene_id TEXT,       
+            gene_id TEXT,
             trans_id TEXT,
             transcript_length INTEGER
         )
@@ -175,45 +232,87 @@ def setup_local_database(force_rebuild=False):
             
             if 'index' in chunk.columns:
                 chunk.drop(columns=['index'], inplace=True)
-                
-            chunk.to_sql('psl_data', conn, if_exists='append', index=False)
+
+            chunk.to_sql(psl_table, conn, if_exists='append', index=False)
             pbar.update(len(chunk))
 
-    print("Processing isoform TPM data...")
-    tpm_file = os.path.join(data_dir, "all_tpm_250828.tsv")
+    print(f"Processing {species_name} isoform TPM data...")
+    if species_name == "Human":
+        tpm_file = os.path.join(species_data_dir, "all_tpm_250828.tsv")
+    elif species_name == "Mouse": 
+        tpm_file = os.path.join(species_data_dir, "all_tpm_mouse.tsv")
+
     tpm_df = pd.read_csv(tpm_file, sep='\t')
     tpm_df['id'] = tpm_df.index
-    tpm_df.to_sql('tpm_data', conn, if_exists='replace')
 
-    print("Processing isoform ratio data...")
-    ratio_file = os.path.join(data_dir, "all_quant_ratio_250828.tsv")
+    if 'gene_name' in tpm_df.columns:
+        tpm_df['gene_name'] = tpm_df['gene_name'].astype(str).str.upper()
+    if 'gene' in tpm_df.columns:
+        tpm_df['gene'] = tpm_df['gene'].astype(str).str.upper()
+
+    tpm_table = f"{table_prefix}tpm_data"
+    tpm_df.to_sql(tpm_table, conn, if_exists='replace')
+
+    print(f"Processing {species_name} isoform ratio data...")
+    if species_name == "Human":
+        ratio_file = os.path.join(species_data_dir, "all_quant_ratio_250828.tsv")
+    elif species_name == "Mouse":
+        ratio_file = os.path.join(species_data_dir, "all_quant_ratio_mouse.tsv")
+
     ratio_df = pd.read_csv(ratio_file, sep='\t')
     ratio_df['id'] = ratio_df.index
-    ratio_df.to_sql('ratio_data', conn, if_exists='replace')
 
-    print("Updating isoform transcript names with full names from PSL data...")
-    conn.execute("""
-        UPDATE isoforms 
+    if 'gene_name' in ratio_df.columns:
+        ratio_df['gene_name'] = ratio_df['gene_name'].astype(str).str.upper()
+    if 'gene' in ratio_df.columns:
+        ratio_df['gene'] = ratio_df['gene'].astype(str).str.upper()
+
+    ratio_table = f"{table_prefix}ratio_data"
+    ratio_df.to_sql(ratio_table, conn, if_exists='replace')
+
+    print(f"Processing {species_name} isoform log TPM data...")
+    if species_name == "Human":
+        log_tpm_file = os.path.join(species_data_dir, "all_tpm_log10_250828.tsv")
+    elif species_name == "Mouse":
+        log_tpm_file = os.path.join(species_data_dir, "all_tpm_log10_mouse.tsv")
+
+    log_tpm_df = pd.read_csv(log_tpm_file, sep='\t')
+    log_tpm_df['id'] = log_tpm_df.index
+    
+    if 'gene_name' in log_tpm_df.columns:
+        log_tpm_df['gene_name'] = log_tpm_df['gene_name'].astype(str).str.upper()
+    if 'gene' in log_tpm_df.columns:
+        log_tpm_df['gene'] = log_tpm_df['gene'].astype(str).str.upper()
+
+    log_tpm_table = f"{table_prefix}log_tpm_data"
+    log_tpm_df.to_sql(log_tpm_table, conn, if_exists='replace')
+
+    print(f"Updating {species_name} isoform transcript names with full names from PSL data...")
+    conn.execute(f"""
+        UPDATE {isoforms_table}
         SET transcript = (
-            SELECT psl.trans_id 
-            FROM psl_data psl 
-            WHERE psl.id = isoforms.id
+            SELECT psl.trans_id
+            FROM {psl_table} psl
+            WHERE psl.id = {isoforms_table}.id
         )
         WHERE EXISTS (
-            SELECT 1 FROM psl_data psl WHERE psl.id = isoforms.id
+            SELECT 1 FROM {psl_table} psl WHERE psl.id = {isoforms_table}.id
         )
     """)
     conn.commit()
 
-    print("Creating isoform indexes...")
-    conn.execute("CREATE INDEX idx_psl_gene ON psl_data(id)")
-    conn.execute("CREATE INDEX idx_iso_gene ON isoforms(gene_name, id)")
+    print(f"Creating {species_name} isoform indexes...")
+    conn.execute(f"CREATE INDEX {table_prefix}idx_psl_gene ON {psl_table}(id)")
+    conn.execute(f"CREATE INDEX {table_prefix}idx_iso_gene ON {isoforms_table}(gene_name, id)")
     conn.commit()
 
     ########################################################
     # Load junction master table data
     ########################################################
-    junction_file = os.path.join(data_dir, "pseudobulk_final_broad_cell_type_20250623_171456_withmappings.csv")
+    if species_name == "Human":
+        junction_file = os.path.join(species_data_dir, "pseudobulk_final_broad_cell_type_20250623_171456_withmappings.csv")
+    if species_name == "Mouse":
+        junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_20251119_144144_withmappings.csv")
     
     # Need to count total lines (minus header) to estimate progress
     with open(junction_file, 'r') as f:
@@ -221,15 +320,15 @@ def setup_local_database(force_rebuild=False):
     
     chunk_size = 100000
     estimated_chunks = (total_lines // chunk_size) + 1
-    
-    print(f"Loading {total_lines:,} rows of junction data in groupings of {chunk_size:,} rows...")
+
+    print(f"Loading {total_lines:,} rows of {species_name} junction data in groupings of {chunk_size:,} rows...")
     first_chunk = True
     row_count = 0
 
     column_order = [
         'gene_symbol',
         'gene_id',
-        'event_id', 
+        'event_id',
         'junction_id',
         'junction_id_index',
         'atse_count',
@@ -237,51 +336,59 @@ def setup_local_database(force_rebuild=False):
         'cell_type',
         'n_cells',
         'psi',
+        'junction_average_psi',
         'matched_transcript_ids'
     ]
-    
-    with tqdm(desc="Writing junction master table data to local database", 
-              unit="chunk", 
+
+    junctions_table = f"{table_prefix}junctions"
+    with tqdm(desc=f"Writing {species_name} junction master table data to local database",
+              unit="chunk",
               total=estimated_chunks) as chunk_pbar:
-            
-        for i, chunk in enumerate(pd.read_csv(junction_file, 
+
+        for i, chunk in enumerate(pd.read_csv(junction_file,
                                               chunksize=chunk_size,
                                               low_memory=False)):
+            if 'gene_symbol' in chunk.columns:
+                chunk['gene_symbol'] = chunk['gene_symbol'].astype(str).str.upper()
+
             available_columns = [col for col in column_order if col in chunk.columns]
             remaining_columns = [col for col in chunk.columns if col not in column_order]
-            
+
             final_column_order = available_columns + remaining_columns
             chunk = chunk[final_column_order]
 
-
             if first_chunk:
-                chunk.to_sql('junctions', conn, if_exists='replace', index=False)
+                chunk.to_sql(junctions_table, conn, if_exists='replace', index=False)
                 first_chunk = False
             else:
-                chunk.to_sql('junctions', conn, if_exists='append', index=False)
-            
+                chunk.to_sql(junctions_table, conn, if_exists='append', index=False)
+
             row_count += len(chunk)
             chunk_pbar.update(1)
-            
+
             chunk_pbar.set_postfix({
                 'rows': f"{row_count:,}",
                 'chunk': f"{i+1}/{estimated_chunks}"
             })
-    
-    print(f"✓ Processed all {row_count:,} rows from junction master table!")
+
+    print(f" Processed all {row_count:,} rows from {species_name} junction master table!")
     # rename 'gene_symbol' to 'gene_name' for more consistency in junctions table (match isoforms table)
-    conn.execute("ALTER TABLE junctions RENAME COLUMN gene_symbol TO gene_name")
+    conn.execute(f"ALTER TABLE {junctions_table} RENAME COLUMN gene_symbol TO gene_name")
     print()
 
     ########################################################
     # Load ATSE data into database
     ########################################################
-    atse_file = os.path.join(data_dir, "TMS_atse_file_unanno_also_2025-05-11_06-23-05.tsv")
+    if species_name == "Human":
+        atse_file = os.path.join(species_data_dir, "TMS_atse_file_unanno_also_2025-05-11_06-23-05.tsv")
+    elif species_name == "Mouse":
+        atse_file = os.path.join(species_data_dir, "MOUSE_FOUNDATION_ATSE_FILE_unanno_also_2025-10-01_21-36-40.tsv")
     
     if os.path.exists(atse_file):
-        print("Processing ATSE data...")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS atse_data (
+        print(f"Processing {species_name} ATSE data...")
+        atse_table = f"{table_prefix}atse_data"
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {atse_table} (
                 event_id TEXT,
                 gene_id TEXT,
                 gene_name TEXT,
@@ -336,7 +443,10 @@ def setup_local_database(force_rebuild=False):
                     'strand': 'event_strand',
                     'strand.1': 'junction_strand'
                 })
-                
+
+                if 'gene_name' in chunk.columns:
+                    chunk['gene_name'] = chunk['gene_name'].astype(str).str.upper()
+
                 required_columns = [
                     'event_id', 'gene_id', 'gene_name', 'gene_types', 'num_junctions',
                     'event_type', 'chromosome', 'event_strand', 'atse_start', 'atse_end',
@@ -355,50 +465,195 @@ def setup_local_database(force_rebuild=False):
                 for col in required_columns:
                     if col not in chunk.columns:
                         chunk[col] = np.nan
-                
-                chunk[required_columns].to_sql('atse_data', conn, if_exists='append', index=False)
+
+                chunk[required_columns].to_sql(atse_table, conn, if_exists='append', index=False)
                 pbar.update(len(chunk))
 
-        
-        print(f"✓ Processed {total_lines:,} ATSE records!")
-    
-        print("Creating optimized database indices...")
-        indices = [
-            ("idx_junctions_gene", "junctions", "(gene_name, gene_id)"),
-            ("idx_junctions_gene_name", "junctions", "(gene_name)"),  
-            ("idx_isoforms_gene", "isoforms", "(gene_name, gene_id)"),
-            ("idx_isoforms_gene_name", "isoforms", "(gene_name)"), 
-            ("idx_isoforms_id", "isoforms", "(id)"), 
-            ("idx_psl_gene", "psl_data", "(gene_id, id)"),
-            ("idx_psl_id", "psl_data", "(id)"),  
-            ("idx_junctions_junction_id", "junctions", "(junction_id)"),
-            ("idx_junctions_psi", "junctions", "(gene_name, psi)"),
-            ("idx_junctions_cell_type", "junctions", "(cell_type)"),  
-            ("idx_tpm_id", "tpm_data", "(id)"), 
-            ("idx_ratio_id", "ratio_data", "(id)") 
-        ]
-        
-        with tqdm(desc="Creating indices", total=len(indices) + 3, unit="index") as idx_pbar:
-            for idx_name, table_name, columns in indices:
-                conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name}{columns}")
-                idx_pbar.update(1)
-            
-            conn.execute("ALTER TABLE atse_data ADD COLUMN gene_id_clean TEXT")
-            conn.execute("UPDATE atse_data SET gene_id_clean = SUBSTR(gene_id, 1, INSTR(gene_id, '.') - 1) WHERE gene_id LIKE '%.%'")
-            conn.execute("UPDATE atse_data SET gene_id_clean = gene_id WHERE gene_id_clean IS NULL")
-            idx_pbar.update(1)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_gene ON atse_data(gene_id_clean, gene_name)")
-            idx_pbar.update(1)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_atse_coords ON atse_data(chromosome, start, end)")
-            idx_pbar.update(1)
-    
-    conn.commit()
-    conn.close()
-    
-    print("✓ Database setup complete!")
-    print() 
 
-    return db_path
+        print(f" Processed {total_lines:,} {species_name} ATSE records!")
+
+    ###############################################################
+    # Load Gencode GTF data for transcript hash ID cross-checking
+    ###############################################################
+    if species_name == "Human":
+        gencode_gtf_file = os.path.join(species_data_dir, "gencode.v46.basic.annotation.gtf")
+    elif species_name == "Mouse":
+        gencode_gtf_file = os.path.join(species_data_dir, "gencode.vM25.annotation.gtf")
+
+    print(f"Processing {species_name} Gencode GTF file...")
+    gencode_table = f"{table_prefix}gencode_gtf"
+    if os.path.exists(gencode_gtf_file):
+        conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {gencode_table} (
+            id INTEGER PRIMARY KEY,
+            gene_id TEXT,
+            transcript_id TEXT,
+            gene_name TEXT,
+            transcript_type TEXT,
+            exon_number INTEGER,
+            exon_id TEXT,
+            chromosome TEXT,
+            strand TEXT,
+            exon_start INTEGER,
+            exon_end INTEGER,
+            transcript_start INTEGER,
+            transcript_end INTEGER
+        )
+    """)
+
+    gencode_records = []
+    with open(gencode_gtf_file, 'r') as f:
+        total_gtf_lines = sum(1 for _ in f)
+
+    with tqdm(total=total_gtf_lines, desc="Loading Gencode GTF data", unit="lines") as pbar:
+        with open(gencode_gtf_file, 'r') as f:
+            for line in f:
+                pbar.update(1)
+                if line.startswith('#') or not line.strip():
+                    continue
+
+                fields = line.strip().split('\t')
+                if len(fields) < 9:
+                    continue
+
+                feature_type = fields[2]
+                if feature_type not in ['transcript', 'exon']:
+                    continue
+
+                chromosome = fields[0]
+                strand = fields[6]
+                start = int(fields[3])
+                end = int(fields[4])
+                attributes = fields[8]
+                gene_id = None
+                transcript_id = None
+                gene_name = None
+                transcript_type = None
+                exon_number = None
+                exon_id = None
+
+                for attr in attributes.split(';'):
+                    attr = attr.strip()
+                    if not attr:
+                        continue
+                    try:
+                        if attr.startswith('gene_id'):
+                            gene_id = extract_gtf_attr_val(attr)
+                        elif attr.startswith('transcript_id'):
+                            transcript_id = extract_gtf_attr_val(attr)
+                        elif attr.startswith('gene_name'):
+                            gene_name = extract_gtf_attr_val(attr)
+                        elif attr.startswith('transcript_type'):
+                            transcript_type = extract_gtf_attr_val(attr)
+                        elif attr.startswith('exon_number'):
+                            value = extract_gtf_attr_val(attr)
+                            if value:
+                                exon_number = int(value)
+                        elif attr.startswith('exon_id'):
+                            exon_id = extract_gtf_attr_val(attr)
+                    except (ValueError, IndexError):
+                        continue
+
+                if gene_id and transcript_id:
+                    if feature_type == 'transcript':
+                        record = {
+                            'gene_id': gene_id,
+                            'transcript_id': transcript_id,
+                            'gene_name': gene_name,
+                            'transcript_type': transcript_type,
+                            'exon_number': None,
+                            'exon_id': None,
+                            'chromosome': chromosome,
+                            'strand': strand,
+                            'exon_start': start,
+                            'exon_end': end,
+                            'transcript_start': start,
+                            'transcript_end': end
+                        }
+                    else:
+                        record = {
+                            'gene_id': gene_id,
+                            'transcript_id': transcript_id,
+                            'gene_name': gene_name,
+                            'transcript_type': transcript_type,
+                            'exon_number': exon_number,
+                            'exon_id': exon_id,
+                            'chromosome': chromosome,
+                            'strand': strand,
+                            'exon_start': start,
+                            'exon_end': end,
+                            'transcript_start': None,
+                            'transcript_end': None
+                        }
+
+                    gencode_records.append(record)
+
+        if gencode_records:
+            gencode_df = pd.DataFrame(gencode_records)
+
+            if 'gene_name' in gencode_df.columns:
+                gencode_df['gene_name'] = gencode_df['gene_name'].astype(str).str.upper()
+
+            gencode_df.to_sql(gencode_table, conn, if_exists='replace', index=False)
+            print(f" Processed {len(gencode_records):,} {species_name} Gencode GTF records!")
+
+    print(f"Creating optimized {species_name} database indices...")
+    indices = [
+        (f"{table_prefix}idx_junctions_gene", junctions_table, "(gene_name, gene_id)"),
+        (f"{table_prefix}idx_junctions_gene_name", junctions_table, "(gene_name)"),
+        (f"{table_prefix}idx_isoforms_gene", isoforms_table, "(gene_name, gene_id)"),
+        (f"{table_prefix}idx_isoforms_gene_name", isoforms_table, "(gene_name)"),
+        (f"{table_prefix}idx_isoforms_id", isoforms_table, "(id)"),
+        (f"{table_prefix}idx_psl_gene", psl_table, "(gene_id, id)"),
+        (f"{table_prefix}idx_psl_id", psl_table, "(id)"),
+        (f"{table_prefix}idx_junctions_junction_id", junctions_table, "(junction_id)"),
+        (f"{table_prefix}idx_junctions_psi", junctions_table, "(gene_name, psi)"),
+        (f"{table_prefix}idx_junctions_cell_type", junctions_table, "(cell_type)"),
+        (f"{table_prefix}idx_tpm_id", tpm_table, "(id)"),
+        (f"{table_prefix}idx_ratio_id", ratio_table, "(id)")
+    ]
+
+    # Add gencode index only for human
+    extra_indices = 4 if species_name == "Human" else 3
+
+    with tqdm(desc=f"Creating {species_name} indices", total=len(indices) + extra_indices, unit="index") as idx_pbar:
+        for idx_name, table_name, columns in indices:
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table_name}{columns}")
+            idx_pbar.update(1)
+
+        conn.execute(f"ALTER TABLE {atse_table} ADD COLUMN gene_id_clean TEXT")
+        conn.execute(f"UPDATE {atse_table} SET gene_id_clean = SUBSTR(gene_id, 1, INSTR(gene_id, '.') - 1) WHERE gene_id LIKE '%.%'")
+        conn.execute(f"UPDATE {atse_table} SET gene_id_clean = gene_id WHERE gene_id_clean IS NULL")
+        idx_pbar.update(1)
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_gene ON {atse_table}(gene_id_clean, gene_name)")
+        idx_pbar.update(1)
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_coords ON {atse_table}(chromosome, start, end)")
+        idx_pbar.update(1)
+        if species_name == "Human":
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_gencode_transcript ON {gencode_table}(gene_id, transcript_id)")
+            idx_pbar.update(1)
+
+    conn.commit()
+    print(f" {species_name} data loading complete!")
+    print()
+
+
+def verify_database_schema(db_path):
+    """Verify database schema has required columns"""
+    conn = sqlite3.connect(db_path)
+    
+    iso_schema = pd.read_sql("PRAGMA table_info(isoforms)", conn)
+    print("Isoforms table columns:", iso_schema['name'].tolist())
+    
+    psl_schema = pd.read_sql("PRAGMA table_info(psl_data)", conn)
+    print("PSL data table columns:", psl_schema['name'].tolist())
+    
+    if 'id' not in iso_schema['name'].values:
+        print("ERROR: Missing 'id' column in isoforms table")
+    if 'id' not in psl_schema['name'].values:
+        print("ERROR: Missing 'id' column in psl_data table")
+    
+    conn.close()
 
 
 def verify_database_schema(db_path):
@@ -468,6 +723,22 @@ db_path = setup_local_database()
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
 
+# Cache for default gene A1BG-AS1
+DEFAULT_GENE = 'A1BG-AS1'
+default_gene_cache = None
+cache_loaded_from_disk = False
+
+if is_cache_valid(base_dir, db_path):
+    default_gene_cache = load_default_gene_cache(base_dir)
+    cache_loaded_from_disk = True
+
+if not default_gene_cache:
+    default_gene_cache = generate_default_gene_cache(db_path, DEFAULT_GENE)
+    if default_gene_cache:
+        save_default_gene_cache(base_dir, db_path, default_gene_cache)
+
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
+
 # CSS for styling components with responsive design
 app.index_string = '''
 <!DOCTYPE html>
@@ -533,8 +804,7 @@ left_data_table = dash_table.DataTable(
     style_cell={
         'overflow': 'hidden',
         'textOverflow': 'ellipsis',
-        'minWidth': '100px', 
-        'maxWidth': '220px',
+        'minWidth': '150px',
         'padding': '10px 8px',
         'whiteSpace': 'normal',
         'font-family': '"Open Sans", sans-serif',
@@ -544,7 +814,9 @@ left_data_table = dash_table.DataTable(
     },
     style_table={
         'overflowY': 'visible',
-        'height': 'auto'
+        'overflowX': 'auto', 
+        'minWidth': '100%',
+        'height': 'auto'     
     },
     style_header={
         'backgroundColor': '#301279',
@@ -601,7 +873,7 @@ left_data_table = dash_table.DataTable(
 right_data_table = dash_table.DataTable(
     id='right_data_table',
     columns=get_master_table_columns(db_path, table_name='junctions'),
-    hidden_columns=['id', 'matched_transcript_ids'],
+    hidden_columns=['id', 'matched_transcript_ids', 'junction_average_psi'],
     data=[],
     editable=False,
     filter_action="custom",
@@ -617,8 +889,8 @@ right_data_table = dash_table.DataTable(
     style_cell={
         'overflow': 'hidden',
         'textOverflow': 'ellipsis',
-        'minWidth': '100px', 
-        'maxWidth': '220px',
+        'minWidth': '150px', 
+        #'maxWidth': '220px',
         'padding': '10px 8px',
         'whiteSpace': 'normal',
         'font-family': '"Open Sans", sans-serif',
@@ -805,50 +1077,7 @@ app.layout = html.Div(className='app-layout', children=[
 
                         html.H2('Isoform Hash Lookup', className='alignment-settings-section'),
                         html.Div(className='hash-lookup-content', children=[
-                            html.P("Generate hash IDs for isoforms based on their junction coordinates."),
-
-                            html.H3('Coordinate Entry', className='summary-section-header'),
-                            html.Div(className='app-controls-block', children=[
-                                html.Div(className='coordinate-mode-selector', children=[
-                                    html.Label('Input Mode:', className='coordinate-section-label'),
-                                    dcc.RadioItems(
-                                        id='coordinate-input-mode',
-                                        options=[
-                                            {'label': 'Start positions +\nBlock sizes', 'value': 'start_block'},
-                                            {'label': 'Start positions +\nEnd positions', 'value': 'start_end'}
-                                        ],
-                                        value='start_block',
-                                        className='coordinate-radio-items',
-                                        inline=True
-                                    )
-                                ]),
-
-                                html.Div(className='coordinate-input-group', children=[
-                                    html.Label('Exon Start Positions (comma-separated):', className='coordinate-section-label'),
-                                    dcc.Input(
-                                        id='exon-starts-input',
-                                        type='text',
-                                        placeholder='e.g., 1000,2000,3000',
-                                        className='coordinate-input'
-                                    )
-                                ]),
-
-                                html.Div(id='second-input-container', children=[
-                                    html.Div(className='coordinate-input-group', children=[
-                                        html.Label('Block Sizes (comma-separated):', className='coordinate-section-label', id='second-input-label'),
-                                        dcc.Input(
-                                            id='second-coordinate-input',
-                                            type='text',
-                                            placeholder='e.g., 200,300,400',
-                                            className='coordinate-input'
-                                        )
-                                    ])
-                                ]),
-
-                                html.Button('Calculate Hash', id='calculate-hash-btn', className='control-button'),
-                                html.Div(id='hash-result')
-                            ]),
-
+                            html.P("Generate hash IDs for isoforms by uploading a GTF file. A table with gene_id, transcript_id, and hash_id will be generated."),
                             html.H3('GTF File Upload', className='summary-section-header'),
                             html.Div(className='app-controls-block', children=[
                                 dcc.Upload(
@@ -863,8 +1092,8 @@ app.layout = html.Div(className='app-layout', children=[
                                 html.Div(id='gtf-upload-status', className='upload-status'),
                                 html.Div(id='gtf-download-section', className='hidden', children=[
                                     html.Div(className='download-buttons-container', children=[
-                                        html.Button('Download Annotated GTF', id='download-annotated-gtf-btn', className='control-button'),
-                                        html.Button('Download Hash Results', id='download-hashes-btn', className='control-button')
+                                        html.Button('Download Hash Results', id='download-hashes-btn', className='control-button'),
+                                        html.Button('Download Annotated GTF', id='download-annotated-gtf-btn', className='control-button')
                                     ]),
                                     dcc.Download(id='download-hashes'),
                                     dcc.Download(id='download-annotated-gtf')
@@ -878,7 +1107,7 @@ app.layout = html.Div(className='app-layout', children=[
                         #####################################
                         # Isoform-level Event Plot Section
                         #####################################
-                        html.H2('Transcript Plots', className='alignment-settings-section'),
+                        html.H2('Structure Plot', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Plot Height'),
                             dcc.Slider(
@@ -929,7 +1158,99 @@ app.layout = html.Div(className='app-layout', children=[
                                     className='toggle-switch-inline'
                                 )
                             ]),
-                            html.Div(className='app-controls-desc', children='Toggle to hide junctions from the structure plot and show transcript structure instead')
+                            html.Div(className='app-controls-desc', children='Toggle to hide junctions from the structure plot')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Color by Average PSI', className='app-controls-name toggle-switch-label-wide'),
+                                daq.ToggleSwitch(
+                                    id='color-junctions-by-psi-toggle',
+                                    value=False,
+                                    label={'label': 'Off / On', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='left',
+                                    className='toggle-switch-inline'
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Color junctions by their average PSI (percent spliced in)')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Color by Abundance', className='app-controls-name toggle-switch-label-wide'),
+                                daq.ToggleSwitch(
+                                    id='color-by-abundance-toggle',
+                                    value=False,
+                                    label={'label': 'Off / On', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='left',
+                                    className='toggle-switch-inline'
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Color transcripts by their abundance (TPM)'),
+                            html.Div(id='abundance-color-options-container', style={'display': 'none'}, children=[
+                                html.Div(style={'marginTop': '15px'}, children=[
+                                    dcc.RadioItems(
+                                        id='abundance-color-type-radio',
+                                        options=[
+                                            {'label': ' Average Abundance', 'value': 'average'},
+                                            {'label': ' Tissue Abundance', 'value': 'tissue'},
+                                            {'label': ' Organ Abundance', 'value': 'organ'}
+                                        ],
+                                        value='average',
+                                        className='radio-items-vertical',
+                                        labelStyle={'display': 'block', 'marginBottom': '8px', 'fontSize': '12px', 'color': '#506784'}
+                                    )
+                                ]),
+                                html.Div(id='tissue-dropdown-container', style={'marginTop': '10px', 'display': 'none'}, children=[
+                                    html.Div(className='app-controls-block', children=[
+                                        html.Div('Select Tissue', className='app-controls-name'),
+                                        dcc.Dropdown(
+                                            id='tissue-abundance-dropdown',
+                                            className='app-controls-block-dropdown',
+                                            options=[],
+                                            value=None,
+                                            clearable=False
+                                        ),
+                                        html.Div(className='app-controls-desc', children='Choose which tissue to color transcripts by')
+                                    ])
+                                ]),
+                                html.Div(id='organ-dropdown-container', style={'marginTop': '10px', 'display': 'none'}, children=[
+                                    html.Div(className='app-controls-block', children=[
+                                        html.Div('Select Organ', className='app-controls-name'),
+                                        dcc.Dropdown(
+                                            id='organ-abundance-dropdown',
+                                            className='app-controls-block-dropdown',
+                                            options=[],
+                                            value=None,
+                                            clearable=False
+                                        ),
+                                        html.Div(className='app-controls-desc', children='Choose which organ to color transcripts by')
+                                    ])
+                                ])
+                            ])
+                        ]),
+                        html.Div(id='structure-plot-colorscale-container', style={'display': 'none'}, children=[
+                            html.Div(className='app-controls-block', children=[
+                                html.Div(className='app-controls-name', children='Colorscale'),
+                                dcc.Dropdown(
+                                    id='structure-plot-colorscale-dropdown',
+                                    className='app-controls-block-dropdown',
+                                    options=[
+                                        {'label': 'RdBu_r', 'value': 'RdBu_r'},
+                                        {'label': 'Viridis', 'value': 'Viridis'},
+                                        {'label': 'Plasma', 'value': 'Plasma'},
+                                        {'label': 'Spectral', 'value': 'Spectral'},
+                                        {'label': 'Turbo', 'value': 'Turbo'},
+                                        {'label': 'Cividis', 'value': 'Cividis'},
+                                        {'label': 'Blues', 'value': 'Blues'},
+                                        {'label': 'Reds', 'value': 'Reds'},
+                                        {'label': 'YlOrRd', 'value': 'YlOrRd'},
+                                        {'label': 'RdYlBu', 'value': 'RdYlBu'},
+                                        {'label': 'Inferno', 'value': 'Inferno'},
+                                        {'label': 'Magma', 'value': 'Magma'}
+                                    ],
+                                    value='Viridis'
+                                ),
+                                html.Div(className='app-controls-desc', children='Choose the color theme for the structure plot')
+                            ])
                         ]),
 
                         #####################################
@@ -952,15 +1273,19 @@ app.layout = html.Div(className='app-layout', children=[
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='toggle-switch-row', children=[
                                 html.Div('Isoform Clustergram Unit', className='app-controls-name toggle-switch-label-narrow'),
-                                daq.ToggleSwitch(
+                                dcc.RadioItems(
                                     id='isoform-data-type-switch',
-                                    value=False,  # False = TPM, True = Ratio
-                                    label={'label': 'TPM / Ratio', 'style': {'fontSize': '12px', 'color': '#506784'}},
-                                    labelPosition='right',
-                                    className='toggle-switch-inline'
+                                    options=[
+                                        {'label': ' Ratio', 'value': 'ratio'},
+                                        {'label': ' TPM', 'value': 'tpm'},
+                                        {'label': ' Log TPM', 'value': 'log_tpm'}
+                                    ],
+                                    value='ratio',
+                                    className='radio-items-inline',
+                                    labelStyle={'display': 'inline-block', 'marginRight': '20px', 'fontSize': '12px', 'color': '#506784'}
                                 )
                             ]),
-                            html.Div(className='app-controls-desc', children='Toggle whether isoform clustergram shows TPM values or ratio values across all tissues')
+                            html.Div(className='app-controls-desc', children='Select whether to show Ratio, TPM, or log TPM values for the isoform clustergram')
                         ]),
                         html.Div(className='app-controls-block', children=[
                             html.Div(className='radio-items-row', children=[
@@ -1030,6 +1355,19 @@ app.layout = html.Div(className='app-layout', children=[
                             html.Div(className='app-controls-desc', children='Choose the color theme of the heatmaps')
                         ]),
                         html.Div(className='app-controls-block', children=[
+                            html.Div(className='toggle-switch-row', children=[
+                                html.Div('Clustergram Gridlines', className='app-controls-name toggle-switch-label-narrow-plus'),
+                                daq.ToggleSwitch(
+                                    id='gridlines-toggle',
+                                    value=False,
+                                    label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
+                                    labelPosition='left',
+                                    className='toggle-switch-inline'
+                                )
+                            ]),
+                            html.Div(className='app-controls-desc', children='Toggle white gridlines visibility in clustergrams')
+                        ]),
+                        html.Div(className='app-controls-block', children=[
                             html.Div(className='app-controls-name', children='Distance Metric'),
                             dcc.Dropdown(
                                 id='distance-metric-dropdown',
@@ -1062,12 +1400,121 @@ app.layout = html.Div(className='app-layout', children=[
                                 value='ward'
                             ),
                             html.Div(className='app-controls-desc', children='Hierarchical clustering algorithm used for both clustergrams')
+                        ]),
+
+                        #####################################
+                        # Plot Exports Section
+                        #####################################
+                        html.H2('Export Plot', className='alignment-settings-section'),
+                        html.Div(className='app-controls-block', children=[
+                            html.Div(className='app-controls-name', children='Dimensions'),
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Label("Width:", style={'fontWeight': '600', 'fontSize': '14px', 'color': '#301279'}),
+                                dcc.Input(
+                                    id='export-width-value',
+                                    type='number',
+                                    placeholder='Enter width',
+                                    value=800,
+                                    style={'width': 'calc(100% - 20px)', 'padding': '8px', 'marginTop': '5px', 'marginRight': '10px', 'border': '1px solid #ddd', 'borderRadius': '4px'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Label("Height:", style={'fontWeight': '600', 'fontSize': '14px', 'color': '#301279'}),
+                                dcc.Input(
+                                    id='export-height-value',
+                                    type='number',
+                                    placeholder='Enter height',
+                                    value=600,
+                                    style={'width': 'calc(100% - 20px)', 'padding': '8px', 'marginTop': '5px', 'marginRight': '10px', 'border': '1px solid #ddd', 'borderRadius': '4px'}
+                                )
+                            ]),
+
+                            # Unit section
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Div('Unit', className='app-controls-name', style={'marginBottom': '10px'}),
+                                dcc.RadioItems(
+                                    id='export-unit-toggle',
+                                    options=[
+                                        {'label': ' Pixels (px)', 'value': 'px'},
+                                        {'label': ' Inches (in)', 'value': 'in'}
+                                    ],
+                                    value='px',
+                                    className='radio-items-vertical',
+                                    labelStyle={'display': 'block', 'marginLeft': '6px', 'marginBottom': '5px', 'fontSize': '14px', 'color': '#506784'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Label("Title Font Size:", style={'fontWeight': '600', 'fontSize': '14px', 'color': '#301279'}),
+                                dcc.Input(
+                                    id='export-title-legend-font-size',
+                                    type='number',
+                                    placeholder='Enter font size',
+                                    value=16,
+                                    style={'width': 'calc(100% - 20px)', 'padding': '8px', 'marginTop': '5px', 'marginRight': '10px', 'border': '1px solid #ddd', 'borderRadius': '4px'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '15px'}, children=[
+                                html.Label("Axis Labels Font Size:", style={'fontWeight': '600', 'fontSize': '14px', 'color': '#301279'}),
+                                dcc.Input(
+                                    id='export-axis-labels-font-size',
+                                    type='number',
+                                    placeholder='Enter font size',
+                                    value=12,
+                                    style={'width': 'calc(100% - 20px)', 'padding': '8px', 'marginTop': '5px', 'marginRight': '10px', 'border': '1px solid #ddd', 'borderRadius': '4px'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '20px'}, children=[
+                                html.Div('Plot to Export', className='app-controls-name toggle-switch-label-narrow', style={'marginBottom': '10px'}),
+                                dcc.RadioItems(
+                                    id='export-plot-selection',
+                                    options=[
+                                        {'label': ' Structure Plot', 'value': 'structure'},
+                                        {'label': ' Isoform Clustergram', 'value': 'isoform'},
+                                        {'label': ' Junction Clustergram', 'value': 'junction'}
+                                    ],
+                                    value='structure',
+                                    className='radio-items-vertical',
+                                    labelStyle={'display': 'block', 'marginLeft': '6px', 'marginBottom': '5px', 'fontSize': '12px', 'color': '#506784'}
+                                )
+                            ]),
+                            html.Div(style={'marginTop': '20px'}, children=[
+                                dbc.Button(
+                                    "Download Plot",
+                                    id='export-unified-btn',
+                                    color='primary',
+                                    style={
+                                        'backgroundColor': '#301279',
+                                        'color': 'white',
+                                        'padding': '10px 24px',
+                                        'borderRadius': '4px',
+                                        'border': 'none',
+                                        'fontWeight': '600',
+                                        'fontSize': '14px',
+                                        'transition': 'all 0.2s ease'
+                                    }
+                                ),
+                                dcc.Download(id="download-structure-plot"),
+                                dcc.Download(id="download-isoform-clustergram"),
+                                dcc.Download(id="download-junction-clustergram"),
+                                dcc.Interval(id='export-status-timer', interval=7500, n_intervals=0, disabled=True)
+                            ]),
+                            html.Div(
+                                id='export-status-message',
+                                style={
+                                    'marginTop': '15px',
+                                    'fontSize': '14px',
+                                    'color': '#301279',
+                                    'fontWeight': '600',
+                                    'display': 'none'
+                                },
+                                children='Download in Progress...'
+                            )
                         ])
                     ])
                 ])
             ])
         ]),
-        
+
         #####################################
         # Main content section
         #####################################
@@ -1085,13 +1532,14 @@ app.layout = html.Div(className='app-layout', children=[
                         html.Div(id='top-panel-body', className='top-panel', children=[
                             html.Div(className='graph-wrapper', children=[
                                 # ATSE/Junction Structure Plot
-                                html.Div(id='top-junction-structure-plot-container', className='atse-container', children=[
-                                    html.Div(className='loading-container plot-container-full-height', id='top-structure-plot-container-style', children=[
+                                html.Div(id='top-junction-structure-plot-container', className='atse-container', style={'position': 'relative'}, children=[
+                                    html.Div(className='loading-container plot-container-full-height', id='top-structure-plot-container-style', style={'position': 'relative'}, children=[
                                         dcc.Loading(
                                             id="loading-top-structure-plot",
                                             type="default",
                                             color='#EDAE49',
-                                            delay_hide=500,
+                                            delay_show=0,
+                                            delay_hide=200,
                                             children=[
                                                 dcc.Graph(
                                                     id='atse-map',
@@ -1099,14 +1547,73 @@ app.layout = html.Div(className='app-layout', children=[
                                                     config={
                                                         'responsive': True,
                                                         'displayModeBar': True,
-                                                        'scrollZoom': True
+                                                        'scrollZoom': False,
+                                                        'toImageButtonOptions': {
+                                                            'format': 'svg',
+                                                            'filename': 'isoformgazer_plot'
+                                                        }
                                                     },
                                                     className='graph-full-size'
                                                 )
                                             ]
                                         ),
                                         html.Div(id="atse-map-loading-message", className="custom-loading-message")
-                                    ])
+                                    ]),
+                                    html.Div(
+                                        id='junction-color-picker-popup',
+                                        children=[
+                                            html.Div(
+                                                className='junction-header-container',
+                                                children=[
+                                                    html.Div(
+                                                        className='junction-color-title',
+                                                        children='Junction Color'
+                                                    ),
+                                                    html.Div(
+                                                        className='junction-color-bar'
+                                                    ),
+                                                    html.Div(
+                                                        id='junction-id-display',
+                                                        children=''
+                                                    )
+                                                ]
+                                            ),
+                                            html.Div(
+                                                style={
+                                                    'marginBottom': '12px'
+                                                }
+                                            ),
+                                            html.Div(
+                                                className='junction-color-picker-container',
+                                                children=[
+                                                    daq.ColorPicker(
+                                                        id='junction-individual-color-picker',
+                                                        value={'hex': '#85929E'},
+                                                        size=160,
+                                                        theme=None,
+                                                        className='color-picker'
+                                                    )
+                                                ]
+                                            ),
+                                            html.Div(
+                                                className='junction-color-buttons-container',
+                                                children=[
+                                                    dbc.Button(
+                                                        "Apply",
+                                                        id='junction-color-apply-btn',
+                                                        className='clear-filters-btn junction-color-btn'
+                                                    ),
+                                                    dbc.Button(
+                                                        "Reset",
+                                                        id='junction-color-reset-btn',
+                                                        className='clear-filters-btn junction-color-btn'
+                                                    )
+                                                ]
+                                            )
+                                        ]
+                                    ),
+                                    # Store for currently selected junction
+                                    dcc.Store(id='selected-junction-info', data={})
                                 ]),
                                 # Transcript Structure Plot (hidden by default)
                                 html.Div(id='top-transcript-structure-plot-container', className='barplot-container hidden', children=[
@@ -1115,9 +1622,20 @@ app.layout = html.Div(className='app-layout', children=[
                                             id="loading-top-transcript-plot",
                                             type="default",
                                             color='#EDAE49',
-                                            delay_show=500,
+                                            delay_show=0,
                                             delay_hide=200,
-                                            children=[dcc.Graph(id='top-barplot')]
+                                            children=[dcc.Graph(
+                                                id='top-barplot',
+                                                config={
+                                                    'responsive': True,
+                                                    'displayModeBar': True,
+                                                    'scrollZoom': False,
+                                                    'toImageButtonOptions': {
+                                                        'format': 'svg',
+                                                        'filename': 'isoformgazer_structure_plot'
+                                                    }
+                                                }
+                                            )]
                                         ),
                                         html.Div(id="top-barplot-loading-message", className="custom-loading-message")
                                     ])
@@ -1143,12 +1661,29 @@ app.layout = html.Div(className='app-layout', children=[
                                     id="loading-isoform-heatmap",
                                     type="default",
                                     color='#EDAE49',
-                                    delay_show=500,
+                                    delay_show=0,
                                     delay_hide=200,
                                     children=[dcc.Graph(
                                         id='heatmap1',
+                                        figure={
+                                            'data': [],
+                                            'layout': go.Layout(
+                                                title={'text': 'Loading isoform expression data...', 'font': {'size': 14}},
+                                                plot_bgcolor='white',
+                                                margin=dict(l=40, r=40, t=40, b=40)
+                                            )
+                                        },
                                         className='graph-full-size',
-                                        config={'responsive': True}
+                                        config={
+                                            'responsive': True,
+                                            'displayModeBar': True,
+                                            'scrollZoom': False,
+                                            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                                            'toImageButtonOptions': {
+                                                'format': 'svg',
+                                                'filename': 'isoformgazer_long_read_clustergram'
+                                            }
+                                        }
                                     )]
                                 ),
                                 html.Div(id="heatmap1-loading-message", className="custom-loading-message")
@@ -1171,7 +1706,8 @@ app.layout = html.Div(className='app-layout', children=[
                                     id="loading-junction-heatmap",
                                     type="default",
                                     color='#EDAE49',
-                                    delay_hide=500,
+                                    delay_show=0,
+                                    delay_hide=200,
                                     children=[
                                         dcc.Graph(
                                             id='heatmap2',
@@ -1183,7 +1719,16 @@ app.layout = html.Div(className='app-layout', children=[
                                                     margin=dict(l=40, r=40, t=40, b=40)
                                                 )
                                             },
-                                            config={'responsive': True},
+                                            config={
+                                                'responsive': True,
+                                                'displayModeBar': True,
+                                                'scrollZoom': False,
+                                                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                                                'toImageButtonOptions': {
+                                                    'format': 'svg',
+                                                    'filename': 'isoformgazer_short_read_clustergram'
+                                                }
+                                            },
                                             className='graph-full-size'
                                         )
                                     ]
@@ -1202,14 +1747,26 @@ app.layout = html.Div(className='app-layout', children=[
             html.Div(className='tables-section', children=[
                 html.Div(className='table-container', id='table1-container', children=[
                     html.Div(className='table-header-controls', children=[
-                        dbc.Button(
-                            "Clear Filters",
-                            id='clear-left-filters',
-                            color="secondary",
-                            size="sm",
-                            className="clear-filters-btn",
-                            disabled=True
-                        )
+                        html.Div(children=[
+                            dbc.Button(
+                                "Clear Filters",
+                                id='clear-left-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True
+                            )
+                        ]),
+                        html.Div(children=[
+                            dbc.Button(
+                                "Download CSV",
+                                id='download-left-table-button',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn"
+                            ),
+                            dcc.Download(id='download-left-table')
+                        ], style={'marginLeft': 'auto'})
                     ]),
                     # Isoform table filter error popup
                     html.Div(
@@ -1221,14 +1778,26 @@ app.layout = html.Div(className='app-layout', children=[
                 ]),
                 html.Div(className='table-container', id='table2-container', children=[
                     html.Div(className='table-header-controls', children=[
-                        dbc.Button(
-                            "Clear Filters",
-                            id='clear-right-filters',
-                            color="secondary",
-                            size="sm",
-                            className="clear-filters-btn",
-                            disabled=True
-                        )
+                        html.Div(children=[
+                            dbc.Button(
+                                "Clear Filters",
+                                id='clear-right-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True
+                            )
+                        ]),
+                        html.Div(children=[
+                            dbc.Button(
+                                "Download CSV",
+                                id='download-right-table-button',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn"
+                            ),
+                            dcc.Download(id='download-right-table')
+                        ], style={'marginLeft': 'auto'})
                     ]),
                     # Junction table filter error popup
                     html.Div(
@@ -1244,19 +1813,40 @@ app.layout = html.Div(className='app-layout', children=[
 ])
 
 app.layout.children.extend([
-    dcc.Store(id='filtered-isoform-store', data=[]),
-    dcc.Store(id='filtered-junction-store', data=[]),
-    dcc.Store(id='isoform-full-data-store', data=[]),
-    dcc.Store(id='junction-full-data-store', data=[]),
+    dcc.Store(
+        id='filtered-isoform-store',
+        data=default_gene_cache.get('filtered_isoform_ids', []) if default_gene_cache else []
+    ),
+    dcc.Store(
+        id='filtered-junction-store',
+        data=default_gene_cache.get('filtered_junction_ids', []) if default_gene_cache else []
+    ),
+    dcc.Store(
+        id='isoform-full-data-store',
+        data=default_gene_cache.get('isoform_full_data', []) if default_gene_cache else []
+    ),
+    dcc.Store(
+        id='junction-full-data-store',
+        data=default_gene_cache.get('junction_full_data', []) if default_gene_cache else []
+    ),
     dcc.Store(id='table-callback-prevention', data=False),
     dcc.Store(id='initial-loading-complete', data=False),
     dcc.Store(id='exon-color-store', data='#2E86C1'),
     dcc.Store(id='junction-color-store', data='#85929E'),
+    dcc.Store(id='individual-junction-colors', data={}),
     dcc.Store(id='loading-progress-store', data=0),
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='gtf-hash-results-store', data=[]),
-    dcc.Interval(id='loading-delay-interval', interval=1000, n_intervals=0, max_intervals=1, disabled=True),
+    dcc.Store(id='all-gene-options-store', data=get_all_gene_options(db_path)),
+    dcc.Store(id='cache-used-store', data=cache_loaded_from_disk),
+    dcc.Interval(
+        id='loading-delay-interval',
+        interval=1000,
+        n_intervals=0,
+        max_intervals=1,
+        disabled=True
+    ),
     dcc.Interval(id='progress-update-interval', interval=50, n_intervals=0, disabled=False)
 ])
 
@@ -1288,6 +1878,162 @@ def update_junction_color_store(color_value):
 
 
 #######################################################################
+# INDIVIDUAL JUNCTION COLOR PICKER CALLBACKS
+#######################################################################
+@app.callback(
+    [dash.dependencies.Output('selected-junction-info', 'data'),
+     dash.dependencies.Output('junction-individual-color-picker', 'value'),
+     dash.dependencies.Output('junction-color-picker-popup', 'style')],
+    [dash.dependencies.Input('atse-map', 'clickData')],
+    [dash.dependencies.State('individual-junction-colors', 'data'),
+     dash.dependencies.State('junction-color-store', 'data')],
+    prevent_initial_call=True
+)
+def handle_junction_click(clickData, individual_colors, global_junction_color):
+    """
+    Handle junction clicks to open the color picker popup.
+    Extract junction ID from the hover text.
+    """
+    if not clickData or 'points' not in clickData or len(clickData['points']) == 0:
+        raise PreventUpdate
+
+    point = clickData['points'][0]
+
+    # Extract junction ID from the hover text
+    text = point.get('text', '')
+    if 'Junction ID:' not in text:
+        raise PreventUpdate
+
+    junction_id = None
+    parts = text.split('<br>')
+    for part in parts:
+        if 'Junction ID:' in part:
+            junction_id = part.replace('Junction ID:', '').strip()
+            break
+
+    if not junction_id:
+        raise PreventUpdate
+
+    # Get junction coordinates from point
+    x = point.get('x')
+    y = point.get('y')
+
+    if x is None or y is None:
+        raise PreventUpdate
+
+    if individual_colors: 
+        current_color_hex = individual_colors.get(junction_id, global_junction_color)
+    else: 
+        current_color_hex = global_junction_color
+
+    current_color = {'hex': current_color_hex}
+
+    selected_junction = {
+        'id': junction_id,
+        'x': x,
+        'y': y
+    }
+
+    # need bounding box of clicked junction point to position the popup
+    bbox = point.get('bbox', {})
+    x_pos = bbox.get('x1', 0) + 10 
+    y_pos = bbox.get('y0', 0)
+
+    popup_style = {
+        'position': 'fixed',
+        'zIndex': 10000,
+        'backgroundColor': '#ffffff',
+        'border': '2px solid #EDAE49',
+        'borderRadius': '10px',
+        'padding': '16px',
+        'boxShadow': '0 8px 24px rgba(90, 42, 145, 0.4)',
+        'display': 'block',
+        'width': '280px',
+        'left': f"{x_pos}px",
+        'top': f"{y_pos}px"
+    }
+
+    return selected_junction, current_color, popup_style
+
+
+@app.callback(
+    dash.dependencies.Output('junction-id-display', 'children'),
+    [dash.dependencies.Input('selected-junction-info', 'data')],
+    prevent_initial_call=True
+)
+def update_junction_id_display(selected_junction):
+    """
+    Update the junction ID display in the popup.
+    """
+    if not selected_junction or 'id' not in selected_junction:
+        return ''
+
+    junction_id = selected_junction['id']
+    return junction_id
+
+
+@app.callback(
+    [dash.dependencies.Output('individual-junction-colors', 'data'),
+     dash.dependencies.Output('junction-color-picker-popup', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('junction-color-apply-btn', 'n_clicks'),
+     dash.dependencies.Input('junction-color-reset-btn', 'n_clicks'),
+     dash.dependencies.Input('junction-color-store', 'data')],
+    [dash.dependencies.State('selected-junction-info', 'data'),
+     dash.dependencies.State('junction-individual-color-picker', 'value'),
+     dash.dependencies.State('individual-junction-colors', 'data')],
+    prevent_initial_call=True
+)
+def manage_individual_junction_colors(apply_clicks, reset_clicks, global_color,
+                                      selected_junction, color_value, individual_colors):
+    """
+    Manage individual junction colors: apply custom colors, reset to global,
+    or clear all when global color changes.
+    """
+    individual_colors = individual_colors or {}
+    triggered_id = callback_context.triggered_id if callback_context.triggered else None
+    hidden_style = {
+        'position': 'fixed',
+        'zIndex': 10000,
+        'backgroundColor': '#ffffff',
+        'border': '2px solid #EDAE49',
+        'borderRadius': '10px',
+        'padding': '16px',
+        'boxShadow': '0 8px 24px rgba(90, 42, 145, 0.4)',
+        'display': 'none',
+        'width': '280px'
+    }
+
+    if triggered_id == 'junction-color-apply-btn':
+        if selected_junction and 'id' in selected_junction:
+            if color_value and 'hex' in color_value:
+                individual_colors[selected_junction['id']] = color_value['hex']
+            return individual_colors, hidden_style
+
+    elif triggered_id == 'junction-color-reset-btn':
+        if selected_junction and 'id' in selected_junction:
+            individual_colors.pop(selected_junction['id'], None)
+            return individual_colors, hidden_style
+
+    elif triggered_id == 'junction-color-store':
+        return {}, hidden_style
+
+    raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('atse-map', 'clickData'),
+    [dash.dependencies.Input('junction-color-apply-btn', 'n_clicks'),
+     dash.dependencies.Input('junction-color-reset-btn', 'n_clicks')],
+    prevent_initial_call=True
+)
+def reset_click_data(apply_clicks, reset_clicks):
+    """
+    Reset clickData after color operations to allow re-clicking the same junction.
+    """
+    return None
+
+
+#######################################################################
 # LOADING SCREEN PROGRESS BAR CALLBACKS
 #######################################################################
 @app.callback(
@@ -1299,16 +2045,16 @@ def update_junction_color_store(color_value):
 def update_loading_progress(progress_intervals, loading_complete):
     """
     Updates white loading progress circle for loading screen with steady time-based progression.
-    Notes: 
-    - We are assuming it takes ~5.65 seconds to load the initial data based on testing
-    - Currently using 50ms interval updates, meaning 113 steps to reach 100% (~0.885% per timestep)
+    (with cache actual load time is ~50ms, without cache actual load time is 1-2 seconds)
     """
     if loading_complete:
         return 100, True
-    
-    new_progress = min(progress_intervals * 0.885, 100)
+
+    progress_rate = 1.667
+
+    new_progress = min(progress_intervals * progress_rate, 100)
     disable_interval = (new_progress >= 100)
-    
+
     return new_progress, disable_interval
 
 
@@ -1317,55 +2063,68 @@ def update_loading_progress(progress_intervals, loading_complete):
     [dash.dependencies.Input('loading-progress-store', 'data')]
 )
 def update_progress_bar(progress):
-    """Updates loading screen circular progress bar based on 
+    """Updates loading screen circular progress bar based on
     timesteps defined in update_loading_progress() callback"""
-    radius = 1.5 
-    theta = np.linspace(0, 2 * np.pi, 100)
+    radius = 1.5
+
+    fig = go.Figure()
+
+    theta = np.linspace(0, 2 * np.pi, 200)
     x_circle = radius * np.cos(theta)
     y_circle = radius * np.sin(theta)
-    
-    # Progress arc (clockwise)
-    progress_theta = np.linspace(-np.pi/2, -np.pi/2 + 2 * np.pi * (progress / 100), max(int(progress), 2))
-    if len(progress_theta) > 0:
-        x_progress = radius * np.cos(progress_theta)
-        y_progress = radius * np.sin(progress_theta)
-    else:
-        x_progress = []
-        y_progress = []
-    
-    fig = go.Figure()
+
     fig.add_trace(go.Scatter(
         x=x_circle, y=y_circle,
         mode='lines',
-        line=dict(color='rgba(255,255,255,0.5)', width=8),
+        line=dict(color='rgba(255,255,255,0.1)', width=4), 
         showlegend=False,
         hoverinfo='none'
     ))
-    
-    if len(x_progress) > 0:
+
+    x_progress = []
+    y_progress = []
+
+    # Only render progress arc if progress is greater than 1%
+    if progress > 1.0:
+        num_points = max(int(progress * 1.5), 5)  
+        progress_theta = np.linspace(-np.pi/2, -np.pi/2 + 2 * np.pi * (progress / 100), num_points)
+        x_progress = radius * np.cos(progress_theta)
+        y_progress = radius * np.sin(progress_theta)
+
+    if len(x_progress) > 0 and progress > 1.0:
         fig.add_trace(go.Scatter(
             x=x_progress, y=y_progress,
             mode='lines',
             line=dict(
-                color='rgba(255,255,255,1.0)', 
+                color='rgba(255,255,255,0.15)',
+                width=32
+            ),
+            showlegend=False,
+            hoverinfo='none'
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=x_progress, y=y_progress,
+            mode='lines',
+            line=dict(
+                color='rgba(255,255,255,0.3)',
+                width=20
+            ),
+            showlegend=False,
+            hoverinfo='none'
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=x_progress, y=y_progress,
+            mode='lines',
+            line=dict(
+                color='rgba(255,255,255,1.0)',
                 width=10
             ),
             showlegend=False,
             hoverinfo='none'
         ))
-        
-        # Glow effect using slightly larger, more transparent line around original
-        fig.add_trace(go.Scatter(
-            x=x_progress, y=y_progress,
-            mode='lines',
-            line=dict(
-                color='rgba(255,255,255,0.4)', 
-                width=16
-            ),
-            showlegend=False,
-            hoverinfo='none'
-        ))
-    
+
     fig.update_layout(
         showlegend=False,
         paper_bgcolor='rgba(0,0,0,0)',
@@ -1382,9 +2141,10 @@ def update_progress_bar(progress):
             'range': [-2.0, 2.0]
         },
         width=450,
-        height=450
+        height=450,
+        hovermode=False
     )
-    
+
     return fig
 
 #######################################################################
@@ -1444,7 +2204,7 @@ def validate_right_table_filters(current_filter_query):
         return {'display': 'none'}, [], {'valid': True, 'errors': {}, 'query': current_filter_query}
 
 #######################################################################
-# INITIAL LOADING SCREEN CALLBACK
+# INITIAL LOADING SCREEN CALLBACKS
 #######################################################################
 @app.callback(
     [dash.dependencies.Output('loading-overlay', 'className'),
@@ -1459,14 +2219,15 @@ def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_co
     """Hide the initial loading screen with a 2-second delay after initial data has loaded"""
     if loading_complete:
         return 'loading-overlay hidden', True, True
-    
+
     data_loaded = bool(isoform_data and junction_data)
     if data_loaded and timer_intervals == 0:
-        return 'loading-overlay', False, False 
-    
+        return 'loading-overlay', False, False
+
+    # CRUCIAL: moves position of loading overlay to back to prevent interaction issues with master tables once app layout loaded
     if data_loaded and timer_intervals > 0:
         return 'loading-overlay hidden', True, True
-    
+
     # Data not loaded yet so keep showing loading screen
     return 'loading-overlay', False, True
 
@@ -1604,29 +2365,41 @@ def update_button_states(left_filter, right_filter):
     [dash.dependencies.Output('gene-search-dropdown', 'options'),
      dash.dependencies.Output('gene-search-dropdown', 'value')],
     [dash.dependencies.Input('gene-search-dropdown', 'search_value')],
-    [dash.dependencies.State('gene-search-dropdown', 'value')]
+    [dash.dependencies.State('gene-search-dropdown', 'value'),
+     dash.dependencies.State('all-gene-options-store', 'data')]
 )
-def update_gene_options(search_value, current_value):
-    """Update gene options while preserving current selection"""
-    
+def update_gene_options(search_value, current_value, all_gene_options):
+    """Update gene options using client-side filtering from cached data"""
+    # If no cached options available, fall back to database query (shouldn't happen)
+    if not all_gene_options:
+        all_gene_options = get_all_gene_options(db_path)
+
     if not search_value:
-        options = get_gene_options(db_path, limit=5)
-        a1bg_option = {'label': 'A1BG-AS1', 'value': 'A1BG-AS1'}
+        options = all_gene_options[:10]
+        a1bg_option = {'label': 'A1BG-AS1', 'value': 'A1BG-AS1', 'search': 'a1bg-as1'}
         if not any(opt['value'] == 'A1BG-AS1' for opt in options):
             options.insert(0, a1bg_option)
     else:
-        options = get_gene_options(db_path, search_term=search_value, limit=10)
-    
+        # Client-side filtering using the pre-computed search string
+        search_lower = search_value.lower()
+        filtered = [opt for opt in all_gene_options if search_lower in opt.get('search', '')]
+        options = filtered[:50]
+
+    # Handle current value preservation
     if current_value is None:
         return options, 'A1BG-AS1'
-    
+
     option_values = [opt['value'] for opt in options]
+    
     if current_value in option_values:
         return options, current_value
+    
     else:
-        current_options = get_gene_options(db_path, search_term=current_value, limit=1)
-        if current_options:
-            options = current_options + [opt for opt in options if opt['value'] != current_value]
+        # Find the current value in all options and add it to the list
+        current_option = next((opt for opt in all_gene_options if opt['value'] == current_value), None)
+        if current_option:
+            options = [current_option] + [opt for opt in options if opt['value'] != current_value]
+
         return options, current_value
 
 
@@ -2027,7 +2800,8 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
 # HEATMAP PROCESSING CALLBACKS
 ######################################################################
 @app.callback(
-    dash.dependencies.Output('heatmap2', 'figure'),
+    [dash.dependencies.Output('heatmap2', 'figure'),
+     dash.dependencies.Output('heatmap2', 'config')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
@@ -2035,11 +2809,12 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
      dash.dependencies.Input('clustergram-height-slider', 'value'),
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
-     dash.dependencies.Input('filtered-isoform-store', 'data')]
+     dash.dependencies.Input('filtered-isoform-store', 'data'),
+     dash.dependencies.Input('gridlines-toggle', 'value')]
 )
 def update_junction_clustergram(selected_gene, colorscale,
                                 filtered_junction_ids, show_celltype_labels, clustergram_height,
-                                distance_metric, linkage_method, filtered_isoform_ids):
+                                distance_metric, linkage_method, filtered_isoform_ids, show_gridlines):
     """Update junction visualization based on gene selection and filtering"""
 
     if selected_gene:
@@ -2068,17 +2843,40 @@ def update_junction_clustergram(selected_gene, colorscale,
                                              colorscale=colorscale,
                                              show_celltype_labels=show_celltype_labels,
                                              distance_metric=distance_metric,
-                                             linkage_method=linkage_method)
+                                             linkage_method=linkage_method,
+                                             show_gridlines=show_gridlines)
             fig.update_layout(
                 autosize=True,
                 width=None,
                 transition_duration=200
             )
-            return fig
+            default_config = {
+                'responsive': True,
+                'displayModeBar': True,
+                'scrollZoom': False,
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'toImageButtonOptions': {
+                    'format': 'svg',
+                    'filename': 'isoformgazer_short_read_clustergram'
+                }
+            }
+            return fig, default_config
+        
         except Exception as e:
             print(f"Error creating summary clustergram: {e}")
-            return create_empty_clustergram_message("Error loading summary data")
-    
+            empty_fig = create_empty_clustergram_message("Error loading summary data")
+            default_config = {
+                'responsive': True,
+                'displayModeBar': True,
+                'scrollZoom': False,
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'toImageButtonOptions': {
+                    'format': 'svg',
+                    'filename': 'isoformgazer_short_read_clustergram'
+                }
+            }
+            return empty_fig, default_config
+
     try:
         fig = create_gene_clustergram(
             db_path,
@@ -2088,22 +2886,47 @@ def update_junction_clustergram(selected_gene, colorscale,
             filtered_junction_ids=filtered_junction_ids,
             show_celltype_labels=show_celltype_labels,
             distance_metric=distance_metric,
-            linkage_method=linkage_method
+            linkage_method=linkage_method,
+            show_gridlines=show_gridlines
         )
         fig.update_layout(
             autosize=True,
             width=None,
             transition_duration=200
         )
-        return fig
-    
+        # Create config with gene name in filename
+        gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+        config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': f'{gene_clean}_isoformgazer_short_read_clustergram'
+            }
+        }
+        return fig, config
+
     except Exception as e:
         print(f"Error creating gene clustergram: {e}")
-        return create_empty_clustergram_message(f"Error loading data for {selected_gene}")
+        empty_fig = create_empty_clustergram_message(f"Error loading data for {selected_gene}")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': 'isoformgazer_short_read_clustergram'
+            }
+        }
+        return empty_fig, default_config
     
 
 @app.callback(
-    dash.dependencies.Output('heatmap1', 'figure'),
+    [dash.dependencies.Output('heatmap1', 'figure'),
+     dash.dependencies.Output('heatmap1', 'config')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('isoform-data-type-switch', 'value'),
@@ -2113,12 +2936,37 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('clustergram-height-slider', 'value'),
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
-     dash.dependencies.Input('filtered-junction-store', 'data')]
+     dash.dependencies.Input('filtered-junction-store', 'data'),
+     dash.dependencies.Input('gridlines-toggle', 'value')]
 )
-def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
+def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
                           show_labels, collapse_mode, filtered_transcript_ids,
-                          clustergram_height, distance_metric, linkage_method, filtered_junction_ids):
+                          clustergram_height, distance_metric, linkage_method, filtered_junction_ids,
+                          show_gridlines):
     """Update isoform clustergram with unified height based on both isoform and junction data"""
+    # Return empty figure if no gene selected
+    if not selected_gene:
+        empty_fig = go.Figure()
+        empty_fig.update_layout(
+            title={'text': 'Select a gene to view isoform expression data', 'font': {'size': 14}},
+            plot_bgcolor='white',
+            margin=dict(l=40, r=40, t=40, b=40),
+            height=710
+        )
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': 'isoformgazer_long_read_clustergram'
+            }
+        }
+        return empty_fig, default_config
+
+    gridline_color = '#ffffff'
+
     ratio_data = load_expression_data(db_path=db_path,
                                       gene_name=selected_gene,
                                       data_type='ratio')
@@ -2127,9 +2975,15 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
                                     gene_name=selected_gene,
                                     data_type='tpm')
 
-    if use_ratio_data:
+    log_tpm_data = load_expression_data(db_path=db_path,
+                                        gene_name=selected_gene,
+                                        data_type='log_tpm')
+
+    if data_type_selection == 'ratio':
         data_type = "Ratio"
-    else:
+    elif data_type_selection == 'log_tpm':
+        data_type = "Log TPM"
+    else: 
         data_type = "TPM"
 
     if selected_gene:
@@ -2159,15 +3013,20 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
 
         filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
 
-        filtered_ratio_data = ratio_data.copy()
-        filtered_tpm_data = tpm_data.copy()
+        if filtered_ids:
+            # Filter while preserving the sorted order from the database
+            filtered_ratio_data = ratio_data[ratio_data['id'].isin(filtered_ids)].copy()
+            filtered_tpm_data = tpm_data[tpm_data['id'].isin(filtered_ids)].copy()
+            filtered_log_tpm_data = log_tpm_data[log_tpm_data['id'].isin(filtered_ids)].copy()
+        else:
+            filtered_ratio_data = ratio_data.copy()
+            filtered_tpm_data = tpm_data.copy()
+            filtered_log_tpm_data = log_tpm_data.copy()
 
-        filtered_ratio_data = filtered_ratio_data[filtered_ratio_data['id'].isin(filtered_ids)] if filtered_ids else filtered_ratio_data
-        filtered_tpm_data = filtered_tpm_data[filtered_tpm_data['id'].isin(filtered_ids)] if filtered_ids else filtered_tpm_data
-        
         fig = create_isoform_expression_clustergram(
             tpm_data=filtered_tpm_data,
             ratio_data=filtered_ratio_data,
+            log_tpm_data=filtered_log_tpm_data,
             gene_name=selected_gene,
             height=heatmap_height,
             colorscale=colorscale,
@@ -2175,25 +3034,52 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
             show_labels=show_labels,
             collapse_mode=collapse_mode,
             distance_metric=distance_metric,
-            linkage_method=linkage_method
+            linkage_method=linkage_method,
+            show_gridlines=show_gridlines,
+            gridline_color=gridline_color,
+            db_path=db_path
         )
         fig.update_layout(
             autosize=True,
             width=None
         )
 
-        return fig
-    
+        gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+        config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': f'{gene_clean}_isoformgazer_long_read_clustergram'
+            }
+        }
+        return fig, config
+
     except Exception as e:
         print(f"Error creating isoform clustergram: {e}")
-        return create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
+        traceback.print_exc()
+        empty_fig = create_empty_isoform_message(f"Error loading {data_type.lower()} data for {selected_gene}")
+        error_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': 'isoformgazer_long_read_clustergram'
+            }
+        }
+        return empty_fig, error_config
 
 
 ######################################################################
 # STRUCTURE-LEVEL VISUALIZATIONS CALLBACKS
 ######################################################################
 @app.callback(
-    dash.dependencies.Output('atse-map', 'figure'),
+    [dash.dependencies.Output('atse-map', 'figure'),
+     dash.dependencies.Output('atse-map', 'config')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
@@ -2201,9 +3087,20 @@ def update_isoform_heatmap(selected_gene, colorscale, use_ratio_data,
      dash.dependencies.Input('exon-color-store', 'data'),
      dash.dependencies.Input('junction-color-store', 'data'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('left-table-validation-store', 'data')]
+     dash.dependencies.Input('left-table-validation-store', 'data'),
+     dash.dependencies.Input('color-junctions-by-psi-toggle', 'value'),
+     dash.dependencies.Input('color-by-abundance-toggle', 'value'),
+     dash.dependencies.Input('structure-plot-colorscale-dropdown', 'value'),
+     dash.dependencies.Input('abundance-color-type-radio', 'value'),
+     dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
+     dash.dependencies.Input('organ-abundance-dropdown', 'value'),
+     dash.dependencies.Input('individual-junction-colors', 'data')]
 )
-def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids, plot_height, exon_color, junction_color, isoform_filter_query, validation_data):
+def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids,
+                              plot_height, exon_color, junction_color, isoform_filter_query,
+                              validation_data, color_junctions_by_psi, color_by_abundance,
+                              structure_colorscale, abundance_type, tissue_name, organ_name,
+                              individual_junction_colors):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -2213,30 +3110,64 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
     actual_filtered_transcript_ids = filtered_transcript_ids if has_isoform_filter else None
 
     if not selected_gene:
-        return create_empty_atse_message("Select a gene to view splice junctions and exons")
-    
+        empty_fig = create_empty_atse_message("Select a gene to view splice junctions and exons")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_plot'}
+        }
+        return empty_fig, default_config
+
     try:
         gene_data = process_gene_atse_data(
-            selected_gene, 
+            selected_gene,
             db_path,
             filtered_junction_ids=filtered_junction_ids
         )
 
         show_labels = False
-        
+
         fig = create_junction_exon_visualization(
-            gene_data, 
+            gene_data,
             height=plot_height,
             show_y_labels=show_labels,
             exon_color=exon_color,
             junction_color=junction_color,
-            filtered_transcript_ids=actual_filtered_transcript_ids
+            filtered_transcript_ids=actual_filtered_transcript_ids,
+            color_by_abundance=color_by_abundance,
+            color_junctions_by_psi=color_junctions_by_psi,
+            db_path=db_path,
+            colorscale=structure_colorscale,
+            abundance_type=abundance_type,
+            tissue_name=tissue_name,
+            organ_name=organ_name,
+            individual_junction_colors=individual_junction_colors
         )
-        return fig
-    
+
+        # Create config with gene name in filename
+        gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+        config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': f'{gene_clean}_isoformgazer_structure_plot'
+            }
+        }
+        return fig, config
+
     except Exception as e:
         print(f"Error creating ATSE visualization: {e}")
-        return create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
+        empty_fig = create_empty_atse_message(f"Error loading ATSE data for {selected_gene}: {str(e)}")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_plot'}
+        }
+        return empty_fig, default_config
 
 
 def empty_fig(height=200):
@@ -2281,16 +3212,22 @@ def toggle_top_panel_plots(hide_junctions):
 
 
 @app.callback(
-    dash.dependencies.Output('top-barplot', 'figure'),
+    [dash.dependencies.Output('top-barplot', 'figure'),
+     dash.dependencies.Output('top-barplot', 'config')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('bar-height-slider', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('exon-color-store', 'data'),
      dash.dependencies.Input('hide-junctions-toggle', 'value'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('left-table-validation-store', 'data')]
+     dash.dependencies.Input('left-table-validation-store', 'data'),
+     dash.dependencies.Input('color-by-abundance-toggle', 'value'),
+     dash.dependencies.Input('colorscale-dropdown', 'value'),
+     dash.dependencies.Input('abundance-color-type-radio', 'value'),
+     dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
+     dash.dependencies.Input('organ-abundance-dropdown', 'value')]
 )
-def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data):
+def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name):
     """Update transcript structure plot in top panel when toggle is activated"""
     # Only update if junctions are hidden (transcript plot should be shown)
     if not hide_junctions:
@@ -2301,7 +3238,14 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
         raise PreventUpdate
 
     if not selected_gene:
-        return create_empty_isoform_message("Select a gene to view transcript structures")
+        empty_fig = create_empty_isoform_message("Select a gene to view transcript structures")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_structure_plot'}
+        }
+        return empty_fig, default_config
 
     try:
         filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
@@ -2319,13 +3263,37 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
             gene_name=selected_gene,
             height=height_to_use,
             show_y_labels=True,
-            exon_color=exon_color
+            exon_color=exon_color,
+            color_by_abundance=color_by_abundance,
+            colorscale=colorscale,
+            abundance_type=abundance_type,
+            tissue_name=tissue_name,
+            organ_name=organ_name
         )
-        return fig
+
+        # Create config with gene name in filename
+        gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+        config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {
+                'format': 'svg',
+                'filename': f'{gene_clean}_isoformgazer_structure_plot'
+            }
+        }
+        return fig, config
 
     except Exception as e:
         print(f"Error creating top transcript plot: {e}")
-        return create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
+        empty_fig = create_empty_isoform_message(f"Error loading transcript data for {selected_gene}")
+        default_config = {
+            'responsive': True,
+            'displayModeBar': True,
+            'scrollZoom': False,
+            'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_structure_plot'}
+        }
+        return empty_fig, default_config
 
 
 @app.callback(
@@ -2404,7 +3372,6 @@ def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_jun
         transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
 
         if hide_junctions:
-            from isoform_utils import calculate_dynamic_structure_plot_height
             num_transcripts = len(transcript_data['id'].unique()) if not transcript_data.empty else 0
             calculated_height = calculate_dynamic_structure_plot_height(num_transcripts)
         else:
@@ -2488,92 +3455,6 @@ def update_heatmap2_loading_message(selected_gene, filtered_ids):
 ###################################################################
 # ISOFORM HASH LOOKUP CALLBACKS
 ###################################################################
-
-@app.callback(
-    [dash.dependencies.Output('second-input-label', 'children'),
-     dash.dependencies.Output('second-coordinate-input', 'placeholder')],
-    [dash.dependencies.Input('coordinate-input-mode', 'value')]
-)
-def update_second_input_labels(input_mode):
-    """Update the second input field label and placeholder based on selected mode"""
-    if input_mode == 'start_end':
-        return 'Exon End Positions (comma-separated):', 'e.g., 1200,2300,3400'
-    else:  # start_block
-        return 'Block Sizes (comma-separated):', 'e.g., 200,300,400'
-
-
-@app.callback(
-    dash.dependencies.Output('hash-result', 'children'),
-    [dash.dependencies.Input('calculate-hash-btn', 'n_clicks')],
-    [dash.dependencies.State('coordinate-input-mode', 'value'),
-     dash.dependencies.State('exon-starts-input', 'value'),
-     dash.dependencies.State('second-coordinate-input', 'value')]
-)
-def calculate_hash_from_coordinates(n_clicks, input_mode, starts_input, second_input):
-    """Calculate hash ID from user-entered coordinates"""
-    if not n_clicks or not starts_input or not second_input:
-        return html.Div()
-
-    try:
-        # Parse comma-separated inputs
-        tstarts = [int(x.strip()) for x in starts_input.split(',') if x.strip()]
-        second_values = [int(x.strip()) for x in second_input.split(',') if x.strip()]
-
-        if len(tstarts) != len(second_values):
-            error_msg = ("Error: Number of start positions must match number of " +
-                        ("end positions" if input_mode == 'start_end' else "block sizes"))
-            return html.Div([
-                html.P(error_msg, className='error-message')
-            ])
-
-        if len(tstarts) < 2:
-            return html.Div([
-                html.P("Error: At least 2 exons required for hash calculation",
-                       className='error-message')
-            ])
-
-        # Convert end positions to block sizes if needed
-        if input_mode == 'start_end':
-            # second_values are end positions, convert to block sizes
-            blocksizes = [end - start for start, end in zip(tstarts, second_values)]
-            # Validate that all block sizes are positive
-            if any(size <= 0 for size in blocksizes):
-                return html.Div([
-                    html.P("Error: End positions must be greater than start positions",
-                           className='error-message error-message-spaced')
-                ])
-        else:
-            # second_values are already block sizes
-            blocksizes = second_values
-
-        hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
-
-        return html.Div([
-            html.Div("Isoform Hash ID:", className='hash-result-label'),
-            html.Div(className='hash-output', children=[
-                html.Div(className='hash-result-with-copy', children=[
-                    html.Div(hash_id, className='hash-result-box', id='hash-result-value'),
-                    dcc.Clipboard(
-                        target_id="hash-result-value",
-                        title="Copy hash ID to clipboard",
-                        className='hash-copy-button'
-                    )
-                ])
-            ])
-        ])
-
-    except ValueError as e:
-        return html.Div([
-            html.P(f"Error: Invalid input - {str(e)}",
-                   className='error-message')
-        ])
-    except Exception as e:
-        return html.Div([
-            html.P(f"Error calculating hash: {str(e)}",
-                   className='error-message')
-        ])
-
-
 @app.callback(
     [dash.dependencies.Output('gtf-upload-status', 'children'),
      dash.dependencies.Output('gtf-download-section', 'style'),
@@ -2587,11 +3468,14 @@ def handle_gtf_upload(contents, filename):
         return html.Div("No file uploaded", className='app-controls-desc'), {'display': 'none'}, []
 
     try:
-        content_type, content_string = contents.split(',')
+        _, content_string = contents.split(',')
         decoded = base64.b64decode(content_string)
         gtf_content = decoded.decode('utf-8')
 
-        hash_results = parse_gtf_and_calculate_hashes(gtf_content)
+        parse_results = parse_gtf_and_calculate_hashes(gtf_content)
+        hash_results = parse_results['results']
+        merged_transcripts = parse_results['merged_transcripts']
+        has_merges = parse_results['has_merges']
 
         if not hash_results:
             return (
@@ -2607,15 +3491,35 @@ def handle_gtf_upload(contents, filename):
         annotated_gtf = generate_annotated_gtf(gtf_content)
         encoded_gtf = base64.b64encode(annotated_gtf.encode('utf-8')).decode('utf-8')
 
-        upload_status = html.Div([
+        status_children = [
             html.P(f"Loaded '{filename}' successfully.", className='success-message success-message-bold'),
             html.P(f"Number of transcripts processed: {len(hash_results)}")
-        ])
+        ]
+
+        # Show warning if transcripts were merged
+        if has_merges:
+            merge_info_text = "Transcript Merging Detected: The following transcripts share identical internal splice junction structure and have been assigned the same hash ID, but may differ in TSS/TES:\n\n"
+            for hash_id, transcript_ids in merged_transcripts.items():
+                merge_info_text += f"Hash ID {hash_id}:\n"
+                for tid in transcript_ids:
+                    merge_info_text += f"  • {tid}\n"
+                merge_info_text += "\n"
+
+            status_children.append(
+                html.Div([
+                    html.P("Warning: Transcript Merging Detected", className='warning-message warning-message-bold'),
+                    html.P(merge_info_text, className='warning-message', style={'white-space': 'pre-wrap', 'font-family': 'monospace', 'font-size': '12px'})
+                ])
+            )
+
+        upload_status = html.Div(status_children)
 
         combined_data = {
             'hash_results': hash_results,
             'annotated_gtf': encoded_gtf,
-            'original_filename': filename
+            'original_filename': filename,
+            'merged_transcripts': merged_transcripts,
+            'has_merges': has_merges
         }
 
         return upload_status, {'display': 'block'}, combined_data
@@ -2637,7 +3541,7 @@ def handle_gtf_upload(contents, filename):
     [dash.dependencies.State('gtf-hash-results-store', 'data')]
 )
 def download_hash_results(download_clicks, stored_data):
-    """Handle download of hash results"""
+    """Handle download of hash results as TSV with gene_id, transcript_id, gencode_transcript_id, hash_id"""
     if not download_clicks or not stored_data:
         return dash.no_update
 
@@ -2645,17 +3549,41 @@ def download_hash_results(download_clicks, stored_data):
         if isinstance(stored_data, dict) and 'hash_results' in stored_data:
             hash_results = stored_data['hash_results']
         else:
-            hash_results = stored_data  # backwards compatibility
+            hash_results = stored_data
 
-        lines = ["transcript_id\tgene_id\thash_id\texon_count"]
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Results TSV format: gene_id, transcript_id, gencode_transcript_id, hash_id
+        lines = ["gene_id\ttranscript_id\tgencode_transcript_id\thash_id"]
+
         for result in hash_results:
-            lines.append(f"{result['transcript_id']}\t{result['gene_id']}\t{result['hash_id']}\t{result['exon_count']}")
+            gene_id = result['gene_id']
+            transcript_id = result['transcript_id']
+            hash_id = result['hash_id']
 
+            # Look up gencode_transcript_id from gencode_gtf table...
+            # Note: this is version-agnostic matching! (e.g., ENSG00000223972.5 matches ENSG00000223972.6)
+            gene_base = gene_id.split('.')[0] if '.' in gene_id else gene_id
+
+            cursor.execute("""
+                SELECT DISTINCT transcript_id FROM gencode_gtf
+                WHERE gene_id LIKE ?
+                ORDER BY transcript_id
+                LIMIT 1
+            """, (f"{gene_base}.%",))
+
+            gencode_result = cursor.fetchone()
+            gencode_transcript_id = gencode_result[0] if gencode_result else "N/A"
+
+            lines.append(f"{gene_id}\t{transcript_id}\t{gencode_transcript_id}\t{hash_id}")
+
+        conn.close()
         download_content = "\n".join(lines)
 
         return dict(content=download_content, filename="isoform_hashes.tsv")
 
-    except Exception as e:
+    except Exception:
         return dash.no_update
 
 
@@ -2684,6 +3612,296 @@ def download_annotated_gtf(download_clicks, stored_data):
 
     except Exception as e:
         return dash.no_update
+
+
+######################################################################
+# MASTER TABLE CSV DOWNLOAD CALLBACKS
+######################################################################
+@app.callback(
+    dash.dependencies.Output('download-left-table', 'data'),
+    dash.dependencies.Input('download-left-table-button', 'n_clicks'),
+    dash.dependencies.State('isoform-full-data-store', 'data'),
+    dash.dependencies.State('gene-search-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def download_isoform_table(n_clicks, full_data, selected_gene):
+    """Download current isoform master table view as CSV"""
+    if not n_clicks or not full_data or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        df = pd.DataFrame(full_data)
+        filename = f"{selected_gene}_isoforms_master_table.csv"
+        return dcc.send_data_frame(df.to_csv, filename, index=False)
+    
+    except Exception as e:
+        print(f"Error downloading isoform table: {e}")
+        raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('download-right-table', 'data'),
+    dash.dependencies.Input('download-right-table-button', 'n_clicks'),
+    dash.dependencies.State('junction-full-data-store', 'data'),
+    dash.dependencies.State('gene-search-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def download_junction_table(n_clicks, full_data, selected_gene):
+    """Download current junction master table view as CSV"""
+    if not n_clicks or not full_data or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        df = pd.DataFrame(full_data)
+        filename = f"{selected_gene}_junctions_master_table.csv"
+        return dcc.send_data_frame(df.to_csv, filename, index=False)
+
+    except Exception as e:
+        print(f"Error downloading junction table: {e}")
+        raise PreventUpdate
+
+
+######################################################################
+# FIGURE EXPORT OPTIONS CALLBACKS
+######################################################################
+def convert_dimensions(width, height, from_unit, to_unit='px', dpi=96):
+    """
+    Convert dimensions between pixels and inches.
+    DPI is assumed to be 96 for screen displays (TBD: better way to 
+    fetch this automatically for each user's screen?)
+    """
+    if from_unit == to_unit:
+        return width, height
+
+    if from_unit == 'px' and to_unit == 'in':
+        return width / dpi, height / dpi
+    
+    elif from_unit == 'in' and to_unit == 'px':
+        return width * dpi, height * dpi
+
+    return width, height
+
+
+@app.callback(
+    [dash.dependencies.Output('export-status-message', 'style'),
+     dash.dependencies.Output('export-status-timer', 'disabled')],
+    [dash.dependencies.Input('export-unified-btn', 'n_clicks'),
+     dash.dependencies.Input('export-status-timer', 'n_intervals')],
+    [dash.dependencies.State('export-width-value', 'value'),
+     dash.dependencies.State('export-height-value', 'value'),
+     dash.dependencies.State('gene-search-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
+    """Manage download status message display and timer"""
+    if not callback_context.triggered:
+        raise PreventUpdate
+
+    triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
+
+    if triggered_id == 'export-unified-btn':
+        if not n_clicks or not width or not height or not selected_gene:
+            raise PreventUpdate
+
+        return (
+            {
+                'marginTop': '15px',
+                'fontSize': '12px',
+                'color': '#301279',
+                'fontWeight': '600',
+                'display': 'block'
+            },
+            False
+        )
+
+    elif triggered_id == 'export-status-timer':
+        if not n_intervals:
+            raise PreventUpdate
+
+        return (
+            {
+                'marginTop': '15px',
+                'fontSize': '12px',
+                'color': '#301279',
+                'fontWeight': '600',
+                'display': 'none'
+            },
+            True
+        )
+
+
+@app.callback(
+    [dash.dependencies.Output("download-structure-plot", "data"),
+     dash.dependencies.Output("download-isoform-clustergram", "data"),
+     dash.dependencies.Output("download-junction-clustergram", "data")],
+    dash.dependencies.Input('export-unified-btn', 'n_clicks'),
+    [dash.dependencies.State('export-plot-selection', 'value'),
+     dash.dependencies.State('heatmap1', 'figure'),
+     dash.dependencies.State('heatmap2', 'figure'),
+     dash.dependencies.State('export-width-value', 'value'),
+     dash.dependencies.State('export-height-value', 'value'),
+     dash.dependencies.State('export-unit-toggle', 'value'),
+     dash.dependencies.State('export-title-legend-font-size', 'value'),
+     dash.dependencies.State('export-axis-labels-font-size', 'value'),
+     dash.dependencies.State('gene-search-dropdown', 'value'),
+     dash.dependencies.State('filtered-isoform-store', 'data'),
+     dash.dependencies.State('exon-color-store', 'data'),
+     dash.dependencies.State('color-by-abundance-toggle', 'value'),
+     dash.dependencies.State('structure-plot-colorscale-dropdown', 'value'),
+     dash.dependencies.State('abundance-color-type-radio', 'value'),
+     dash.dependencies.State('tissue-abundance-dropdown', 'value'),
+     dash.dependencies.State('organ-abundance-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, structure_colorscale, abundance_type, tissue_name, organ_name):
+    """Export selected plot with custom dimensions as SVG"""
+    if not n_clicks or not width or not height or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        if unit == 'in':
+            width_px, height_px = convert_dimensions(width, height, 'in', 'px')
+        else:
+            width_px, height_px = int(width), int(height)
+
+        download_data = None
+        filename = ""
+
+        if plot_selection == 'structure':
+            filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+
+            fig = create_transcript_structure_plot(
+                db_path,
+                transcript_data,
+                gene_name=selected_gene,
+                height=None,
+                show_y_labels=True,
+                exon_color=exon_color,
+                color_by_abundance=color_by_abundance,
+                colorscale=structure_colorscale,
+                abundance_type=abundance_type,
+                tissue_name=tissue_name,
+                organ_name=organ_name
+            )
+            filename = f"{selected_gene}_structure_plot.svg"
+
+        elif plot_selection == 'isoform':
+            if not isoform_fig:
+                print("No figure data available for isoform clustergram - please select a gene first")
+                raise PreventUpdate
+            fig = go.Figure(isoform_fig)
+            filename = f"{selected_gene}_isoform_clustergram.svg"
+
+        elif plot_selection == 'junction':
+            if not junction_fig:
+                print("No figure data available for junction clustergram - please select a gene first")
+                raise PreventUpdate
+            fig = go.Figure(junction_fig)
+            filename = f"{selected_gene}_junction_clustergram.svg"
+
+        fig.update_layout(width=int(width_px), height=int(height_px), autosize=False)
+
+        if title_legend_font_size:
+            fig.update_layout(title={'font': {'size': title_legend_font_size}})
+
+        if axis_labels_font_size:
+            fig.update_xaxes(tickfont={'size': axis_labels_font_size})
+            fig.update_yaxes(tickfont={'size': axis_labels_font_size})
+
+        svg_bytes = fig.to_image(format='svg')
+        svg_str = svg_bytes.decode('utf-8')
+
+        download_data = dict(
+            content=svg_str,
+            filename=filename
+        )
+
+        if plot_selection == 'structure':
+            return download_data, None, None
+        
+        elif plot_selection == 'isoform':
+            return None, download_data, None
+        
+        else:
+            return None, None, download_data
+
+    except Exception as e:
+        print(f"Error exporting plot: {e}")
+        traceback.print_exc()
+        raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('abundance-color-options-container', 'style'),
+    dash.dependencies.Input('color-by-abundance-toggle', 'value')
+)
+def toggle_abundance_options(toggle_value):
+    """Show/hide abundance options when toggle is turned on/off"""
+    if toggle_value:
+        return {'display': 'block'}
+
+    else:
+        return {'display': 'none'}
+
+
+@app.callback(
+    dash.dependencies.Output('structure-plot-colorscale-container', 'style'),
+    [dash.dependencies.Input('color-junctions-by-psi-toggle', 'value'),
+     dash.dependencies.Input('color-by-abundance-toggle', 'value')]
+)
+def toggle_structure_plot_colorscale(color_junctions_by_psi, color_by_abundance):
+    """Show/hide structure plot colorscale when either coloring option is enabled"""
+    if color_junctions_by_psi or color_by_abundance:
+        return {'display': 'block'}
+    
+    else:
+        return {'display': 'none'}
+
+
+@app.callback(
+    [dash.dependencies.Output('tissue-abundance-dropdown', 'options'),
+     dash.dependencies.Output('tissue-abundance-dropdown', 'value'),
+     dash.dependencies.Output('tissue-dropdown-container', 'style'),
+     dash.dependencies.Output('organ-abundance-dropdown', 'options'),
+     dash.dependencies.Output('organ-abundance-dropdown', 'value'),
+     dash.dependencies.Output('organ-dropdown-container', 'style')],
+    [dash.dependencies.Input('abundance-color-type-radio', 'value'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')],
+    prevent_initial_call=False
+)
+def update_abundance_dropdowns(color_type, selected_gene):
+    """Update tissue and organ dropdown options and visibility based on selected coloring type"""
+    tissue_options = []
+    tissue_value = None
+    tissue_style = {'display': 'none', 'marginTop': '10px'}
+    organ_options = []
+    organ_value = None
+    organ_style = {'display': 'none', 'marginTop': '10px'}
+
+    if color_type == 'tissue' and selected_gene:
+        try:
+            tissues = get_unique_tissues_for_gene(db_path, selected_gene)
+            if tissues:
+                tissue_options = [{'label': f' {tissue}', 'value': tissue} for tissue in tissues]
+                tissue_value = tissue_options[0]['value'] if tissue_options else None
+                tissue_style = {'display': 'block', 'marginTop': '10px'}
+
+        except Exception as e:
+            traceback.print_exc()
+
+    elif color_type == 'organ' and selected_gene:
+        try:
+            organs = get_unique_organs_for_gene(db_path, selected_gene)
+            if organs:
+                organ_options = [{'label': f' {organ}', 'value': organ} for organ in organs]
+                organ_value = organ_options[0]['value'] if organ_options else None
+                organ_style = {'display': 'block', 'marginTop': '10px'}
+
+        except Exception as e:
+            traceback.print_exc()
+
+    return tissue_options, tissue_value, tissue_style, organ_options, organ_value, organ_style
 
 
 ###################################################################
@@ -2734,4 +3952,4 @@ if __name__ == '__main__':
 
     display_ascii_banner()
 
-    app.run(debug=True, port=8050, use_reloader=False)
+    app.run(debug=False, port=8050, use_reloader=False)

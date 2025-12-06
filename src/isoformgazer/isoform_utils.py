@@ -2,15 +2,20 @@ import os
 import re
 import hashlib
 import sqlite3
+import warnings
+import traceback
 import pandas as pd
 import numpy as np
 import dash_bio
+import matplotlib.pyplot as plt
 import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
-from src.isoformgazer.data_utils import apply_distance_preprocessing
+from src.isoformgazer.data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap
 from src.isoformgazer.performance_utils import cached, memory_tracker, plot_optimizer
+# suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
+warnings.filterwarnings('ignore', category=RuntimeWarning, message='Mean of empty slice')
 
 def get_lrs_metadata_replicates() -> List[List[str]]:
     """
@@ -274,17 +279,18 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
         if filtered_ids_int:
             placeholders = ','.join(['?'] * len(filtered_ids_int))
             isoform_query = f"""
-            SELECT id FROM isoforms 
+            SELECT id FROM isoforms
             WHERE gene_id LIKE ? AND id IN ({placeholders})
+            ORDER BY isoform_average_tpm DESC NULLS LAST
             """
             params = [f"{gene_id}%"] + filtered_ids_int
         else:
-            isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ?"
+            isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
             params = [f"{gene_id}%"]
     else:
-        isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ?"
+        isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
         params = [f"{gene_id}%"]
-    
+
     isoform_ids = pd.read_sql_query(isoform_query, conn, params=params)['id'].tolist()
     
     if not isoform_ids:
@@ -374,22 +380,26 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
     if not gene_id:
         return pd.DataFrame()
     
-    if data_type.lower() == 'tpm': 
+    if data_type.lower() == 'tpm':
         table_name = 'tpm_data'
-    else: 
+    elif data_type.lower() == 'log_tpm':
+        table_name = 'log_tpm_data'
+    else:
         table_name = 'ratio_data'
     
     query = f"""
-    SELECT 
+    SELECT
         exp.*,
         psl.trans_id,
-        iso.gene_name
+        iso.gene_name,
+        iso.isoform_average_tpm
     FROM {table_name} exp
     JOIN psl_data psl ON exp.id = psl.id
     JOIN isoforms iso ON exp.id = iso.id
     WHERE iso.gene_name = ?
+    ORDER BY iso.isoform_average_tpm ASC NULLS LAST, psl.trans_id
     """
-    
+
     try:
         df = pd.read_sql_query(query, conn, params=[gene_name])
         df = df.drop(['index'], axis=1)
@@ -397,7 +407,13 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
         numeric_cols = [col for col in df.columns if col not in ['transcript', 'trans_id', 'gene', 'gene_name']]
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-        df[numeric_cols] = df[numeric_cols].fillna(0)
+
+        # For log_tpm data, preserve NaN values. For other data types, fill NaN with 0
+        if data_type.lower() != 'log_tpm':
+            df[numeric_cols] = df[numeric_cols].fillna(0)
+        else:
+            # Log TPM: preserve NaN values
+            nan_count = df[numeric_cols].isna().sum().sum()
 
         return df
     
@@ -407,15 +423,19 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
     
     finally:
         conn.close()
-    
 
-@cached(cache_timeout=600)
-def create_transcript_structure_plot(db_path: str, 
-                                     transcript_data: pd.DataFrame, 
-                                     gene_name: str, 
+
+def create_transcript_structure_plot(db_path: str,
+                                     transcript_data: pd.DataFrame,
+                                     gene_name: str,
                                      height: int = 600,
                                      show_y_labels: bool = False,
-                                     exon_color: str = '#2E86C1') -> go.Figure:
+                                     exon_color: str = '#2E86C1',
+                                     color_by_abundance: bool = False,
+                                     colorscale: str = 'Viridis',
+                                     abundance_type: str = 'average',
+                                     tissue_name: str = None,
+                                     organ_name: str = None) -> go.Figure:
     """Create transcript structure plot showing all transcripts with 50%+ speed improvement"""
     
     if transcript_data.empty:
@@ -425,11 +445,10 @@ def create_transcript_structure_plot(db_path: str,
         #memory_tracker.measure("plot_start")
         
     conn = sqlite3.connect(db_path)
-    metadata_query = """SELECT gene_id, ORF_perplexity FROM isoforms 
+    metadata_query = """SELECT gene_id, ORF_perplexity FROM isoforms
                         WHERE gene_name = ? LIMIT 1"""
     metadata_result = pd.read_sql_query(metadata_query, conn, params=[gene_name])
-    conn.close()
-    
+
     if not metadata_result.empty:
         gene_ensembl_id = metadata_result.iloc[0]['gene_id']
         orf_value = metadata_result.iloc[0]['ORF_perplexity']
@@ -437,23 +456,52 @@ def create_transcript_structure_plot(db_path: str,
     else:
         gene_ensembl_id = "Unknown"
         orf_perplexity = "No data available"
-    
+
+    conn.close()
+
     strand = transcript_data['strand'].iloc[0] if not transcript_data.empty else ""
-    
+
     transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
-    
+    # Get unique transcript IDs in their original order from the database (sorted by isoform_average_tpm DESC)
+    ordered_transcript_ids = transcript_data_opt['id'].drop_duplicates().tolist()
+
     transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
         'trans_id': 'first',
-        'transcript_start': 'min', 
+        'transcript_start': 'min',
         'transcript_end': 'max'
     })
     transcript_summary['transcript_length'] = (
         transcript_summary['transcript_end'] - transcript_summary['transcript_start']
     )
-    
-    transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
+
+    # Reindex transcript_summary to match the original sorted order from database
+    transcript_summary = transcript_summary.set_index('id').loc[ordered_transcript_ids].reset_index()
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
-    
+
+    if color_by_abundance:
+        if abundance_type == 'tissue' and tissue_name:
+            tissue_tpm_dict = get_tissue_tpm_for_isoforms(db_path, gene_name, tissue_name)
+            transcript_summary['abundance_tpm'] = transcript_summary['id'].map(tissue_tpm_dict).fillna(0)
+
+        elif abundance_type == 'organ' and organ_name:
+            organ_tpm_dict = get_organ_tpm_for_isoforms(db_path, gene_name, organ_name)
+            transcript_summary['abundance_tpm'] = transcript_summary['id'].map(organ_tpm_dict).fillna(0)
+
+        else:
+            conn = sqlite3.connect(db_path)
+            try:
+                tpm_query = """
+                SELECT DISTINCT id, isoform_average_tpm
+                FROM isoforms
+                WHERE gene_name = ?
+                """
+                tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
+                transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+                transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
+
+            finally:
+                conn.close()
+
     # Calculate dynamic height if not provided or if using default slider value
     if height is None or height == 600:
         num_transcripts = len(transcript_summary)
@@ -494,31 +542,63 @@ def create_transcript_structure_plot(db_path: str,
     hover_traces_x = []
     hover_traces_y = []
     hover_traces_text = []
-    
+
+    if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
+        tpm_values = transcript_summary['abundance_tpm'].fillna(0)
+        tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
+        cmap = get_matplotlib_colormap(colorscale)
+
     for _, transcript in transcript_summary.iterrows():
         isoform_id = transcript['id']
         trans_id = transcript['trans_id']
         trans_order = transcript['trans_order']
         trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
-        
+
+        if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
+            tpm = transcript.get('abundance_tpm', 0)
+
+            if tpm_max > tpm_min:
+                normalized = (tpm - tpm_min) / (tpm_max - tpm_min)
+            else:
+                # When all values are equal, use 0.0 to show the minimum color on the scale
+                normalized = 0.0
+
+            rgba = cmap(normalized)
+            exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
+
+        else:
+            exon_fill_color = exon_color
+
         for _, exon in trans_exons.iterrows():
             # Batch add shapes (way faster than individual add_shape calls)
             shapes.append({
                 'type': "rect",
                 'x0': exon['exon_start'], 'y0': trans_order - 0.3,
                 'x1': exon['exon_end'], 'y1': trans_order + 0.3,
-                'fillcolor': exon_color,
-                'line': {'color': exon_color, 'width': 1},
+                'fillcolor': exon_fill_color,
+                'line': {'color': exon_fill_color, 'width': 1},
                 'opacity': 0.8
             })
             
             # Batch add hover points
             hover_traces_x.append((exon['exon_start'] + exon['exon_end']) / 2)
             hover_traces_y.append(trans_order)
-            hover_traces_text.append(
-                f"Isoform ID: {isoform_id}<br>Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>"
-                f"Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
-            )
+
+            # Build hover text with optional TPM info
+            hover_text = f"Isoform ID: {isoform_id}<br>Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
+            if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
+                tpm = transcript.get('abundance_tpm', None)
+                if tpm is not None:
+                    if abundance_type == 'tissue' and tissue_name:
+                        hover_text += f"<br>{tissue_name} Tissue TPM: {tpm:.2f}"
+
+                    elif abundance_type == 'organ' and organ_name:
+                        hover_text += f"<br>{organ_name.capitalize()} Organ TPM: {tpm:.2f}"
+
+                    else:
+                        hover_text += f"<br>Average TPM: {tpm:.2f}"
+
+            hover_traces_text.append(hover_text)
     
     fig.update_layout(shapes=shapes)
 
@@ -532,19 +612,79 @@ def create_transcript_structure_plot(db_path: str,
             hovertemplate='%{text}<extra></extra>',
             text=hover_traces_text
         ))
-    
+
+    if color_by_abundance:
+        if colorscale:
+            selected_colorscale = colorscale
+        else:
+            selected_colorscale = 'Viridis'
+
+        if not transcript_summary.empty and 'abundance_tpm' in transcript_summary.columns:
+            tpm_values = transcript_summary['abundance_tpm'].dropna()
+            if not tpm_values.empty:
+                tpm_min, tpm_max = tpm_values.min(), tpm_values.max()
+
+                if abundance_type == 'tissue' and tissue_name:
+                    formatted_tissue = ' '.join(word.capitalize() for word in tissue_name.split())
+                    colorbar_title = f"{formatted_tissue}<br>Tissue TPM"
+
+                elif abundance_type == 'organ' and organ_name:
+                    formatted_organ = ' '.join(word.capitalize() for word in organ_name.split())
+                    colorbar_title = f"{formatted_organ}<br>Organ TPM"
+
+                else:
+                    colorbar_title = "Transcript<br>Average TPM"
+
+                # case where all TPM values are 0 (tpm_min == tpm_max)
+                if tpm_max > tpm_min:
+                    cmin_val = tpm_min
+                    cmax_val = tpm_max
+                else:
+                    # When all values are 0 or the same, need to use a small range for colorbar to still show up...
+                    cmin_val = 0
+                    cmax_val = 1
+
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    marker=dict(
+                        colorscale=selected_colorscale,
+                        cmin=cmin_val,
+                        cmax=cmax_val,
+                        colorbar=dict(
+                            title=dict(text=colorbar_title, font=dict(size=16)),
+                            thickness=20,
+                            len=0.6,
+                            x=1.15,
+                            y=0.78,
+                            tickfont=dict(size=10)
+                        ),
+                        showscale=True,
+                        size=0,
+                        opacity=0
+                    ),
+                    showlegend=False,
+                    hoverinfo='none',
+                    name='TPM Scale'
+                ))
+
     title_text = f"Transcripts for Gene {gene_name} ({gene_ensembl_id})<br>(ORF Perplexity: {orf_perplexity}, Coordinates: {min_start} - {max_end}, Strand: {strand})"
-    
+
+    if color_by_abundance:
+        right_margin = 300
+    else: 
+        right_margin = 200
+
     fig.update_layout(
         title={
             'text': title_text,
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 14}
+            'font': {'size': 18}
         },
         xaxis=dict(
             title="Genomic Position",
-            range=[min_start, max_end + (max_end - min_start) * 0.3],
+            range=[min_start - 1000, max_end + (max_end - min_start) * 0.3 + 1000],
             showgrid=False,
             tickformat=',',
             rangeslider=dict(visible=False, range=[min_start, max_end]),
@@ -561,14 +701,14 @@ def create_transcript_structure_plot(db_path: str,
         ),
         height=height,
         margin=dict(
-            l=100,  
-            r=160,  
-            t=80, 
+            l=100,
+            r=right_margin,
+            t=80,
             b=50
         ),
         hovermode='closest',
         plot_bgcolor='white',
-        autosize=True 
+        autosize=True
     )
     
     for _, transcript in transcript_summary.iterrows():
@@ -579,7 +719,7 @@ def create_transcript_structure_plot(db_path: str,
             showarrow=False,
             xanchor='left',
             yanchor='middle',
-            font=dict(size=10)
+            font=dict(size=12)
         )
     
     return fig
@@ -691,7 +831,8 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 hovertemplate='Tissue: %{y}<br>Category: %{customdata}<extra></extra>',
                 customdata=tissue_categories,
                 colorbar=dict(
-                    title=colorbar_title,   
+                    title=dict(text=colorbar_title, font=dict(size=16)),
+                    tickfont=dict(size=10)
                 )
             ),
             row=1, col=1
@@ -704,7 +845,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 x=transcript_names_abbreviated,
                 colorscale=colorscale,
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
-                colorbar=dict(title=data_type, x=1.02)
+                colorbar=dict(title=dict(text=data_type, font=dict(size=16)), x=1.02, tickfont=dict(size=10))
             ),
             row=1, col=2
         )
@@ -724,7 +865,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 x=transcript_names_abbreviated,
                 colorscale=colorscale,
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
-                colorbar=dict(title=data_type)
+                colorbar=dict(title=dict(text=data_type, font=dict(size=16)), tickfont=dict(size=10))
             )
         )
         
@@ -742,7 +883,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
         
         fig.update_xaxes(
             showticklabels=True,
-            tickangle=45,
+            tickangle=90,
             tickfont=dict(size=8),
             automargin=True,
             tickmode='array',
@@ -794,18 +935,24 @@ def calculate_bottom_margin(show_labels: bool, transcript_names: list) -> int:
 
 def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                                           ratio_data: pd.DataFrame,
+                                          log_tpm_data: pd.DataFrame,
                                           gene_name: str,
                                           height: int = 600,
                                           colorscale: str = 'Viridis',
-                                          data_type: str = 'TPM',
+                                          data_type: str = 'Ratio',
                                           show_tables: str = 'show',
                                           show_labels: bool = False,
                                           collapse_mode: str = 'tissue',
                                           distance_metric: str = 'euclidean',
-                                          linkage_method: str = 'complete') -> go.Figure:
-    """Create responsive clustergram that behaves exactly like junction clustergram"""
-    if data_type == 'TPM':
+                                          linkage_method: str = 'complete',
+                                          show_gridlines: bool = False,
+                                          gridline_color: str = '#ffffff',
+                                          db_path: str = None) -> go.Figure:
+    """Create responsive clustergram with transcripts ordered by average TPM (descending)"""
+    if data_type == 'TPM' or data_type == 'tpm':
         expression_data = tpm_data
+    elif data_type == 'Log TPM' or data_type == 'log_tpm':
+        expression_data = log_tpm_data
     else:
         expression_data = ratio_data
 
@@ -819,8 +966,30 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     if expression_data.empty:
         return create_empty_isoform_message(f"No isoform data found for gene {gene_name}.")
 
-    metadata_cols = ['id', 'trans_id', 'transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob']
+    metadata_cols = ['id', 'trans_id', 'transcript', 'gene', 'tpm_average', 'tpm_sum', 'gene_name', 'max_ratio', 'min_ratio', 'prob', 'isoform_average_tpm']
     tissue_cols = [col for col in expression_data.columns if col not in metadata_cols]
+
+    if 'isoform_average_tpm' not in expression_data.columns and db_path:
+        conn = sqlite3.connect(db_path)
+        isoform_tpm_query = "SELECT id, isoform_average_tpm FROM isoforms WHERE gene_name = ?"
+        isoform_tpm = pd.read_sql_query(isoform_tpm_query, conn, params=[gene_name])
+        conn.close()
+
+        if not isoform_tpm.empty:
+            expression_data = expression_data.merge(isoform_tpm, on='id', how='left')
+            tpm_data = tpm_data.merge(isoform_tpm, on='id', how='left')
+            ratio_data = ratio_data.merge(isoform_tpm, on='id', how='left')
+            log_tpm_data = log_tpm_data.merge(isoform_tpm, on='id', how='left')
+
+    # Sort all data by isoform_average_tpm (ascending), treating NaNs as 0
+    # Weirdly, Dash Bio displays first row at BOTTOM, so we have to sort in ascending order so highest TPM appears at top...
+    if 'isoform_average_tpm' in expression_data.columns:
+        sort_col = expression_data['isoform_average_tpm'].fillna(0)
+        sort_indices = sort_col.argsort().values
+        expression_data = expression_data.iloc[sort_indices].reset_index(drop=True)
+        tpm_data = tpm_data.iloc[sort_indices].reset_index(drop=True)
+        ratio_data = ratio_data.iloc[sort_indices].reset_index(drop=True)
+        log_tpm_data = log_tpm_data.iloc[sort_indices].reset_index(drop=True)
 
     transcript_names = expression_data['transcript'].tolist() if 'transcript' in expression_data.columns else expression_data.index.tolist()
     transcript_names_abbreviated = abbreviate_transcript_names(transcript_names)
@@ -832,14 +1001,44 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
 
     if collapse_mode == 'tissue':
         heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_tissue(expression_data, tissue_cols)
-        tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, tissue_cols)
-        ratio_heatmap_data, _, _ = average_lrs_by_tissue(ratio_data, tissue_cols)
+
+        # Mapping from tissue name to column indices
+        tissue_name_to_indices = {}
+        for col in tissue_cols:
+            tissue_name = extract_tissue_name_from_column(col)
+            if tissue_name not in tissue_name_to_indices:
+                tissue_name_to_indices[tissue_name] = []
+            tissue_name_to_indices[tissue_name].append(col)
+
+        kept_tissue_cols = []
+        for tissue_name in tissue_display_names:
+            if tissue_name in tissue_name_to_indices:
+                kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
+
+        # Average TPM and Ratio using only kept tissues
+        tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, kept_tissue_cols)
+        ratio_heatmap_data, _, _ = average_lrs_by_tissue(ratio_data, kept_tissue_cols)
         tissue_cols_for_organs = tissue_display_names
 
     elif collapse_mode == 'replicate':
         heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_replicates(expression_data, tissue_cols)
-        tpm_heatmap_data, _, _ = average_lrs_by_replicates(tpm_data, tissue_cols)
-        ratio_heatmap_data, _, _ = average_lrs_by_replicates(ratio_data, tissue_cols)
+
+        # Use the same tissue list for TPM and Ratio as used for the main data type
+        tissue_name_to_indices = {}
+        for col in tissue_cols:
+            tissue_name = extract_tissue_name_from_column(col)
+            if tissue_name not in tissue_name_to_indices:
+                tissue_name_to_indices[tissue_name] = []
+            tissue_name_to_indices[tissue_name].append(col)
+
+        kept_tissue_cols = []
+        for tissue_name in tissue_display_names:
+            if tissue_name in tissue_name_to_indices:
+                kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
+
+        # Average TPM and Ratio using only the kept tissues
+        tpm_heatmap_data, _, _ = average_lrs_by_replicates(tpm_data, kept_tissue_cols)
+        ratio_heatmap_data, _, _ = average_lrs_by_replicates(ratio_data, kept_tissue_cols)
         tissue_cols_for_organs = tissue_display_names
 
     else:
@@ -877,10 +1076,32 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         actual_clustergram_height = height - 80
 
     clustergram_data_processed = pd.DataFrame(clustergram_data).copy()
-    clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], 0)
+
+    # For log TPM data, keep track of NaN values to show them instead of filling with 0
+    show_nan_as_black = (data_type == "Log TPM" or data_type == "log_tpm")
+    clustergram_data_with_nan = None
+
+    if show_nan_as_black:
+        # Replace -inf and inf values with NaN, keep NaN as NaN for proper handling
+        clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], np.nan)
+        nan_count = clustergram_data_processed.isna().sum().sum()
+        clustergram_data_with_nan = clustergram_data_processed.copy()
+
+        for idx in clustergram_data_processed.index:
+            row = clustergram_data_processed.loc[idx]
+            row_median = row.median()  # median of non-NaN values
+            if pd.notna(row_median):
+                clustergram_data_processed.loc[idx, row.isna()] = row_median
+            else:
+                # If all values are NaN in this row, use 0
+                clustergram_data_processed.loc[idx, row.isna()] = 0
+    else:
+        # Original behavior: replace -inf and inf with 0, fill NaN with 0
+        clustergram_data_processed = clustergram_data_processed.replace([np.inf, -np.inf], 0)
+        clustergram_data_processed = clustergram_data_processed.fillna(0)
+
     clustergram_data_processed = clustergram_data_processed.astype(float)
-    clustergram_data_processed = clustergram_data_processed.fillna(0)
-    
+
     if distance_metric in ['correlation', 'seuclidean', 'cosine']:
         clustergram_data_processed = apply_distance_preprocessing(clustergram_data_processed, distance_metric)
     
@@ -906,7 +1127,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             height=actual_clustergram_height,
             color_threshold={'row': 0.7, 'col': 0.7},
             hidden_labels='col' if not show_labels else None,
-            cluster='all',
+            cluster='col', 
             color_list={
                 'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
                 'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
@@ -914,7 +1135,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             },
             line_width=2,
             display_ratio=[0.12, 0.08] if not hide_tissue_labels else [0.08, 0.05],
-            standardize='none', 
+            standardize='none',
             center_values=False,
             return_computed_traces=True,
             row_dist=distance_metric,
@@ -927,7 +1148,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         row_ids = computed_traces['row_ids']
         reordered_organ_list = [organ_list[i] for i in column_ids]
 
-        # Custom hover data with both TPM and ratio values: need to reorder both TPM and ratio data according to clustering
+        # Custom hover data with TPM, log10(TPM), and ratio values: need to reorder based on column clustering
         if tpm_heatmap_data.shape[0] == len(tissue_cols_for_organs):
             tpm_clustered = tpm_heatmap_data.T[row_ids][:, column_ids]
             ratio_clustered = ratio_heatmap_data.T[row_ids][:, column_ids]
@@ -935,12 +1156,26 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             tpm_clustered = tpm_heatmap_data[row_ids][:, column_ids]
             ratio_clustered = ratio_heatmap_data[row_ids][:, column_ids]
 
-        customdata = np.zeros((len(transcript_names), len(clean_tissue_names), 3), dtype=object)
+        # Always get log10(TPM) data for tooltip, regardless of which data type is being displayed
+        log_tpm_clustered = None
+        if clustergram_data_with_nan is not None:
+            if clustergram_data_with_nan.shape[0] == len(tissue_cols_for_organs):
+                log_tpm_clustered = clustergram_data_with_nan.T.iloc[row_ids, :].iloc[:, column_ids].values
+            else:
+                log_tpm_clustered = clustergram_data_with_nan.iloc[row_ids, :].iloc[:, column_ids].values
+
+        customdata = np.zeros((len(transcript_names), len(clean_tissue_names), 4), dtype=object)
         for i in range(len(transcript_names)):
             for j in range(len(clean_tissue_names)):
-                customdata[i, j, 0] = reordered_organ_list[j] 
-                customdata[i, j, 1] = tpm_clustered[i, j]      
-                customdata[i, j, 2] = ratio_clustered[i, j]    
+                customdata[i, j, 0] = reordered_organ_list[j]
+                customdata[i, j, 1] = tpm_clustered[i, j]
+                # Format log10(TPM) to show NaN as 'NaN', otherwise format to 2 decimal places
+                if log_tpm_clustered is not None:
+                    log_val = log_tpm_clustered[i, j]
+                    customdata[i, j, 2] = 'NaN' if pd.isna(log_val) else f'{log_val:.2f}'
+                else:
+                    customdata[i, j, 2] = 'NaN'
+                customdata[i, j, 3] = ratio_clustered[i, j]
 
         heatmap_trace = clustergram.data[-1]
         heatmap_trace.customdata = customdata
@@ -949,20 +1184,32 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             "<b>Tissue:</b> %{x}<br>"
             "<b>Organ:</b> %{customdata[0]}<br>"
             "<b>TPM:</b> %{customdata[1]:.2f}<br>"
-            "<b>Ratio:</b> %{customdata[2]:.2f}"
+            "<b>Log10(TPM):</b> %{customdata[2]}<br>"
+            "<b>Ratio:</b> %{customdata[3]:.2f}"
             "<extra></extra>"
         )
+
+        # Log TPM NaN clustering workaround: replace the median-filled NaN values back with NaN in the heatmap display
+        if show_nan_as_black and clustergram_data_with_nan is not None:
+            nan_data_reordered = clustergram_data_with_nan.iloc[row_ids, :].iloc[:, column_ids]
+            # Replace the heatmap trace data with the version containing NaN (show as transparent/white)
+            heatmap_trace.z = nan_data_reordered.values
         
     except Exception as e2:
         print(f"Error creating clustergram: {e2}")
         return create_empty_isoform_message(f"Error creating visualization for {gene_name}")
     
-    clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
+    clustergram = apply_colorscale_to_clustergram(clustergram, colorscale, show_nan_as_black=show_nan_as_black)
     colorbar_x = -0.35
     
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
+            
+            if show_gridlines:
+                heatmap_trace.xgap = 1
+                heatmap_trace.ygap = 1
+
             if hasattr(heatmap_trace, 'colorbar'):
                 heatmap_trace.colorbar.x = colorbar_x 
                 heatmap_trace.colorbar.y = 1.0     
@@ -999,30 +1246,31 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     colorbar_pixel_offset = 150 
     colorbar_y_position = 1.005
 
-    # Calculate legend step size in paper coordinates to maintain consistent pixel spacing
-    pixels_between_items = 25
-    legend_y_step = pixels_between_items / height
-
-    vertical_offset_pixels = 7
-    legend_y_start = colorbar_y_position - (vertical_offset_pixels / height)
+    # Use pixel-based positioning for legend items to keep spacing constant regardless of height
+    # yshift works in pixels, not in paper coordinates, so spacing remains fixed
+    pixels_between_items = 25  # Pixel distance between legend items
+    vertical_offset_pixels = 7  # Pixel offset from top before first item
+    legend_y_start = colorbar_y_position  # Fixed paper coordinate (top of plot)
 
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
             if hasattr(heatmap_trace, 'colorbar'):
                 heatmap_trace.colorbar.x = colorbar_x_paper
-                heatmap_trace.colorbar.xpad = colorbar_pixel_offset 
+                heatmap_trace.colorbar.xpad = colorbar_pixel_offset
                 heatmap_trace.colorbar.y = colorbar_y_position
                 heatmap_trace.colorbar.yanchor = 'top'
                 heatmap_trace.colorbar.len = 0.3
                 heatmap_trace.colorbar.thickness = 20
-                heatmap_trace.colorbar.title = data_type
+                heatmap_trace.colorbar.title = dict(text=data_type, font=dict(size=16))
     except Exception as e:
         print(f"Warning: Could not update colorbar position: {e}")
 
     legend_base_x = colorbar_x_paper
     # Offset from plot edge = colorbar offset + colorbar width + spacing between legends
-    legend_pixel_offset = colorbar_pixel_offset + 20 + 30 
+    base_spacing = 30
+    extra_spacing_log_tpm = 20 if (data_type == "Log TPM" or data_type == "log_tpm") else 0
+    legend_pixel_offset = colorbar_pixel_offset + 20 + base_spacing + extra_spacing_log_tpm 
 
     clustergram.add_annotation(
         x=legend_base_x,
@@ -1030,25 +1278,27 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         xref="paper",
         yref="paper",
         xshift=legend_pixel_offset,  # Shift by pixels instead of paper coords
+        yshift=-vertical_offset_pixels,  # Negative shifts down in pixels
         text="Organ Legend",
         showarrow=False,
         xanchor="left",
         yanchor="top",
-        font=dict(size=14, family="Open Sans, verdana, arial, sans-serif")
+        font=dict(size=16, family="Open Sans, verdana, arial, sans-serif")
     )
 
     for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
         clustergram.add_annotation(
             x=legend_base_x,
-            y=legend_y_start - legend_y_step - (i * legend_y_step),
+            y=legend_y_start,
             xref='paper',
             yref='paper',
-            xshift=legend_pixel_offset,  
-            text=f'<span style="color:{color}; font-size:14px">&#9632;</span> {organ}',
+            xshift=legend_pixel_offset,
+            yshift=-(vertical_offset_pixels + 30 + (i * pixels_between_items)),  # Title height (30px) + item spacing
+            text=f'<span style="color:{color}; font-size:16px">&#9632;</span> {organ}',
             showarrow=False,
             xanchor='left',
             yanchor='top',
-            font=dict(size=11)
+            font=dict(size=13)
         )
     
     clustergram.update_layout(
@@ -1056,33 +1306,39 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             'text': f"Isoform Expression Clustergram for {gene_name} ({len(transcript_names)} isoforms, {data_type} data)",
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 14 if hide_tissue_labels else 16}
+            'font': {'size': 18 if hide_tissue_labels else 20}
         },
         margin=dict(
-                l=min(20, left_margin + 50), 
-                r=350,  
-                t=90, 
+                l=min(20, left_margin + 50),
+                r=350,
+                t=90,
                 b=calculate_bottom_margin(show_labels, transcript_names_abbreviated)
-            ),
-        autosize=True, 
-        width=None,  
+        ),
+        autosize=True,
+        width=None,
         height=height,
-        uirevision='constant', 
+        uirevision='constant',
         yaxis=dict(
             automargin=True,
             tickangle=0,
-            tickfont=dict(size=min(11, max(8, int(height/60))))
+            tickfont=dict(size=min(13, max(10, int(height/60)+2))),
+            showgrid=True,
+            gridcolor='white',
+            gridwidth=1
         ),
         xaxis=dict(
             automargin=True,
-            tickangle=45 if show_labels else 0,
+            tickangle=90 if show_labels else 0,
             tickfont=dict(
-                size=6 if show_labels else 1,
-                color='rgba(0,0,0,0)' if not show_labels else None 
+                size=8 if show_labels else 1,
+                color='rgba(0,0,0,0)' if not show_labels else None
             ),
-            showticklabels=show_labels
+            showticklabels=show_labels,
+            showgrid=True,
+            gridcolor='white',
+            gridwidth=1
         ),
-        plot_bgcolor='white',
+        plot_bgcolor=gridline_color if show_gridlines else 'rgba(0,0,0,0)',
         paper_bgcolor='white'
     )
     
@@ -1107,7 +1363,7 @@ def create_single_transcript_heatmap(heatmap_data, tpm_heatmap_data, ratio_heatm
         x=transcript_names,
         y=tissue_display_names,
         colorscale=colorscale,
-        colorbar=dict(title=data_type),
+        colorbar=dict(title=dict(text=data_type, font=dict(size=16)), tickfont=dict(size=10)),
         customdata=customdata,
         hovertemplate='<b>Transcript:</b> %{x}<br><b>Tissue:</b> %{y}<br><b>TPM:</b> %{customdata[0]:.2f}<br><b>Ratio:</b> %{customdata[1]:.2f}<extra></extra>'
     ))
@@ -1123,7 +1379,7 @@ def create_single_transcript_heatmap(heatmap_data, tpm_heatmap_data, ratio_heatm
     return fig
 
 
-def apply_colorscale_to_clustergram(fig, colorscale):
+def apply_colorscale_to_clustergram(fig, colorscale, show_nan_as_black=False):
     """Apply colorscale to the heatmap portion of a clustergram"""
     try:
         if len(fig.data) > 0:
@@ -1158,10 +1414,21 @@ def average_lrs_by_tissue(tpm_data: pd.DataFrame,
     
     for tissue_name, columns in tissue_groups.items():
         tissue_data = tpm_data[columns].values
-        
-        averaged_values = np.mean(tissue_data, axis=1)
+
+        # skip if all values in tissue are NaN
+        if np.isnan(tissue_data).all():
+            continue
+
+        # Use nanmean to properly handle NaN values
+        if np.isnan(tissue_data).any():
+            mask = ~np.isnan(tissue_data)
+            with np.errstate(invalid='ignore', all='ignore'):
+                averaged_values = np.where(mask.any(axis=1), np.nanmean(tissue_data, axis=1), np.nan)
+        else:
+            averaged_values = np.mean(tissue_data, axis=1)
+
         averaged_data.append(averaged_values)
-        
+
         tissue_display_names.append(tissue_name)
         tissue_category = tissue_to_organ_mapping[tissue_name]
         tissue_categories.append(tissue_category)
@@ -1187,15 +1454,25 @@ def average_lrs_by_replicates(tpm_data: pd.DataFrame,
         if not group_columns:
             continue 
         
-        # Case 1: multiple replicates, so need to average them 
+        # Case 1: multiple replicates, so need to average them
         if len(group_columns) > 1:
             tissue_data = tpm_data[group_columns].values
-            averaged_values = np.mean(tissue_data, axis=1)
+
+            if np.isnan(tissue_data).all():
+                continue
+
+            # Use nanmean to properly preserve NaN if present
+            if np.isnan(tissue_data).any():
+                mask = ~np.isnan(tissue_data)
+                with np.errstate(invalid='ignore', all='ignore'):
+                    averaged_values = np.where(mask.any(axis=1), np.nanmean(tissue_data, axis=1), np.nan)
+            else:
+                averaged_values = np.mean(tissue_data, axis=1)
 
         # Case 2: single replicate
         else:
             averaged_values = tpm_data[group_columns[0]].values
-        
+
         averaged_data.append(averaged_values)
 
         tissue_name = extract_tissue_name_from_column(group_columns[0])
@@ -1326,10 +1603,9 @@ def extract_tissue_name_from_column(column_name):
         tissue_name = '.'.join(column_name.split('.')[1:])
     else:
         tissue_name = column_name
-    
+
     tissue_name = (
         tissue_name.replace('_', ' ')
-                  .replace('.', '-')
                   .strip()
     )
     return tissue_name
@@ -1350,8 +1626,145 @@ def create_organ_annotation_bar(tissue_cols, height=20):
         
         organ_list.append(organ)
         color_list.append(color)
-    
+
     return organ_list, color_list
+
+
+def get_tissue_tpm_for_isoforms(db_path: str, gene_name: str, tissue_name: str) -> dict:
+    """
+    Get TPM values averaged by tissue for all isoforms of a gene.
+    Returns a dictionary mapping isoform_id -> tissue_average_tpm
+    """
+    try:
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+
+        if tpm_data.empty:
+            return {}
+
+        tissue_cols = [col for col in tpm_data.columns
+                      if col.startswith('ENCFF') and extract_tissue_name_from_column(col) == tissue_name]
+
+        if not tissue_cols:
+            return {}
+
+        # Calculate average TPM across tissue replicates for each isoform
+        tissue_tpm_dict = {}
+        for _, row in tpm_data.iterrows():
+            isoform_id = row['id']
+            tissue_tpm_values = [row[col] for col in tissue_cols if col in tpm_data.columns]
+            # Calculate mean, ignoring NaN values
+            tissue_tpm_values = [v for v in tissue_tpm_values if pd.notna(v)]
+
+            if tissue_tpm_values:
+                tissue_tpm_dict[isoform_id] = sum(tissue_tpm_values) / len(tissue_tpm_values)
+
+            else:
+                tissue_tpm_dict[isoform_id] = 0
+
+        return tissue_tpm_dict
+
+    except Exception as e:
+        print(f"Error calculating tissue TPM for {tissue_name}: {e}")
+        return {}
+
+
+def get_organ_tpm_for_isoforms(db_path: str, gene_name: str, organ_name: str) -> dict:
+    """
+    Get TPM values averaged by organ for all isoforms of a gene.
+    Returns a dictionary mapping isoform_id -> organ_average_tpm
+    """
+    try:
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+
+        if tpm_data.empty:
+            return {}
+
+        tissue_to_organ = get_tissue_to_organ_mapping()
+
+        organ_cols = []
+        for col in tpm_data.columns:
+            if col.startswith('ENCFF'):
+                tissue_name = extract_tissue_name_from_column(col)
+                if tissue_to_organ.get(tissue_name, '').lower() == organ_name.lower():
+                    organ_cols.append(col)
+
+        if not organ_cols:
+            return {}
+
+        organ_tpm_dict = {}
+        for _, row in tpm_data.iterrows():
+            isoform_id = row['id']
+            organ_tpm_values = [row[col] for col in organ_cols if col in tpm_data.columns]
+            # Calculate mean, ignoring NaN values
+            organ_tpm_values = [v for v in organ_tpm_values if pd.notna(v)]
+
+            if organ_tpm_values:
+                organ_tpm_dict[isoform_id] = sum(organ_tpm_values) / len(organ_tpm_values)
+
+            else:
+                organ_tpm_dict[isoform_id] = 0
+
+        return organ_tpm_dict
+
+    except Exception as e:
+        print(f"Error calculating organ TPM for {organ_name}: {e}")
+        return {}
+
+
+def get_unique_tissues_for_gene(db_path: str, gene_name: str) -> list:
+    """Get list of unique tissues for a given gene"""
+    try:
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+
+        if tpm_data.empty:
+            return []
+
+        tissues = set()
+        exclude_cols = {'id', 'transcript', 'trans_id', 'gene', 'gene_name', 'isoform_average_tpm',
+                       'index', 'tpm average', 'tpm sum'}
+        tissue_cols = [col for col in tpm_data.columns
+                      if col not in exclude_cols and col.startswith('ENCFF')]
+
+        for col in tissue_cols:
+            tissue_name = extract_tissue_name_from_column(col)
+            tissues.add(tissue_name)
+
+        return sorted(list(tissues))
+
+    except Exception as e:
+        print(f"Error getting unique tissues: {e}")
+        traceback.print_exc()
+        return []
+
+
+def get_unique_organs_for_gene(db_path: str, gene_name: str) -> list:
+    """Get list of unique organs for a given gene"""
+    try:
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+
+        if tpm_data.empty:
+            return []
+
+        tissue_to_organ = get_tissue_to_organ_mapping()
+
+        organs = set()
+        exclude_cols = {'id', 'transcript', 'trans_id', 'gene', 'gene_name', 'isoform_average_tpm',
+                       'index', 'tpm average', 'tpm sum'}
+        tissue_cols = [col for col in tpm_data.columns
+                      if col not in exclude_cols and col.startswith('ENCFF')]
+
+        for col in tissue_cols:
+            tissue_name = extract_tissue_name_from_column(col)
+            organ = tissue_to_organ.get(tissue_name, 'unknown')
+            if organ != 'unknown':
+                organs.add(organ)
+
+        return sorted(list(organs))
+
+    except Exception as e:
+        print(f"Error getting unique organs: {e}")
+        traceback.print_exc()
+        return []
 
 
 def create_empty_isoform_message(message: str) -> go.Figure:
@@ -1470,17 +1883,24 @@ def calculate_single_isoform_hash(tstarts: list, blocksizes: list) -> str:
     return f"{s_id}:{e_id}"
 
 
-def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
+def parse_gtf_and_calculate_hashes(gtf_content: str) -> dict:
     """
     Parse GTF content and calculate hash IDs for all isoforms.
-    Uses sequential parsing logic, i.e. assumes that exons contained 
+    Uses sequential parsing logic, i.e. assumes that exons contained
     within a transcript follow that transcript feature line.
+
+    Transcripts with identical splice junctions (same internal structure) 
+    are collapsed and share the same hash_id, but may have different TSS and TES.
 
     Parameters:
         gtf_content (str): Content of GTF file as string
 
     Returns:
-        list: List of dictionaries with transcript_id, gene_id, and hash_id
+        dict: {
+            'results': List of dicts with gene_id, transcript_id, hash_id, exon_count,
+            'merged_transcripts': Dict mapping hash_id to list of transcripts that were merged,
+            'has_merges': Boolean indicating if any merges occurred
+        }
     """
     results = []
     transcripts = []
@@ -1504,14 +1924,19 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
         start = int(fields[3])
         end = int(fields[4])
         attributes = fields[8]
-
-        # can get gene_id from attributes if available
         gene_id = None
+        transcript_id = None
         for attr in attributes.split(';'):
             attr = attr.strip()
-            if attr.startswith('gene_id'):
-                gene_id = attr.split('"')[1]
-                break
+            if not attr:
+                continue
+            try:
+                if attr.startswith('gene_id'):
+                    gene_id = extract_gtf_attr_val(attr)
+                elif attr.startswith('transcript_id'):
+                    transcript_id = extract_gtf_attr_val(attr)
+            except (ValueError, IndexError):
+                continue
 
         if not gene_id:
             continue
@@ -1519,6 +1944,7 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
         if feature_type == 'transcript':
             current_transcript = {
                 'gene_id': gene_id,
+                'transcript_id': transcript_id,
                 'transcript_start': start,
                 'transcript_end': end,
                 'exons': [],
@@ -1533,6 +1959,9 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
     ###########################################################################
     # Second pass: validate transcript coordinates and calculate hash IDs
     ###########################################################################
+    # Map hash_id to list of transcripts with that hash
+    hash_to_transcripts = {}
+
     for i, transcript_data in enumerate(transcripts):
         exons = sorted(transcript_data['exons'])
 
@@ -1548,20 +1977,37 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> list:
 
                 try:
                     hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
-                    # Use a synthetic transcript_id based on coordinates
-                    transcript_id = f"transcript_{transcript_data['transcript_start']}_{transcript_data['transcript_end']}"
 
-                    results.append({
-                        'transcript_id': transcript_id,
+                    result_entry = {
+                        'transcript_id': transcript_data['transcript_id'],
                         'gene_id': transcript_data['gene_id'],
                         'hash_id': hash_id,
                         'exon_count': len(exons)
-                    })
+                    }
+                    results.append(result_entry)
+
+                    # Track which transcripts share the same hash
+                    if hash_id not in hash_to_transcripts:
+                        hash_to_transcripts[hash_id] = []
+                    hash_to_transcripts[hash_id].append(transcript_data['transcript_id'])
+
                 except Exception as e:
                     print(f"Error calculating hash for transcript {i}: {e}")
                     continue
 
-    return results
+    # Identify merged transcripts (same hash, different TSS/TES)
+    merged_transcripts = {}
+    for hash_id, transcript_ids in hash_to_transcripts.items():
+        if len(transcript_ids) > 1:
+            merged_transcripts[hash_id] = transcript_ids
+
+    has_merges = len(merged_transcripts) > 0
+
+    return {
+        'results': results,
+        'merged_transcripts': merged_transcripts,
+        'has_merges': has_merges
+    }
 
 
 def generate_annotated_gtf(gtf_content: str) -> str:

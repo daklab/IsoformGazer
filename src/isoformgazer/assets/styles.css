@@ -10,6 +10,7 @@ html, body {
     overflow: hidden;
     font-family: "Open Sans", sans-serif;
     background-color: #f6f6f6;
+    font-size: 12.5px;
 }
 
 #react-entry-point,
@@ -182,12 +183,12 @@ html, body {
     display: flex;
     justify-content: center;
     align-items: center;
-    transition: opacity 0.5s ease-out;
 }
 
 .loading-overlay.hidden {
     opacity: 0;
     pointer-events: none;
+    z-index: 0;
 }
 
 .loading-content {
@@ -212,35 +213,48 @@ html, body {
     max-width: 80vw;
     z-index: 2;
     position: relative;
+    will-change: transform;
+    transform: translateZ(0);
 }
 
 .progress-ring {
     position: absolute;
     top: 50%;
     left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translate(-50%, -50%) translateZ(0);
     width: 450px;
     height: 450px;
     z-index: 1;
-    filter: 
-        drop-shadow(0 0 12px rgba(255, 255, 255, 0.8)) 
-        drop-shadow(0 0 24px rgba(255, 255, 255, 0.6))
-        drop-shadow(0 0 36px rgba(255, 255, 255, 0.4));
-    animation: pulse-ring 2s ease-in-out infinite;
+    backface-visibility: hidden;
+    will-change: contents;
+    contain: layout style paint;
 }
 
 #progress-circle {
     width: 100% !important;
     height: 100% !important;
+    pointer-events: none;
+    transform: translateZ(0);
+    will-change: contents;
+    contain: layout style paint;
 }
 
 #progress-circle .js-plotly-plot {
     width: 100% !important;
     height: 100% !important;
+    pointer-events: none;
+    transform: translateZ(0);
+}
+
+#progress-circle svg {
+    shape-rendering: crispEdges;
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
 }
 
 .pulsing {
     animation: pulse 2s ease-in-out infinite;
+    animation-delay: 0.2s;
 }
 
 @keyframes pulse {
@@ -260,23 +274,23 @@ html, body {
 
 @keyframes pulse-ring {
     0% {
-        transform: translate(-50%, -50%) scale(1);
-        filter: 
-            drop-shadow(0 0 12px rgba(255, 255, 255, 0.8)) 
+        transform: translate(-50%, -50%);
+        filter:
+            drop-shadow(0 0 12px rgba(255, 255, 255, 0.8))
             drop-shadow(0 0 24px rgba(255, 255, 255, 0.6))
             drop-shadow(0 0 36px rgba(255, 255, 255, 0.4));
     }
     50% {
-        transform: translate(-50%, -50%) scale(1.05);
-        filter: 
-            drop-shadow(0 0 16px rgba(255, 255, 255, 1.0)) 
+        transform: translate(-50%, -50%);
+        filter:
+            drop-shadow(0 0 16px rgba(255, 255, 255, 1.0))
             drop-shadow(0 0 32px rgba(255, 255, 255, 0.8))
             drop-shadow(0 0 48px rgba(255, 255, 255, 0.6));
     }
     100% {
-        transform: translate(-50%, -50%) scale(1);
-        filter: 
-            drop-shadow(0 0 12px rgba(255, 255, 255, 0.8)) 
+        transform: translate(-50%, -50%);
+        filter:
+            drop-shadow(0 0 12px rgba(255, 255, 255, 0.8))
             drop-shadow(0 0 24px rgba(255, 255, 255, 0.6))
             drop-shadow(0 0 36px rgba(255, 255, 255, 0.4));
     }
@@ -666,7 +680,7 @@ html, body {
 
 .panel-header {
     font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
-    font-size: 1.1rem;
+    font-size: 1.42rem;
     font-weight: 700;
     letter-spacing: 0.5px;
     color: white;
@@ -690,7 +704,7 @@ html, body {
 .top-panel-header {
     width: 100%;
     font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
-    font-size: 1.1rem;
+    font-size: 1.42rem;
     font-weight: 700;
     letter-spacing: 0.5px;
     color: white;
@@ -948,7 +962,7 @@ html, body {
 
 .about-tab-header {
     font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
-    font-size: 1.1rem;
+    font-size: 1.54rem;
     font-weight: 700;
     letter-spacing: 0.5px;
     color: #622e9d;
@@ -1106,6 +1120,7 @@ html, body {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
     transition: all 0.3s ease !important;
     background: white !important;
+    font-size: 15px !important;
 }
 
 .Select-control:hover {
@@ -1121,6 +1136,7 @@ html, body {
 .Select-placeholder {
     color: #506784 !important;
     font-style: italic !important;
+    font-size: 15px !important;
 }
 
 .Select-menu-outer {
@@ -1128,6 +1144,7 @@ html, body {
     border-radius: 8px !important;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15) !important;
     z-index: 10000 !important;
+    font-size: 15px !important;
 }
 
 /* Ensure all Dash dropdown menus are above other content */
@@ -1174,24 +1191,70 @@ html, body {
     position: relative !important;
 }
 
+#tissue-abundance-dropdown,
+#tissue-abundance-dropdown .Select,
+#tissue-abundance-dropdown .Select-control,
+#tissue-abundance-dropdown .Select-menu-outer,
+#tissue-abundance-dropdown .Select-menu {
+    z-index: 10050 !important;
+    position: relative !important;
+}
+
+#organ-abundance-dropdown,
+#organ-abundance-dropdown .Select,
+#organ-abundance-dropdown .Select-control,
+#organ-abundance-dropdown .Select-menu-outer,
+#organ-abundance-dropdown .Select-menu {
+    z-index: 10040 !important;
+    position: relative !important;
+}
+
+#tissue-dropdown-container .app-controls-block {
+    border-left: 4px solid #622e9d;
+}
+
+#organ-dropdown-container .app-controls-block {
+    border-left: 4px solid #622e9d;
+}
+
+#structure-plot-colorscale-container .app-controls-block {
+    border-left: 4px solid #EDAE49;
+}
+
+#structure-plot-colorscale-dropdown,
+#structure-plot-colorscale-dropdown .Select,
+#structure-plot-colorscale-dropdown .Select-control,
+#structure-plot-colorscale-dropdown .Select-menu-outer,
+#structure-plot-colorscale-dropdown .Select-menu {
+    z-index: 10030 !important;
+    position: relative !important;
+}
 
 .Select-option {
     transition: all 0.2s ease !important;
+    font-size: 15px !important;
 }
 
 .Select-option:hover {
     background-color: #f8f9fa !important;
     color: #301279 !important;
+    font-size: 15px !important;
 }
 
 .Select-option.is-selected {
     background-color: #301279 !important;
     color: white !important;
+    font-size: 15px !important;
 }
 
 .Select-option.is-focused {
     background-color: #EDAE49 !important;
     color: #301279 !important;
+    font-size: 15px !important;
+}
+
+.Select-menu {
+    font-size: 15px !important;
 }
 
 .app-controls-block .daq-ToggleSwitch {
@@ -1297,8 +1360,8 @@ html, body {
     border-radius: 2px 2px 0 0;
 }
 
-div[data-value="tab-1"], 
-div[data-value="tab-2"], 
+div[data-value="tab-1"],
+div[data-value="tab-2"],
 div[data-value="tab-3"] {
     background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%) !important;
     border: 1px solid #e1e5e9 !important;
@@ -1307,7 +1370,7 @@ div[data-value="tab-3"] {
     margin: 0 4px !important;
     font-family: "Inter", "Segoe UI", "SF Pro Display", "Roboto", "Helvetica Neue", sans-serif !important;
     font-weight: 500 !important;
-    font-size: 13px !important;
+    font-size: 17px !important;
     letter-spacing: 0.3px !important;
     color: #506784 !important;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
@@ -1337,6 +1400,30 @@ div[data-value="tab-3"]:hover {
     padding: 0 10px !important;
     display: flex !important;
     align-items: flex-end !important;
+    font-size: 17px !important;
+}
+
+.dash-tabs * {
+    font-size: 17px !important;
+}
+
+#tabs div[data-value="tab-1"],
+#tabs div[data-value="tab-2"],
+#tabs div[data-value="tab-3"] {
+    font-size: 17px !important;
+}
+
+/* Ensure tab label text is sized correctly */
+.tabs-full-height > div > div {
+    font-size: 17px !important;
+}
+
+.tabs-full-height > div > div > div {
+    font-size: 17px !important;
+}
+
+.tabs-full-height {
+    font-size: 17px !important;
 }
 
 /* ######################################################################################
@@ -1515,8 +1602,18 @@ div[data-value="tab-3"]:hover {
     box-shadow: none !important;
 }
 .clear-filters-btn:hover:not(:disabled) {
-    background-color: #5a6268 !important;
+    background-color: #D49A2B !important;
+    border-color: #D49A2B !important;
     transform: translateY(-1px);
+}
+.clear-filters-btn:active:not(:disabled) {
+    background-color: #8f6214 !important;
+    border-color: #8f6214 !important;
+    transform: translateY(0);
+}
+.clear-filters-btn:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 3px rgba(237, 174, 73, 0.25) !important;
 }
 .clear-filters-btn:disabled {
     opacity: 0.5;
@@ -1951,6 +2048,11 @@ div[data-value="tab-3"]:hover {
 }
 
 #junction-color-picker .daq-colorpicker--light__chromepicker {
+    border-radius: 0% !important;
+    border: none !important;
+}
+
+#junction-individual-color-picker .daq-colorpicker--light__chromepicker {
     border-radius: 0% !important;
     border: none !important;
 }
@@ -2475,6 +2577,17 @@ div[data-value="tab-3"]:hover {
     margin-right: 5px;
 }
 
+.radio-items-vertical {
+    display: flex;
+    flex-direction: column;
+    font-size: 12px;
+    margin-left: -10px;
+}
+
+.radio-items-vertical label {
+    display: block;
+}
+
 .plot-container-full-height {
     width: 100%;
     height: 100%;
@@ -2495,4 +2608,82 @@ div[data-value="tab-3"]:hover {
 
 .error-message-light {
     color: red;
+}
+
+
+/* CRUCIAL FIXES TO PREVENT LOADING SCREEN OVERLAY INTERACTION ISSUES WITH ISOFORM MASTER TABLE*/
+/* When loading is complete, allow clicks to pass through the overlay after fade completes */
+#loading-overlay.hidden {
+    z-index: 0 !important;
+}
+
+/* Safe fallback: ensure constellation and decorative layers do not capture user click events */
+.constellation, .transcript-star {
+    pointer-events: none !important;
+    z-index: 0 !important;
+}
+
+/* ######################################################################################
+   # Individual Junction Color Picker Popup Styling
+   ###################################################################################### */
+
+#junction-color-picker-popup {
+    position: fixed;
+    z-index: 10000;
+    background-color: #ffffff;
+    border: 2px solid #EDAE49;
+    border-radius: 10px;
+    padding: 16px;
+    box-shadow: 0 8px 24px rgba(90, 42, 145, 0.4);
+    display: none;
+    width: 280px;
+}
+
+.junction-header-container {
+    margin-bottom: 10px;
+}
+
+.junction-color-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #622e9d;
+    font-family: "Inter", "Segoe UI", "SF Pro Display", "Roboto", "Helvetica Neue", sans-serif;
+    letter-spacing: -0.3px;
+    text-transform: uppercase;
+}
+
+.junction-color-bar {
+    width: 60px;
+    height: 2px;
+    background: linear-gradient(90deg, #EDAE49 0%, #f2c668 100%);
+    border-radius: 1px;
+    margin: 5px 0;
+}
+
+#junction-id-display {
+    font-size: 11px;
+    font-weight: 600;
+    color: #506784;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-family: "Inter", "Segoe UI", "SF Pro Display", "Roboto", "Helvetica Neue", sans-serif;
+    word-break: break-word;
+    margin-bottom: 4px;
+}
+
+.junction-color-picker-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 16px;
+}
+
+.junction-color-buttons-container {
+    display: flex;
+    gap: 8px;
+}
+
+.junction-color-btn {
+    flex: 1;
+    padding: 6px 12px;
+    font-size: 0.85rem;
 }

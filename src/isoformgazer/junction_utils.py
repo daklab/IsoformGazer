@@ -12,21 +12,61 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
-from src.isoformgazer.data_utils import apply_distance_preprocessing
-from src.isoformgazer.isoform_utils import load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name, calculate_dynamic_structure_plot_height
+from src.isoformgazer.data_utils import apply_distance_preprocessing, get_matplotlib_colormap
+from src.isoformgazer.isoform_utils import (load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name,
+                           calculate_dynamic_structure_plot_height, calculate_clustergram_min_height,
+                           get_tissue_tpm_for_isoforms, get_organ_tpm_for_isoforms)
 from src.isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
 ###################################################################
 # MARGIN PRESETS FOR FIGURES
 ###################################################################
-MIN_MARGIN = 8 
+MIN_MARGIN = 8
 MAX_MARGIN = 55
 MAX_MARGIN_LABELS = 65
 
 ###################################################################
+# TEXT WRAPPING UTILITIES
+###################################################################
+def wrap_colorbar_title(name_text, label_text, char_limit=15):
+    """
+    Formatting method for colorscale titles to wrap colorbar title 
+    at char_limit (default: 15), with Tissue TPM / Organ TPM label 
+    on its own separate line at the end."""
+    words = name_text.split()
+    lines = []
+    current_line = []
+    current_length = 0
+
+    for word in words:
+        # Check if adding this word would exceed the limit
+        potential_length = current_length + len(word) + (1 if current_line else 0)
+
+        # Case 1: word fits in the current line
+        if potential_length <= char_limit:
+            current_line.append(word)
+            current_length = potential_length
+
+        # Case 2: word doesn't fit, so start a new line
+        else:
+            if current_line:
+                lines.append(' '.join(current_line))
+            current_line = [word]
+            current_length = len(word)
+
+    # Add the last line of name
+    if current_line:
+        lines.append(' '.join(current_line))
+
+    # Always add label on its own line
+    lines.append(label_text)
+
+    return '<br>'.join(lines)
+
+###################################################################
 # VISUALIZATION METHODS
 ###################################################################
-def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete'):
+def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete', show_gridlines=False):
     """Create summary-level clustergram across all cell types and top junctions"""
     conn = sqlite3.connect(db_path)
     query = """
@@ -45,20 +85,26 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
         return create_empty_clustergram_message("No junction data available for summary view")
     
     psi_matrix = df.pivot(index='junction_id', columns='cell_type', values='avg_psi')
-    psi_matrix = psi_matrix.fillna(0)
-    
+
     orig_matrix = df.pivot(index='junction_id', columns='cell_type', values='avg_psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
+
     psi_matrix = psi_matrix[valid_columns]
+    psi_matrix_with_nan = psi_matrix.copy()
     
-    junction_variance = psi_matrix.var(axis=0).sort_values(ascending=False)
+    # For variance calculation, use 0-filled data
+    psi_matrix_for_variance = psi_matrix.fillna(0)
+    junction_variance = psi_matrix_for_variance.var(axis=0).sort_values(ascending=False)
     top_junctions = junction_variance.head(30).index
     psi_matrix_filtered = psi_matrix[top_junctions]
-    
+
+    psi_matrix_filtered_with_nan = psi_matrix_filtered.copy()
+
     if psi_matrix_filtered.empty:
         return create_empty_clustergram_message("No variable junction data available")
-    
-    # Clamp vals so always in 0-1 range
+
+    # For clustering, fill NaN with 0
+    psi_matrix_filtered = psi_matrix_filtered.fillna(0)
     psi_matrix_filtered = psi_matrix_filtered.clip(lower=0, upper=1)
     
     # Check for constant rows/columns that cause issues
@@ -97,9 +143,17 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     )
     
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
-    
+
+    if len(clustergram.data) > 0:
+        heatmap_trace = clustergram.data[-1]
+        heatmap_trace.z = psi_matrix_filtered_with_nan.values
+
+        if show_gridlines:
+            heatmap_trace.xgap = 1
+            heatmap_trace.ygap = 1
+
     bottom_margin = 60 if hide_junction_labels else 120
-    
+
     clustergram.update_layout(
         title={
             'text': "Summary: Junction Usage Across All Cell Types",
@@ -107,18 +161,39 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             'xanchor': 'center',
             'font': {'size': 16}
         },
-        margin=dict(l=MIN_MARGIN, 
-                    r=MIN_MARGIN, 
-                    t=MAX_MARGIN, 
+        margin=dict(l=MIN_MARGIN,
+                    r=MIN_MARGIN,
+                    t=MAX_MARGIN,
                     b=bottom_margin),
         autosize=True,
-        width=None,  
+        width=None,
         height=height,
-        uirevision='constant', 
-        yaxis=dict(automargin=True),  
-        xaxis=dict(automargin=True)   
+        plot_bgcolor='white',
+        yaxis=dict(automargin=True),
+        xaxis=dict(automargin=True)
     )
-    
+
+    if len(clustergram.data) > 0:
+        heatmap_trace = clustergram.data[-1]
+        customdata = []
+        for i in range(len(psi_matrix_filtered_with_nan)):
+            row_data = []
+            for j in range(len(psi_matrix_filtered_with_nan.columns)):
+                psi_val = psi_matrix_filtered_with_nan.iloc[i, j]
+                if pd.isna(psi_val):
+                    row_data.append('NaN')
+                else:
+                    row_data.append(f'{psi_val:.2f}')
+            customdata.append(row_data)
+
+        heatmap_trace.customdata = customdata
+        heatmap_trace.hovertemplate = (
+            '<b>Junction ID</b>: %{y}<br>'
+            '<b>Cell Type</b>: %{x}<br>'
+            '<b>PSI</b>: %{customdata}<br>'
+            '<extra></extra>'
+        )
+
     return clustergram
 
 
@@ -166,12 +241,12 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
     return fig
 
 
-def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete'):
-    """Create ATSE-level clustergram with correct junction ID matching for tooltips"""
+def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete', show_gridlines=False):
+    """Create ATSE-level clustergram with junctions ordered by average PSI (descending)"""
     conn = sqlite3.connect(db_path)
     query = """
-    SELECT cell_type, junction_id, psi, n_cells, event_id, gene_name
-    FROM junctions 
+    SELECT cell_type, junction_id, psi, n_cells, event_id, gene_name, junction_average_psi
+    FROM junctions
     WHERE gene_name = ? AND psi IS NOT NULL
     """
     if filtered_junction_ids:
@@ -181,30 +256,45 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         params = [gene_name] + filtered_ids_str
     else:
         params = [gene_name]
-    
+
+    query += " ORDER BY junction_average_psi DESC NULLS LAST, junction_id"
     gene_vals = pd.read_sql_query(query, conn, params=params)
     conn.close()
-    
+
     if len(gene_vals) == 0:
         return create_empty_clustergram_message(f"No junction data found for gene: {gene_name}")
-    
+
+    ordered_junction_ids = gene_vals['junction_id'].drop_duplicates().tolist()
+    # note: have to again reverse the order same as for transcripts because Dash Bio clustergrams display the first row at the bottom...
+    ordered_junction_ids = ordered_junction_ids[::-1]
+
     psi_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='psi')
-    psi_matrix = psi_matrix.fillna(0)
 
     orig_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='psi')
     valid_columns = orig_matrix.columns[~orig_matrix.isna().all()]
     psi_matrix = psi_matrix[valid_columns]
+    psi_matrix_with_nan = psi_matrix.copy()
 
     # n_cells matrix to allow us to show cell count in tooltip on hover in dashboard
     n_cells_matrix = gene_vals.pivot(index='junction_id', columns='cell_type', values='n_cells')
     n_cells_matrix = n_cells_matrix.reindex(index=psi_matrix.index, columns=psi_matrix.columns).fillna(0)
-    
+
+    # Reorder matrices to match the sorted order from the database query (again, reversed for Dash Bio display...)
+    psi_matrix = psi_matrix.loc[ordered_junction_ids]
+    psi_matrix_with_nan = psi_matrix_with_nan.loc[ordered_junction_ids]
+    n_cells_matrix = n_cells_matrix.loc[ordered_junction_ids]
+
     n_cells_values = n_cells_matrix.values.astype(int)
     junction_labels = list(psi_matrix.index)
     cell_type_labels = list(psi_matrix.columns)
 
     if psi_matrix.empty:
         return create_empty_clustergram_message(f"No PSI data available for gene: {gene_name}")
+
+    if height <= 700:
+        num_junctions = len(junction_labels)
+        min_required_height = calculate_clustergram_min_height(num_junctions, base_height=600)
+        height = max(height, min_required_height)
     
     if len(gene_vals['junction_id'].unique()) == 1:
         return create_single_junction_heatmap(
@@ -212,10 +302,18 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         )
     
     psi_matrix_processed = psi_matrix.copy()
-    psi_matrix_processed = psi_matrix_processed.replace([np.inf, -np.inf], 0)
+    psi_matrix_processed = psi_matrix_processed.replace([np.inf, -np.inf], np.nan)
     psi_matrix_processed = psi_matrix_processed.astype(float)
     psi_matrix_processed = psi_matrix_processed.clip(lower=0, upper=1)
-    psi_matrix_processed = psi_matrix_processed.fillna(0)
+
+    # For clustering, use row-median filled data (NaN -> median value per row)
+    for idx in psi_matrix_processed.index:
+        row = psi_matrix_processed.loc[idx]
+        row_median = row.median()
+        if pd.notna(row_median):
+            psi_matrix_processed.loc[idx, row.isna()] = row_median
+        else:
+            psi_matrix_processed.loc[idx, row.isna()] = 0
     
     # Apply preprocessing for problematic distance metrics
     if distance_metric in ['correlation', 'seuclidean', 'cosine']:
@@ -235,12 +333,12 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     try:
         clustergram, computed_traces = dash_bio.Clustergram(
             data=psi_matrix_processed.values,
-            row_labels=junction_labels,        
+            row_labels=junction_labels,
             column_labels=cell_type_labels,
             height=actual_clustergram_height,
             color_threshold={'row': 0.7, 'col': 0.7},
             hidden_labels='col' if not show_celltype_labels else None,
-            cluster='all',
+            cluster='col',  
             color_list={
                 'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
                 'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
@@ -248,23 +346,37 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             },
             line_width=2,
             display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05],
-            standardize='none', 
+            standardize='none',
             center_values=False,
             return_computed_traces=True,
             row_dist=distance_metric,
             col_dist=distance_metric,
             link_method=linkage_method
         )
-        
-        row_ids = computed_traces['row_ids']
+
+        row_ids = computed_traces['row_ids'] 
         col_ids = computed_traces['column_ids']
         reordered_n_cells = n_cells_values[row_ids, :][:, col_ids]
+        reordered_psi = psi_matrix_with_nan.iloc[row_ids, :].iloc[:, col_ids]
 
         heatmap_trace = clustergram.data[-1]
+
+        customdata = []
+        for i in range(len(row_ids)):
+            row_data = []
+            for j in range(len(col_ids)):
+                psi_val = reordered_psi.iloc[i, j]
+                if pd.isna(psi_val):
+                    row_data.append('NaN')
+                else:
+                    row_data.append(f'{psi_val:.2f}')
+            customdata.append(row_data)
+
+        heatmap_trace.customdata = customdata
         heatmap_trace.hovertemplate = (
-            '<b>Junction ID</b>: %{y}<br>'     
-            '<b>Cell Type</b>: %{x}<br>'      
-            '<b>PSI</b>: %{z:.2f}<br>'
+            '<b>Junction ID</b>: %{y}<br>'
+            '<b>Cell Type</b>: %{x}<br>'
+            '<b>PSI</b>: %{customdata}<br>'
             '<b>Number of Cells</b>: %{text}<extra></extra>'
         )
         heatmap_trace.text = reordered_n_cells.astype(str).tolist()
@@ -272,21 +384,31 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     except Exception as e:
         print(f"Error creating clustergram: {e}")
         return create_empty_clustergram_message(f"Error creating visualization for {gene_name}")
-    
-    # Apply colorscale and positioning
+
     clustergram = apply_colorscale_to_clustergram(clustergram, colorscale)
-    
+
+    if len(clustergram.data) > 0:
+        nan_data_reordered = psi_matrix_with_nan.iloc[row_ids, :].iloc[:, col_ids]
+        heatmap_trace = clustergram.data[-1]
+        heatmap_trace.z = nan_data_reordered.values
+
     try:
         if len(clustergram.data) > 0:
             heatmap_trace = clustergram.data[-1]
+
+            if show_gridlines:
+                heatmap_trace.xgap = 1
+                heatmap_trace.ygap = 1
+
             if hasattr(heatmap_trace, 'colorbar'):
-                heatmap_trace.colorbar.x = 1.0 
+                heatmap_trace.colorbar.x = 1.0
                 heatmap_trace.colorbar.xpad = 160
                 heatmap_trace.colorbar.y = 1.005
                 heatmap_trace.colorbar.yanchor = 'top'
                 heatmap_trace.colorbar.len = 0.3
                 heatmap_trace.colorbar.thickness = 20
-                heatmap_trace.colorbar.title = 'PSI'
+                heatmap_trace.colorbar.title = dict(text='PSI', font=dict(size=16))
+                heatmap_trace.colorbar.tickfont = dict(size=10)
 
     except Exception as e:
         print(f"Warning: Could not update colorbar position: {e}")
@@ -296,7 +418,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             'text': f"Splicing PSI Clustermap for {gene_name} ({len(junction_labels)} junctions)",
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 14 if hide_junction_labels else 16}
+            'font': {'size': 18 if hide_junction_labels else 20}
         },
         margin=dict(
             l=MIN_MARGIN,
@@ -307,16 +429,17 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         autosize=True,
         width=None,
         height=height,
-        uirevision='constant',
+        plot_bgcolor='white',
         yaxis=dict(
             automargin=True,
             tickangle=0,
-            tickfont=dict(size=min(11, max(8, int(height/60))))
+            tickfont=dict(size=min(13, max(10, int(height/60)+2)))
         ),
         xaxis=dict(
-            automargin=True,
-            tickangle=45 if not hide_junction_labels else 0,
-            tickfont=dict(size=8) if not hide_junction_labels else dict(size=10)
+            automargin=False,
+            tickangle=90,
+            tickfont=dict(size=10) if not hide_junction_labels else dict(size=12),
+            side='bottom'
         )
     )
     
@@ -689,9 +812,48 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
         if key not in seen:
             seen.add(key)
             unique_junctions.append(j)
-    
-    unique_junctions.sort(key=lambda x: x['start'])
-    
+
+    conn = sqlite3.connect(db_path)
+    junction_psi_query = """
+    SELECT DISTINCT junction_id, junction_average_psi
+    FROM junctions
+    WHERE gene_name = ?
+    """
+    junction_psi_df = pd.read_sql_query(junction_psi_query, conn, params=[gene_name])
+    conn.close()
+
+    # Create a mapping of junction coordinates to average PSI
+    junction_psi_map = {}
+    for _, row in junction_psi_df.iterrows():
+        junction_id = row['junction_id']
+        avg_psi = row['junction_average_psi']
+
+        parts = junction_id.split('_')
+        if len(parts) >= 3:
+            try:
+                start = int(parts[1])
+                end = int(parts[2])
+                key = (start, end)
+
+                if key not in junction_psi_map:
+                    junction_psi_map[key] = avg_psi
+
+                else:
+                    junction_psi_map[key] = max(junction_psi_map[key], avg_psi)
+
+            except (ValueError, IndexError):
+                pass
+
+    unique_junctions.sort(
+        key=lambda x: (
+            -junction_psi_map.get((x['start'], x['end']), 0),  # negative for descending
+            x['start']
+        )
+    )
+
+    # Reverse the order because junctions are displayed top to bottom
+    unique_junctions = unique_junctions[::-1]
+
     if filtered_junction_ids and len(filtered_junction_ids) > 0:
         valid_junction_ids = [str(jid).strip() for jid in filtered_junction_ids if jid and str(jid).strip()]
         
@@ -767,13 +929,20 @@ def process_transcript_structure(psl_df: pd.DataFrame,
     return pd.DataFrame(transcript_data)
 
 
-@cached(cache_timeout=600)
-def create_junction_exon_visualization(gene_data: dict, 
+def create_junction_exon_visualization(gene_data: dict,
                                        height: int = 600,
                                        show_y_labels: bool = False,
                                        exon_color: str = '#2E86C1',
                                        junction_color: str = '#85929E',
-                                       filtered_transcript_ids: list = None) -> go.Figure:
+                                       filtered_transcript_ids: list = None,
+                                       color_by_abundance: bool = False,
+                                       color_junctions_by_psi: bool = True,
+                                       db_path: str = None,
+                                       colorscale: str = 'Viridis',
+                                       abundance_type: str = 'average',
+                                       tissue_name: str = None,
+                                       organ_name: str = None,
+                                       individual_junction_colors: dict = None) -> go.Figure:
     """Create junction and exon structure plot for junction master table data"""
     if 'error' in gene_data:
         return create_empty_atse_message(gene_data['error'])
@@ -798,15 +967,41 @@ def create_junction_exon_visualization(gene_data: dict,
     
     if not transcript_data.empty:
         transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
+        conn = sqlite3.connect(db_path)
+        transcript_ids_query = """
+        SELECT DISTINCT id FROM isoforms
+        WHERE gene_name = ?
+        ORDER BY isoform_average_tpm DESC NULLS LAST
+        """
+        ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=[gene_name])
+        conn.close()
+        ordered_transcript_ids = ordered_ids_df['id'].tolist()
+        # Reverse because transcripts are displayed from top to bottom
+        ordered_transcript_ids = ordered_transcript_ids[::-1]
+
         transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
             'trans_id': 'first',
             'transcript_start': 'min',
             'transcript_end': 'max'
         })
-        
+
         transcript_summary['transcript_length'] = transcript_summary['transcript_end'] - transcript_summary['transcript_start']
-        transcript_summary = transcript_summary.sort_values('transcript_length', ascending=False).reset_index(drop=True)
+        # Reindex transcript_summary to match the original sorted order from database and sort by isoform_average_tpm descending
+        transcript_summary = transcript_summary.sort_values('id', key=lambda x: x.map({vid: idx for idx, vid in enumerate(ordered_transcript_ids)})).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
+
+        if color_by_abundance: 
+            conn = sqlite3.connect(db_path)
+            try:
+                tpm_query = """
+                SELECT DISTINCT id, isoform_average_tpm
+                FROM isoforms
+                WHERE gene_name = ?
+                """
+                tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
+                transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+            finally:
+                conn.close()
         
         # Calculate dynamic height if not provided or if using default slider value
         if height is None or height == 600:
@@ -846,30 +1041,83 @@ def create_junction_exon_visualization(gene_data: dict,
         exon_hover_x = []
         exon_hover_y = []
         exon_hover_text = []
-        
+
+        # Get color scale for transcripts if enabled
+        transcript_tpm_dict = None
+        tpm_min, tpm_max = 0, 0
+        cmap = None
+
+        if color_by_abundance:
+            if abundance_type == 'tissue' and tissue_name:
+                transcript_tpm_dict = get_tissue_tpm_for_isoforms(db_path, gene_data['gene_name'], tissue_name)
+
+            elif abundance_type == 'organ' and organ_name:
+                transcript_tpm_dict = get_organ_tpm_for_isoforms(db_path, gene_data['gene_name'], organ_name)
+
+            else:
+                if 'isoform_average_tpm' in transcript_summary.columns:
+                    transcript_tpm_dict = {row['id']: row.get('isoform_average_tpm', 0)
+                                          for _, row in transcript_summary.iterrows()}
+
+            # Get min/max for normalization
+            if transcript_tpm_dict:
+                tpm_values = [v for v in transcript_tpm_dict.values() if v is not None]
+                if tpm_values:
+                    tpm_min, tpm_max = min(tpm_values), max(tpm_values)
+                    cmap = get_matplotlib_colormap(colorscale)
+
         for _, transcript in transcript_summary.iterrows():
             isoform_id = transcript['id']
             trans_id = transcript['trans_id']
             trans_order = transcript['trans_order']
-            
+
             trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
-            
+
+            if color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
+                tpm = transcript_tpm_dict[isoform_id]
+
+                if tpm_max > tpm_min:
+                    normalized = (tpm - tpm_min) / (tpm_max - tpm_min)
+
+                # When all values are equal, use 0.0 to show the minimum color on the scale
+                else:
+                    normalized = 0.0
+
+                rgba = cmap(normalized)
+                exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
+
+            else:
+                exon_fill_color = exon_color
+
             for _, exon in trans_exons.iterrows():
                 exon_shapes.append({
                     'type': "rect",
                     'x0': exon['exon_start'], 'y0': trans_order - 0.3,
                     'x1': exon['exon_end'], 'y1': trans_order + 0.3,
-                    'fillcolor': exon_color,
-                    'line': {'color': exon_color, 'width': 1},
+                    'fillcolor': exon_fill_color,
+                    'line': {'color': exon_fill_color, 'width': 1},
                     'opacity': 0.8
                 })
-                
+
                 exon_hover_x.append((exon['exon_start'] + exon['exon_end']) / 2)
                 exon_hover_y.append(trans_order)
-                exon_hover_text.append(
-                    f"Isoform ID: {isoform_id}<br>Transcript ID: {abbreviate_transcript_name(trans_id)}<br>Exon: {exon['exon_number']}<br>"
-                    f"Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
-                )
+
+                # Build hover text with optional TPM info
+                hover_text = f"Isoform ID: {isoform_id}<br>Transcript ID: {abbreviate_transcript_name(trans_id)}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
+                if color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
+                    tpm = transcript_tpm_dict[isoform_id]
+                    if tpm is not None:
+                        if abundance_type == 'tissue' and tissue_name:
+                            formatted_tissue = ' '.join(word.capitalize() for word in tissue_name.split())
+                            hover_text += f"<br>{formatted_tissue} TPM: {tpm:.2f}"
+
+                        elif abundance_type == 'organ' and organ_name:
+                            formatted_organ = ' '.join(word.capitalize() for word in organ_name.split())
+                            hover_text += f"<br>{formatted_organ} TPM: {tpm:.2f}"
+
+                        else:
+                            hover_text += f"<br>Average TPM: {tpm:.2f}"
+                exon_hover_text.append(hover_text)
         
         junction_y_start = y_max + 0.5
         
@@ -900,31 +1148,98 @@ def create_junction_exon_visualization(gene_data: dict,
     junction_hover_x = []
     junction_hover_y = []
     junction_hover_text = []
-    
+
+    junction_psi_data = {}
+    if junctions and color_junctions_by_psi:
+        conn = sqlite3.connect(db_path)
+        try:
+            psi_query = """
+            SELECT DISTINCT junction_id, junction_average_psi
+            FROM junctions
+            WHERE gene_name = ?
+            """
+            psi_df = pd.read_sql_query(psi_query, conn, params=[gene_name])
+            # Create a mapping of (start, end) -> junction_average_psi
+            for _, row in psi_df.iterrows():
+                junction_id = row['junction_id']
+                psi = row['junction_average_psi']
+                # Parse junction_id format: chr19_123_456_strand
+                parts = junction_id.rsplit('_', 1)
+                if len(parts) == 2:
+                    coords_part = parts[0]
+                    coord_parts = coords_part.split('_')
+                    if len(coord_parts) >= 3:
+                        try:
+                            start = int(coord_parts[-2])
+                            end = int(coord_parts[-1])
+                            junction_psi_data[(start, end)] = psi
+                        except (ValueError, IndexError):
+                            pass
+        finally:
+            conn.close()
+
+        # Calculate PSI min/max for normalization
+        psi_values = [v for v in junction_psi_data.values() if v is not None]
+        if psi_values:
+            psi_min = min(psi_values)
+            psi_max = max(psi_values)
+        else:
+            psi_min = psi_max = 0
+
+        cmap = get_matplotlib_colormap(colorscale)
+
     if junctions:
         for i, junction in enumerate(junctions):
             start = junction['start']
             end = junction['end']
             junction_y_pos = junction_y_start + (i * 1.0)
-    
+
             junction_id = f"chr{gene_data.get('chromosome', '').replace('chr', '')}_{start}_{end}_{strand}"
             junction_labels.append(junction_id)
             junction_y_positions.append(junction_y_pos)
+
+            # Color priority: Average PSI color > user selected individual junction color > global color
+            if color_junctions_by_psi and (start, end) in junction_psi_data:
+                psi = junction_psi_data[(start, end)]
+                if psi is not None:
+                    if psi_max > psi_min:
+                        normalized = (psi - psi_min) / (psi_max - psi_min)
+                    else:
+                        normalized = 0.5
+                    rgba = cmap(normalized)
+                    junction_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
+                else:
+                    # PSI coloring enabled but no PSI data: so use individual color if available, otherwise global color
+                    if individual_junction_colors and junction_id in individual_junction_colors:
+                        junction_fill_color = individual_junction_colors[junction_id]
+                    else:
+                        junction_fill_color = junction_color
+
+            # Check if junction has an individual color override
+            elif individual_junction_colors and junction_id in individual_junction_colors:
+                junction_fill_color = individual_junction_colors[junction_id]
+            else:
+                junction_fill_color = junction_color
+
             junction_shapes.append({
                 'type': "rect",
                 'x0': start, 'y0': junction_y_pos - 0.15,
                 'x1': end, 'y1': junction_y_pos + 0.15,
-                'fillcolor': junction_color,
-                'line': {'color': junction_color, 'width': 1},
+                'fillcolor': junction_fill_color,
+                'line': {'color': junction_fill_color, 'width': 1},
                 'opacity': 0.8
             })
-            
+
             junction_hover_x.append((start + end) / 2)
             junction_hover_y.append(junction_y_pos)
-            junction_hover_text.append(
-                f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>'
-                f'Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}'
-            )
+
+            # Build hover text with optional PSI info
+            hover_text = f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}'
+            if (start, end) in junction_psi_data:
+                psi = junction_psi_data[(start, end)]
+                if psi is not None:
+                    hover_text += f"<br>Average PSI: {psi:.2f}"
+            junction_hover_text.append(hover_text)
     
     all_shapes = exon_shapes + junction_shapes
     if all_shapes:
@@ -935,7 +1250,8 @@ def create_junction_exon_visualization(gene_data: dict,
             x=exon_hover_x,
             y=exon_hover_y,
             mode='markers',
-            marker=dict(size=8, opacity=0),
+            marker=dict(size=8, opacity=0.05, color='rgba(100,100,100,0.05)',
+                       line=dict(width=0)),
             showlegend=False,
             hovertemplate='%{text}<extra></extra>',
             text=exon_hover_text,
@@ -947,21 +1263,116 @@ def create_junction_exon_visualization(gene_data: dict,
             x=junction_hover_x,
             y=junction_hover_y,
             mode='markers',
-            marker=dict(size=10, opacity=0),
+            marker=dict(size=15, opacity=0, color='rgba(100,100,255,0)',
+                       line=dict(width=0, color='rgba(100,100,255,0)')),
             showlegend=False,
             hovertemplate='%{text}<extra></extra>',
             text=junction_hover_text,
             name='Junctions'
         ))
-    
+
+    # Setup colorscale (needed for both junction and transcript colorbars)
+    if colorscale:
+        selected_colorscale = colorscale
+    else:
+        selected_colorscale = 'Viridis'
+
+    # Create PSI colorbar for junctions (independent of transcript coloring)
+    if junctions and color_junctions_by_psi and 'psi_min' in locals() and 'psi_max' in locals():
+        # Create invisible scatter trace with colorbar for PSI
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='markers',
+            marker=dict(
+                colorscale=selected_colorscale,
+                cmin=psi_min,
+                cmax=psi_max,
+                colorbar=dict(
+                    title=dict(text="Junction<br>Average PSI", font=dict(size=16)),
+                    thickness=20,
+                    len=0.4,
+                    x=1.22,
+                    xpad=0,
+                    y=0.78,
+                    tickfont=dict(size=10)
+                ),
+                showscale=True,
+                size=0,
+                opacity=0
+            ),
+            showlegend=False,
+            hoverinfo='none',
+            name='PSI Scale'
+        ))
+
+    if color_by_abundance:
+        if not transcript_summary.empty:
+            if tpm_min is not None and tpm_max is not None:
+                if abundance_type == 'tissue' and tissue_name:
+                    formatted_tissue = ' '.join(word.capitalize() for word in tissue_name.split())
+                    colorbar_title = wrap_colorbar_title(formatted_tissue, "Tissue TPM")
+                elif abundance_type == 'organ' and organ_name:
+                    formatted_organ = ' '.join(word.capitalize() for word in organ_name.split())
+                    colorbar_title = wrap_colorbar_title(formatted_organ, "Organ TPM")
+                else:
+                    colorbar_title = "Transcript<br>Average TPM"
+
+                if tpm_max > tpm_min:
+                    cmin_val = tpm_min
+                    cmax_val = tpm_max
+
+                else:
+                    # When all values are 0, just use a small range for display so colorbar is still visible
+                    cmin_val = 0
+                    cmax_val = 1
+
+                # If junctions are not colored by PSI, move transcript colorbar up
+                if not color_junctions_by_psi: 
+                    transcript_colorbar_y = 0.78 
+                else: 
+                    transcript_colorbar_y = 0.33
+
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    marker=dict(
+                        colorscale=selected_colorscale,
+                        cmin=cmin_val,
+                        cmax=cmax_val,
+                        colorbar=dict(
+                            title=dict(text=colorbar_title, font=dict(size=16)),
+                            thickness=20,
+                            len=0.4,
+                            x=1.22,
+                            xpad=0,
+                            y=transcript_colorbar_y,
+                            tickfont=dict(size=10)
+                        ),
+                        showscale=True,
+                        size=0,
+                        opacity=0
+                    ),
+                    showlegend=False,
+                    hoverinfo='none',
+                    name='TPM Scale'
+                ))
+
     total_y_range = junction_y_start + len(junctions) * 1.0 + 0.5 if junctions else y_max
-    
+
+    # keep labels and colorbars at fixed distance away from y-axis labels (accounting for length of isoform hashes)
+    if color_by_abundance or color_junctions_by_psi:
+        right_margin = 250
+        label_xshift_pixels = 10
+    else:
+        right_margin = 200
+        label_xshift_pixels = 10
+
     fig.update_layout(
         title={
             'text': f"Splice Junctions and Exons for Gene {gene_name} ({gene_id})<br>(Coordinates: {min_start} - {max_end}, Strand: {strand})",
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 14}
+            'font': {'size': 18}
         },
         xaxis=dict(
             title="Genomic Position",
@@ -983,40 +1394,43 @@ def create_junction_exon_visualization(gene_data: dict,
         height=height,
         margin=dict(
             l=MIN_MARGIN,
-            r=160,
+            r=right_margin,
             t=MAX_MARGIN,
             b=MAX_MARGIN+7
         ),
         hovermode='closest',
+        dragmode='select',
         plot_bgcolor='white',
         autosize=True,
         uirevision='constant'
     )
-    
+
     for idx, transcript in enumerate(transcript_labels):
         y_pos = transcript_y_positions[idx]
         fig.add_annotation(
-            x=1.01,
+            x=1.0,
             xref='paper',
+            xshift=label_xshift_pixels,
             y=y_pos,
             text=transcript,
             showarrow=False,
             xanchor='left',
             yanchor='middle',
-            font=dict(size=10)
+            font=dict(size=12)
         )
 
     for idx, junction in enumerate(junction_labels):
         y_pos = junction_y_positions[idx]
         fig.add_annotation(
-            x=1.01,
+            x=1.0,
             xref='paper',
+            xshift=label_xshift_pixels,
             y=y_pos,
             text=junction,
             showarrow=False,
             xanchor='left',
             yanchor='middle',
-            font=dict(size=10, color='black')
+            font=dict(size=12, color='black')
         )
 
     return fig

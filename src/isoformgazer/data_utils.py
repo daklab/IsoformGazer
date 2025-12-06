@@ -4,6 +4,13 @@ import pandas as pd
 import plotly.graph_objs as go
 from dash import html
 import dash_bootstrap_components as dbc
+import matplotlib.pyplot as plt
+import os
+import json
+import pickle
+import hashlib
+from datetime import datetime
+from pathlib import Path
 
 
 def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
@@ -51,13 +58,19 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
     
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
-    
+
     if sort_by:
         order_clauses = []
         for col, direction in sort_by:
             order_clauses.append(f"{col} {'ASC' if direction == 'asc' else 'DESC'}")
         if order_clauses:
             query += " ORDER BY " + ", ".join(order_clauses)
+    else:
+        # Default sort order: isoforms by isoform_average_tpm DESC, junctions by junction_average_psi DESC
+        if table_name.lower() == 'isoforms':
+            query += " ORDER BY isoform_average_tpm DESC NULLS LAST"
+        elif table_name.lower() == 'junctions':
+            query += " ORDER BY junction_average_psi DESC NULLS LAST"
     
     if where_clauses:
         count_where = " WHERE " + " AND ".join(where_clauses)
@@ -76,24 +89,58 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
     return df.to_dict('records'), total_count
 
 
+def get_all_gene_options(db_path):
+    """Loads all gene options from database at startup for fast client-side filtering"""
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA cache_size = 10000")
+
+    query = """
+    SELECT DISTINCT
+        CASE
+            WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
+            ELSE gene_name
+        END as gene_name,
+        gene_id
+    FROM isoforms
+    WHERE gene_id IS NOT NULL
+    ORDER BY gene_name
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+
+    options = []
+    for _, row in df.iterrows():
+        gene_name = row['gene_name']
+        gene_id = row['gene_id']
+
+        if gene_name and gene_id and not pd.isna(gene_name) and not pd.isna(gene_id):
+            options.append({
+                'label': f"{gene_name} ({gene_id})",
+                'value': gene_name,
+                'search': f"{gene_name.lower()} {gene_id.lower()}"
+            })
+
+    return options
+
+
 def get_gene_options(db_path, search_term=None, limit=10):
     """Get gene options for dropdown from database"""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA cache_size = 10000")
-    
+
     if search_term:
         query = """
-        SELECT DISTINCT 
-            CASE 
+        SELECT DISTINCT
+            CASE
                 WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
-                ELSE gene_name 
-            END as gene_name, 
-            gene_id 
-        FROM isoforms 
-        WHERE gene_id IS NOT NULL 
+                ELSE gene_name
+            END as gene_name,
+            gene_id
+        FROM isoforms
+        WHERE gene_id IS NOT NULL
         AND (
-            (gene_name IS NOT NULL AND gene_name LIKE ?) 
-            OR gene_id LIKE ? 
+            (gene_name IS NOT NULL AND gene_name LIKE ?)
+            OR gene_id LIKE ?
             OR (gene_name IS NULL AND 'Unknown' LIKE ?)
         )
         ORDER BY gene_name
@@ -102,33 +149,33 @@ def get_gene_options(db_path, search_term=None, limit=10):
         df = pd.read_sql_query(query, conn, params=[f"%{search_term}%", f"%{search_term}%", f"%{search_term}%", limit])
     else:
         query = """
-        SELECT DISTINCT 
-            CASE 
+        SELECT DISTINCT
+            CASE
                 WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
-                ELSE gene_name 
-            END as gene_name, 
-            gene_id 
-        FROM isoforms 
+                ELSE gene_name
+            END as gene_name,
+            gene_id
+        FROM isoforms
         WHERE gene_id IS NOT NULL
         ORDER BY gene_name
         LIMIT ?
         """
         df = pd.read_sql_query(query, conn, params=[limit])
-    
+
     conn.close()
-    
+
     options = []
     for _, row in df.iterrows():
         gene_name = row['gene_name']
         gene_id = row['gene_id']
-        
+
         # Skip any entries that are still somehow None/null?
         if gene_name and gene_id and not pd.isna(gene_name) and not pd.isna(gene_id):
             options.append({
                 'label': f"{gene_name} ({gene_id})",
                 'value': gene_name  # Use the processed gene_name (including 'Unknown' for no name genes)
             })
-    
+
     return options
 
 
@@ -513,3 +560,180 @@ def apply_distance_preprocessing(data_matrix, distance_metric):
             processed.loc[:, constant_cols] += noise
     
     return processed
+
+
+###################################################################
+# DEFAULT GENE CACHING
+###################################################################
+def get_default_gene_cache_path(base_dir):
+    """Returns path for default gene cache"""
+    return os.path.join(base_dir, "data", "default_gene_cache.pkl")
+
+
+def get_cache_metadata_path(base_dir):
+    """Returns path for cache metadata"""
+    return os.path.join(base_dir, "data", "cache_metadata.json")
+
+
+def get_database_hash(db_path):
+    """Generates hash of database file for cache invalidation"""
+    try:
+        with open(db_path, 'rb') as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except Exception as e:
+        print(f"Warning: Could not compute database hash: {e}")
+        return None
+
+
+def is_cache_valid(base_dir, db_path):
+    """Check if default gene cache is still valid"""
+    cache_path = get_default_gene_cache_path(base_dir)
+    metadata_path = get_cache_metadata_path(base_dir)
+
+    if not Path(cache_path).exists() or not Path(metadata_path).exists():
+        return False
+
+    try:
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+
+        current_db_hash = get_database_hash(db_path)
+        cached_db_hash = metadata.get('db_hash')
+
+        if current_db_hash != cached_db_hash:
+            return False
+
+        return True
+    except Exception as e:
+        print(f"Warning: Cache validation failed: {e}")
+        return False
+
+
+def load_default_gene_cache(base_dir):
+    """Load cached data and plots for default gene (A1BG-AS1)"""
+    cache_path = get_default_gene_cache_path(base_dir)
+
+    if not Path(cache_path).exists():
+        return None
+
+    try:
+        with open(cache_path, 'rb') as f:
+            cache_data = pickle.load(f)
+        return cache_data
+    except Exception as e:
+        print(f"Warning: Could not load cache: {e}")
+        return None
+
+
+def save_default_gene_cache(base_dir, db_path, cache_data):
+    """Save cached data and plots for default gene (A1BG-AS1)"""
+    cache_path = get_default_gene_cache_path(base_dir)
+    metadata_path = get_cache_metadata_path(base_dir)
+
+    try:
+        with open(cache_path, 'wb') as f:
+            pickle.dump(cache_data, f)
+
+        metadata = {
+            'gene_name': 'A1BG-AS1',
+            'timestamp': datetime.now().isoformat(),
+            'db_hash': get_database_hash(db_path),
+            'cache_version': 1
+        }
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f)
+
+    except Exception as e:
+        print(f"Warning: Could not save cache: {e}")
+
+
+def clear_default_gene_cache(base_dir):
+    """Clear the default gene cache"""
+    cache_path = get_default_gene_cache_path(base_dir)
+    metadata_path = get_cache_metadata_path(base_dir)
+
+    try:
+        if Path(cache_path).exists():
+            os.remove(cache_path)
+        if Path(metadata_path).exists():
+            os.remove(metadata_path)
+        print("✓ Default gene cache cleared")
+    except Exception as e:
+        print(f"Warning: Could not clear cache: {e}")
+
+
+def generate_default_gene_cache(db_path, gene_name='A1BG-AS1'):
+    """
+    Generate cache for default gene data and plots.
+    This function queries all necessary data for the default gene to populate
+    the initial stores with pre-computed results.
+
+    Returns a dictionary with cached data structures.
+    """
+    cache_data = {}
+
+    try:
+        isoform_data, _ = query_master_table(
+            db_path,
+            table_name='isoforms',
+            page=0,
+            page_size=10, 
+            sort_by=None,
+            filters=None,
+            gene_filter=gene_name
+        )
+        cache_data['isoform_full_data'] = isoform_data
+
+        junction_data, _ = query_master_table(
+            db_path,
+            table_name='junctions',
+            page=0,
+            page_size=100,
+            sort_by=None,
+            filters=None,
+            gene_filter=gene_name
+        )
+        cache_data['junction_full_data'] = junction_data
+        cache_data['filtered_isoform_ids'] = [row.get('id', '') for row in isoform_data]
+        cache_data['filtered_junction_ids'] = [row.get('junction_id', '') for row in junction_data]
+
+        return cache_data
+
+    except Exception as e:
+        print(f"Warning: Could not generate default gene cache: {e}")
+        return None
+
+
+def extract_gtf_attr_val(attr_str):
+    """Extract value from GTF attribute"""
+    parts = attr_str.split(None, 1)
+
+    if len(parts) < 2:
+        return None
+    
+    value = parts[1].strip()
+
+    if value.startswith('"') and value.endswith('"'):
+        value = value[1:-1]
+
+    return value
+
+
+def get_matplotlib_colormap(colorscale_name: str):
+    """Convert a Plotly colorscale name to a matplotlib colormap"""
+    colormap_mapping = {
+        'Viridis': plt.cm.viridis,
+        'Plasma': plt.cm.plasma,
+        'Inferno': plt.cm.inferno,
+        'Magma': plt.cm.magma,
+        'Cividis': plt.cm.cividis,
+        'Blues': plt.cm.Blues,
+        'Reds': plt.cm.Reds,
+        'RdBu_r': plt.cm.RdBu_r,
+        'RdYlBu': plt.cm.RdYlBu,
+        'Spectral': plt.cm.Spectral,
+        'YlOrRd': plt.cm.YlOrRd,
+        'Turbo': plt.cm.turbo,
+    }
+
+    return colormap_mapping.get(colorscale_name, plt.cm.viridis)
