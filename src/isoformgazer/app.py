@@ -720,6 +720,7 @@ def create_loading_progress_figure():
 # APPLICATION SETUP
 ###################################################################
 db_path = setup_local_database()
+base_dir = os.path.dirname(os.path.abspath(__file__))
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
 
