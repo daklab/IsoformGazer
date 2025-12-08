@@ -210,9 +210,9 @@ def load_psl_data(psl_file_path: str) -> pd.DataFrame:
         # Extract gene_id and trans_id from qName (assuming format: transcript_geneID)
         psl_df['gene_id'] = psl_df['qName'].str.split('_').str[1]
         psl_df['trans_id'] = psl_df['qName'].str.split('_').str[0]
-        
+
         # Calculate transcript length
-        psl_df['transcript_length'] = psl_df['tEnd'] - psl_df['tStart']
+        psl_df['transcript_length'] = psl_df['tend'] - psl_df['tstart']
 
         return psl_df
     
@@ -255,7 +255,7 @@ def prepare_gene_psl_data(psl_df: pd.DataFrame):
         psl_df['gene_id'] = psl_df['qName'].str.split('_').str[1]
         psl_df['trans_id'] = psl_df['qName'].str.split('_').str[0]
 
-        psl_df['transcript_length'] = psl_df['tEnd'] - psl_df['tStart']
+        psl_df['transcript_length'] = psl_df['tend'] - psl_df['tstart']
 
         return psl_df
     
@@ -313,11 +313,11 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
     placeholders = ','.join([f':iid_{i}' for i in range(len(isoform_ids))])
     psl_query = f"""
     SELECT
-        id, trans_id, gene_id, tName, strand,
-        tStart, tEnd, blockSizes, tStarts
+        id, trans_id, gene_id, tname, strand,
+        tstart, tend, blocksizes, tstarts
     FROM psl_data
     WHERE id IN ({placeholders})
-    ORDER BY tStart, id
+    ORDER BY tstart, id
     """
     params = {f'iid_{i}': iid for i, iid in enumerate(isoform_ids)}
     gene_psl = db_config.execute_query(psl_query, params=params)
@@ -326,35 +326,35 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
     
     # Use much faster vectorized processing instead of pandas iterrows (super slow)
     transcript_data = []
-    
+
     if not gene_psl.empty:
         gene_psl = gene_psl.copy()
-        gene_psl['blockSizes'] = gene_psl['blockSizes'].str.rstrip(',')
-        gene_psl['tStarts'] = gene_psl['tStarts'].str.rstrip(',')
-        
+        gene_psl['blocksizes'] = gene_psl['blocksizes'].str.rstrip(',')
+        gene_psl['tstarts'] = gene_psl['tstarts'].str.rstrip(',')
+
         # filter out rows with empty block data upfront for some speedup
-        valid_mask = (gene_psl['blockSizes'].notna() & 
-                        gene_psl['tStarts'].notna() & 
-                        (gene_psl['blockSizes'] != '') & 
-                        (gene_psl['tStarts'] != ''))
+        valid_mask = (gene_psl['blocksizes'].notna() &
+                        gene_psl['tstarts'].notna() &
+                        (gene_psl['blocksizes'] != '') &
+                        (gene_psl['tstarts'] != ''))
         gene_psl_valid = gene_psl[valid_mask].copy()
-        
+
         for idx, row in gene_psl_valid.iterrows():
             try:
-                block_sizes = [int(x) for x in row['blockSizes'].split(',') if x]
-                block_starts = [int(x) for x in row['tStarts'].split(',') if x]
-                
+                block_sizes = [int(x) for x in row['blocksizes'].split(',') if x]
+                block_starts = [int(x) for x in row['tstarts'].split(',') if x]
+
                 if not block_sizes or not block_starts or len(block_sizes) != len(block_starts):
                     continue
-                
+
                 base_data = {
                     'id': row['id'],
-                    'trans_id': row['trans_id'], 
+                    'trans_id': row['trans_id'],
                     'gene_id': row['gene_id'],
-                    'chr': row['tName'],
+                    'chr': row['tname'],
                     'strand': row['strand'],
-                    'transcript_start': row['tStart'],
-                    'transcript_end': row['tEnd']
+                    'transcript_start': row['tstart'],
+                    'transcript_end': row['tend']
                 }
                 
                 for i, (size, start) in enumerate(zip(block_sizes, block_starts)):

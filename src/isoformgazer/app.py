@@ -237,7 +237,7 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
                     # fallback: use entire qName as transcript
                     chunk['trans_id'] = chunk['qName']
                     chunk['gene_id'] = 'unknown'
-            chunk['transcript_length'] = chunk['tEnd'] - chunk['tStart']
+            chunk['transcript_length'] = chunk['tend'] - chunk['tstart']
             
             if 'index' in chunk.columns:
                 chunk.drop(columns=['index'], inplace=True)

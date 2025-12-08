@@ -926,18 +926,18 @@ def process_transcript_structure(psl_df: pd.DataFrame,
     for _, row in gene_psl.iterrows():
         # Parse block sizes and starts
         try:
-            block_sizes = [int(x) for x in row['blockSizes'].strip(',').split(',') if x]
-            block_starts = [int(x) for x in row['tStarts'].strip(',').split(',') if x]
-            
+            block_sizes = [int(x) for x in row['blocksizes'].strip(',').split(',') if x]
+            block_starts = [int(x) for x in row['tstarts'].strip(',').split(',') if x]
+
             # Create exon coordinates
             for i, (size, start) in enumerate(zip(block_sizes, block_starts)):
                 transcript_data.append({
                     'trans_id': row['trans_id'],
                     'gene_id': row['gene_id'],
-                    'chr': row['tName'],
+                    'chr': row['tname'],
                     'strand': row['strand'],
-                    'transcript_start': row['tStart'],
-                    'transcript_end': row['tEnd'],
+                    'transcript_start': row['tstart'],
+                    'transcript_end': row['tend'],
                     'transcript_length': row['transcript_length'],
                     'exon_number': i + 1,
                     'exon_start': start,
