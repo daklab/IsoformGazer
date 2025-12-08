@@ -12,6 +12,8 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
+from sqlalchemy import text
+from src.isoformgazer.db_config import get_db_config
 from src.isoformgazer.data_utils import apply_distance_preprocessing, get_matplotlib_colormap
 from src.isoformgazer.isoform_utils import (load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name,
                            calculate_dynamic_structure_plot_height, calculate_clustergram_min_height,
@@ -67,19 +69,22 @@ def wrap_colorbar_title(name_text, label_text, char_limit=15):
 # VISUALIZATION METHODS
 ###################################################################
 def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete', show_gridlines=False):
-    """Create summary-level clustergram across all cell types and top junctions"""
-    conn = sqlite3.connect(db_path)
+    """Create summary-level clustergram across all cell types and top junctions
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+    """
+    db_config = get_db_config()
     query = """
     SELECT cell_type, junction_id, AVG(psi) as avg_psi, COUNT(*) as n_observations
-    FROM junctions 
-    WHERE psi IS NOT NULL 
+    FROM junctions
+    WHERE psi IS NOT NULL
     GROUP BY cell_type, junction_id
-    HAVING n_observations >= 5
-    ORDER BY n_observations DESC
+    HAVING COUNT(*) >= 5
+    ORDER BY COUNT(*) DESC
     LIMIT 2000
     """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    df = db_config.execute_query(query)
     
     if len(df) == 0:
         return create_empty_clustergram_message("No junction data available for summary view")
@@ -242,24 +247,28 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
 
 
 def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete', show_gridlines=False):
-    """Create ATSE-level clustergram with junctions ordered by average PSI (descending)"""
-    conn = sqlite3.connect(db_path)
+    """Create ATSE-level clustergram with junctions ordered by average PSI (descending)
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+    """
+    db_config = get_db_config()
     query = """
     SELECT cell_type, junction_id, psi, n_cells, event_id, gene_name, junction_average_psi
     FROM junctions
-    WHERE gene_name = ? AND psi IS NOT NULL
+    WHERE gene_name = :gene_name AND psi IS NOT NULL
     """
+    params = {'gene_name': gene_name}
+
     if filtered_junction_ids:
         filtered_ids_str = [str(jid) for jid in filtered_junction_ids]
-        placeholders = ','.join(['?'] * len(filtered_ids_str))
+        placeholders = ','.join([f':jid_{i}' for i in range(len(filtered_ids_str))])
         query += f" AND junction_id IN ({placeholders})"
-        params = [gene_name] + filtered_ids_str
-    else:
-        params = [gene_name]
+        for i, jid in enumerate(filtered_ids_str):
+            params[f'jid_{i}'] = jid
 
     query += " ORDER BY junction_average_psi DESC NULLS LAST, junction_id"
-    gene_vals = pd.read_sql_query(query, conn, params=params)
-    conn.close()
+    gene_vals = db_config.execute_query(query, params=params)
 
     if len(gene_vals) == 0:
         return create_empty_clustergram_message(f"No junction data found for gene: {gene_name}")
@@ -492,12 +501,16 @@ def load_atse_data(atse_file_path: str) -> pd.DataFrame:
 
 
 def get_gene_id_from_atse(db_path: str, gene_name: str) -> str:
-    """Get gene_id for a given gene_name from the database"""
-    conn = sqlite3.connect(db_path)
-    query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = ? LIMIT 1"
-    result = pd.read_sql_query(query, conn, params=[gene_name])
-    conn.close()
-    
+    """Get gene_id for a given gene_name from the database
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        gene_name: Gene name to look up
+    """
+    db_config = get_db_config()
+    query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = :gene_name LIMIT 1"
+    result = db_config.execute_query(query, params={'gene_name': gene_name})
+
     if len(result) > 0:
         # Remove version number
         return result.iloc[0]['gene_id'].split('.')[0]
@@ -508,44 +521,49 @@ def filter_junctions_by_transcripts(db_path: str, gene_name: str, filtered_trans
     """
     Filter junction IDs based on transcript overlap using perfect_match_5_prime and perfect_match_3_prime columns.
     Returns a list of junction IDs that align with any of the filtered transcripts.
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        gene_name: Gene name to filter by
+        filtered_transcript_ids: List of transcript IDs to filter by
     """
     if not filtered_transcript_ids:
         return []
-    
-    conn = sqlite3.connect(db_path)
-    transcript_id_placeholders = ','.join(['?'] * len(filtered_transcript_ids))
+
+    db_config = get_db_config()
+
+    # Get transcript names from IDs
+    transcript_id_placeholders = ','.join([f':tid_{i}' for i in range(len(filtered_transcript_ids))])
     transcript_query = f"""
-    SELECT DISTINCT transcript 
-    FROM isoforms 
+    SELECT DISTINCT transcript
+    FROM isoforms
     WHERE id IN ({transcript_id_placeholders})
     """
-    transcript_result = pd.read_sql_query(transcript_query, conn, params=filtered_transcript_ids)
-    
+    params = {f'tid_{i}': tid for i, tid in enumerate(filtered_transcript_ids)}
+    transcript_result = db_config.execute_query(transcript_query, params=params)
+
     if transcript_result.empty:
-        conn.close()
         return []
-    
+
     transcript_names = transcript_result['transcript'].tolist()
-    
+
     # Get gene_id for the gene_name
-    gene_id_query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = ? LIMIT 1"
-    gene_result = pd.read_sql_query(gene_id_query, conn, params=[gene_name])
-    
+    gene_id_query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = :gene_name LIMIT 1"
+    gene_result = db_config.execute_query(gene_id_query, params={'gene_name': gene_name})
+
     if gene_result.empty:
-        conn.close()
         return []
-    
+
     gene_id_base = gene_result.iloc[0]['gene_id'].split('.')[0]
-    
+
     # Query ATSE data for junctions that match the transcripts
     atse_query = """
     SELECT junction_id, perfect_match_3_prime, perfect_match_5_prime
-    FROM atse_data 
-    WHERE (gene_id_clean = ? OR gene_name = ?)
+    FROM atse_data
+    WHERE (gene_id_clean = :gene_id OR gene_name = :gene_name)
     AND junction_id IS NOT NULL
     """
-    atse_data = pd.read_sql_query(atse_query, conn, params=[gene_id_base, gene_name])
-    conn.close()
+    atse_data = db_config.execute_query(atse_query, params={'gene_id': gene_id_base, 'gene_name': gene_name})
     
     if atse_data.empty:
         return []
@@ -626,24 +644,29 @@ def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list) -
     """
     Filter transcript IDs based on junction overlap using matched_transcript_ids column.
     Returns a list of transcript IDs (from isoforms table) that align with the filtered junctions.
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        filtered_junction_ids: List of junction IDs to filter by
     """
     if not filtered_junction_ids:
         return []
-    
-    conn = sqlite3.connect(db_path)
-    junction_id_placeholders = ','.join(['?'] * len(filtered_junction_ids))
+
+    db_config = get_db_config()
+
+    junction_id_placeholders = ','.join([f':jid_{i}' for i in range(len(filtered_junction_ids))])
     junction_query = f"""
-    SELECT DISTINCT matched_transcript_ids 
-    FROM junctions 
+    SELECT DISTINCT matched_transcript_ids
+    FROM junctions
     WHERE junction_id IN ({junction_id_placeholders})
     AND matched_transcript_ids IS NOT NULL
     """
-    junction_result = pd.read_sql_query(junction_query, conn, params=filtered_junction_ids)
-    
+    params = {f'jid_{i}': jid for i, jid in enumerate(filtered_junction_ids)}
+    junction_result = db_config.execute_query(junction_query, params=params)
+
     if junction_result.empty:
-        conn.close()
         return []
-    
+
     # Get all transcript names
     all_transcript_names = set()
     for _, row in junction_result.iterrows():
@@ -657,21 +680,20 @@ def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list) -
 
                 if name:
                     all_transcript_names.add(name)
-    
+
     if not all_transcript_names:
-        conn.close()
         return []
-    
+
     # Get transcript IDs that match the transcript names
     transcript_names_list = list(all_transcript_names)
-    name_placeholders = ','.join(['?'] * len(transcript_names_list))
+    name_placeholders = ','.join([f':tname_{i}' for i in range(len(transcript_names_list))])
     transcript_query = f"""
-    SELECT DISTINCT id 
-    FROM isoforms 
+    SELECT DISTINCT id
+    FROM isoforms
     WHERE transcript IN ({name_placeholders})
     """
-    transcript_result = pd.read_sql_query(transcript_query, conn, params=transcript_names_list)
-    conn.close()
+    params = {f'tname_{i}': tname for i, tname in enumerate(transcript_names_list)}
+    transcript_result = db_config.execute_query(transcript_query, params=params)
     
     if transcript_result.empty:
         return []
@@ -681,37 +703,39 @@ def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list) -
 
 @cached(cache_timeout=300)
 def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=None) -> dict:
-    """Process ATSE data for a specific gene with caching and performance optimization"""
+    """Process ATSE data for a specific gene with caching and performance optimization
+
+    Args:
+        gene_name: Gene name to process
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        filtered_junction_ids: Optional list of junction IDs to filter by
+    """
     #with ProfilerContext(f"process_atse_data_{gene_name}"):
     gene_id_with_version = None
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA cache_size = 10000")
-    conn.execute("PRAGMA temp_store = MEMORY")
+    db_config = get_db_config()
 
     # Get gene_id from db
-    gene_id_query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = ? LIMIT 1"
-    gene_result = pd.read_sql_query(gene_id_query, conn, params=[gene_name])
-    
+    gene_id_query = "SELECT DISTINCT gene_id FROM junctions WHERE gene_name = :gene_name LIMIT 1"
+    gene_result = db_config.execute_query(gene_id_query, params={'gene_name': gene_name})
+
     if gene_result.empty:
-        conn.close()
         return {'error': f"No gene_id found for {gene_name}"}
-    
+
     gene_id_with_version = gene_result.iloc[0]['gene_id']
     gene_id_base = gene_id_with_version.split('.')[0]
     #memory_tracker.measure(f"after_gene_lookup_{gene_name}")
-    
+
     atse_query = """
-    SELECT event_id, gene_id, gene_name, event_strand, chromosome, 
-            start, end, junction_id, transcripts, perfect_match_3_prime, 
-            perfect_match_5_prime, both_ends_transcripts, 
+    SELECT event_id, gene_id, gene_name, event_strand, chromosome,
+            start, end, junction_id, transcripts, perfect_match_3_prime,
+            perfect_match_5_prime, both_ends_transcripts,
             only_5_prime_transcripts, only_3_prime_transcripts,
             atse_start, atse_end, event_type
-    FROM atse_data 
-    WHERE (gene_id_clean = ? OR gene_name = ?)
+    FROM atse_data
+    WHERE (gene_id_clean = :gene_id OR gene_name = :gene_name)
     ORDER BY start, end
     """
-    gene_atse = pd.read_sql_query(atse_query, conn, params=[gene_id_base, gene_name])
-    conn.close()
+    gene_atse = db_config.execute_query(atse_query, params={'gene_id': gene_id_base, 'gene_name': gene_name})
     #memory_tracker.measure(f"after_atse_query_{gene_name}")
     
     if gene_atse.empty:
@@ -813,14 +837,12 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
             seen.add(key)
             unique_junctions.append(j)
 
-    conn = sqlite3.connect(db_path)
     junction_psi_query = """
     SELECT DISTINCT junction_id, junction_average_psi
     FROM junctions
-    WHERE gene_name = ?
+    WHERE gene_name = :gene_name
     """
-    junction_psi_df = pd.read_sql_query(junction_psi_query, conn, params=[gene_name])
-    conn.close()
+    junction_psi_df = db_config.execute_query(junction_psi_query, params={'gene_name': gene_name})
 
     # Create a mapping of junction coordinates to average PSI
     junction_psi_map = {}
@@ -967,14 +989,13 @@ def create_junction_exon_visualization(gene_data: dict,
     
     if not transcript_data.empty:
         transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
-        conn = sqlite3.connect(db_path)
+        db_config = get_db_config()
         transcript_ids_query = """
         SELECT DISTINCT id FROM isoforms
-        WHERE gene_name = ?
+        WHERE gene_name = :gene_name
         ORDER BY isoform_average_tpm DESC NULLS LAST
         """
-        ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=[gene_name])
-        conn.close()
+        ordered_ids_df = db_config.execute_query(transcript_ids_query, params={'gene_name': gene_name})
         ordered_transcript_ids = ordered_ids_df['id'].tolist()
         # Reverse because transcripts are displayed from top to bottom
         ordered_transcript_ids = ordered_transcript_ids[::-1]
@@ -990,18 +1011,17 @@ def create_junction_exon_visualization(gene_data: dict,
         transcript_summary = transcript_summary.sort_values('id', key=lambda x: x.map({vid: idx for idx, vid in enumerate(ordered_transcript_ids)})).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
 
-        if color_by_abundance: 
-            conn = sqlite3.connect(db_path)
+        if color_by_abundance:
             try:
                 tpm_query = """
                 SELECT DISTINCT id, isoform_average_tpm
                 FROM isoforms
-                WHERE gene_name = ?
+                WHERE gene_name = :gene_name
                 """
-                tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
+                tpm_df = db_config.execute_query(tpm_query, params={'gene_name': gene_name})
                 transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
-            finally:
-                conn.close()
+            except Exception as e:
+                print(f"Warning: Could not load TPM data: {e}")
         
         # Calculate dynamic height if not provided or if using default slider value
         if height is None or height == 600:
@@ -1151,14 +1171,14 @@ def create_junction_exon_visualization(gene_data: dict,
 
     junction_psi_data = {}
     if junctions and color_junctions_by_psi:
-        conn = sqlite3.connect(db_path)
+        db_config = get_db_config()
         try:
             psi_query = """
             SELECT DISTINCT junction_id, junction_average_psi
             FROM junctions
-            WHERE gene_name = ?
+            WHERE gene_name = :gene_name
             """
-            psi_df = pd.read_sql_query(psi_query, conn, params=[gene_name])
+            psi_df = db_config.execute_query(psi_query, params={'gene_name': gene_name})
             # Create a mapping of (start, end) -> junction_average_psi
             for _, row in psi_df.iterrows():
                 junction_id = row['junction_id']
@@ -1175,8 +1195,8 @@ def create_junction_exon_visualization(gene_data: dict,
                             junction_psi_data[(start, end)] = psi
                         except (ValueError, IndexError):
                             pass
-        finally:
-            conn.close()
+        except Exception as e:
+            print(f"Warning: Could not load PSI data: {e}")
 
         # Calculate PSI min/max for normalization
         psi_values = [v for v in junction_psi_data.values() if v is not None]

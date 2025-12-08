@@ -3,7 +3,6 @@ import math
 import traceback
 from tqdm import tqdm
 import sqlite3
-import scipy
 import numpy as np
 import pandas as pd
 import base64
@@ -22,6 +21,9 @@ from colorama import Fore, Style, init
 import traceback
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
+
+# Import database configuration
+from src.isoformgazer.db_config import initialize_database, get_db_config
 from src.isoformgazer.data_utils import (
     get_master_table_columns, parse_filter_query, query_master_table, get_gene_options,
     get_all_gene_options, create_custom_spinner, validate_filter_input,
@@ -44,6 +46,13 @@ from src.isoformgazer.isoform_utils import (
 
 RANDOM_SEED = 18
 np.random.seed(RANDOM_SEED)
+
+###################################################################
+# POSTGRESQL DATABASE SETUP
+###################################################################
+# All environment variables are loaded from .env file
+from dotenv import load_dotenv
+load_dotenv()
 
 ###################################################################
 # SQLLITE DATABASE SETUP
@@ -717,10 +726,26 @@ def create_loading_progress_figure():
     return fig
 
 ###################################################################
-# APPLICATION SETUP
+# APPLICATION AND DB CONNECTION SETUP
 ###################################################################
-db_path = setup_local_database()
 base_dir = os.path.dirname(os.path.abspath(__file__))
+db_type = os.getenv('DB_TYPE', 'sqlite').lower()
+
+if db_type == 'postgresql':
+    print(f"{Fore.CYAN}Initializing PostgreSQL database connection...{Style.RESET_ALL}")
+    initialize_database(use_postgresql=True)
+    db_config = get_db_config()
+    print(f"{Fore.GREEN}Connected to IsoformGazer database{Style.RESET_ALL}")
+    # db_path is None for PostgreSQL mode (we use db_config instead)
+    db_path = None
+
+else:
+    print(f"{Fore.CYAN}Using SQLite database for local development...{Style.RESET_ALL}")
+    db_path = setup_local_database()
+    initialize_database(db_path=db_path, use_postgresql=False)
+    db_config = get_db_config()
+    print(f"{Fore.GREEN}✓ Connected to SQLite database at {db_path}{Style.RESET_ALL}")
+
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
 
@@ -729,11 +754,12 @@ DEFAULT_GENE = 'A1BG-AS1'
 default_gene_cache = None
 cache_loaded_from_disk = False
 
-if is_cache_valid(base_dir, db_path):
+# Note: Cache validation logic still uses db_path for SQLite compatibility
+if db_type == 'sqlite' and is_cache_valid(base_dir, db_path):
     default_gene_cache = load_default_gene_cache(base_dir)
     cache_loaded_from_disk = True
 
-if not default_gene_cache:
+if not default_gene_cache and db_path:
     default_gene_cache = generate_default_gene_cache(db_path, DEFAULT_GENE)
     if default_gene_cache:
         save_default_gene_cache(base_dir, db_path, default_gene_cache)
@@ -2452,7 +2478,6 @@ def update_summary_blocks(selected_gene):
 
     try:
         # Get the first row data for the selected gene, since these columns have the same values for all rows
-        conn = sqlite3.connect(db_path)
         query = """
         SELECT
             gene_protein_category,
@@ -2466,23 +2491,28 @@ def update_summary_blocks(selected_gene):
             orf_perplexity,
             orf_expressed_samples
         FROM isoforms
-        WHERE gene_name = ?
+        WHERE gene_name = :gene_name
         LIMIT 1
         """
-        cursor = conn.cursor()
-        cursor.execute(query, (selected_gene,))
-        row = cursor.fetchone()
-        conn.close()
+        result_df = db_config.execute_query(query, params={'gene_name': selected_gene})
 
-        if not row:
+        if result_df.empty:
             return (
                 [html.P("No data found for selected gene", className='summary-placeholder')],
                 [html.P("No data found for selected gene", className='summary-placeholder')]
             )
 
-        (gene_protein_category, gene_potential, gene_perplexity, ptc_potential, 
-         ptc_perplexity, gene_average_tpm, gene_expressed_samples, 
-         orf_potential, orf_perplexity, orf_expressed_samples) = row
+        row = result_df.iloc[0]
+        gene_protein_category = row['gene_protein_category']
+        gene_potential = row['gene_potential']
+        gene_perplexity = row['gene_perplexity']
+        ptc_potential = row['ptc_potential']
+        ptc_perplexity = row['ptc_perplexity']
+        gene_average_tpm = row['gene_average_tpm']
+        gene_expressed_samples = row['gene_expressed_samples']
+        orf_potential = row['orf_potential']
+        orf_perplexity = row['orf_perplexity']
+        orf_expressed_samples = row['orf_expressed_samples']
 
         gene_summary = [
             html.Div(className='summary-item', children=[
@@ -3552,9 +3582,6 @@ def download_hash_results(download_clicks, stored_data):
         else:
             hash_results = stored_data
 
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
         # Results TSV format: gene_id, transcript_id, gencode_transcript_id, hash_id
         lines = ["gene_id\ttranscript_id\tgencode_transcript_id\thash_id"]
 
@@ -3567,19 +3594,17 @@ def download_hash_results(download_clicks, stored_data):
             # Note: this is version-agnostic matching! (e.g., ENSG00000223972.5 matches ENSG00000223972.6)
             gene_base = gene_id.split('.')[0] if '.' in gene_id else gene_id
 
-            cursor.execute("""
+            query = """
                 SELECT DISTINCT transcript_id FROM gencode_gtf
-                WHERE gene_id LIKE ?
+                WHERE gene_id LIKE :gene_id_pattern
                 ORDER BY transcript_id
                 LIMIT 1
-            """, (f"{gene_base}.%",))
+            """
+            gencode_df = db_config.execute_query(query, params={'gene_id_pattern': f"{gene_base}.%"})
 
-            gencode_result = cursor.fetchone()
-            gencode_transcript_id = gencode_result[0] if gencode_result else "N/A"
+            gencode_transcript_id = gencode_df.iloc[0]['transcript_id'] if not gencode_df.empty else "N/A"
 
             lines.append(f"{gene_id}\t{transcript_id}\t{gencode_transcript_id}\t{hash_id}")
-
-        conn.close()
         download_content = "\n".join(lines)
 
         return dict(content=download_content, filename="isoform_hashes.tsv")

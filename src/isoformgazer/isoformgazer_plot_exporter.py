@@ -25,6 +25,11 @@ import plotly.graph_objs as go
 import plotly.io as pio
 from PIL import Image
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
+from db_config import initialize_database, get_db_config
 from isoform_utils import (
     create_transcript_structure_plot,
     create_isoform_expression_clustergram,
@@ -45,19 +50,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ###################################################################
 # DATABASE SETUP (copied from app.py)
 ###################################################################
-def check_database_status(db_path: str) -> bool:
+def check_database_status(db_path: str = None) -> bool:
     """
     Checks if database exists and is valid.
+
+    Args:
+        db_path: Legacy parameter for SQLite path (optional, will use db_config if not provided)
     """
-    if Path(db_path).exists():
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.execute("SELECT 1 FROM isoforms LIMIT 1")
-            conn.close()
-            return True
-        except:
-            return False
-    return False
+    try:
+        db_config = get_db_config()
+        # Test query to check database connectivity
+        result = db_config.execute_query("SELECT 1 FROM isoforms LIMIT 1")
+        return not result.empty
+    except Exception as e:
+        print(f"Database check failed: {e}")
+        return False
 
 
 class BulkPlotExporter:
@@ -227,25 +234,22 @@ class BulkPlotExporter:
             Tuple of (gene_exists, gene_data_dict)
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            db_config = get_db_config()
 
             # Check if gene exists in isoforms table
-            gene_check = "SELECT 1 FROM isoforms WHERE gene_name = ? LIMIT 1"
-            result = pd.read_sql_query(gene_check, conn, params=[gene_name])
+            gene_check = "SELECT 1 FROM isoforms WHERE gene_name = :gene_name LIMIT 1"
+            result = db_config.execute_query(gene_check, params={'gene_name': gene_name})
 
             if result.empty:
-                conn.close()
                 return False, {}
 
-            tpm_query = "SELECT * FROM tpm_data WHERE gene_name = ?"
-            ratio_query = "SELECT * FROM ratio_data WHERE gene_name = ?"
-            log_tpm_query = "SELECT * FROM log_tpm_data WHERE gene_name = ?"
+            tpm_query = "SELECT * FROM tpm_data WHERE gene_name = :gene_name"
+            ratio_query = "SELECT * FROM ratio_data WHERE gene_name = :gene_name"
+            log_tpm_query = "SELECT * FROM log_tpm_data WHERE gene_name = :gene_name"
 
-            tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
-            ratio_df = pd.read_sql_query(ratio_query, conn, params=[gene_name])
-            log_tpm_df = pd.read_sql_query(log_tpm_query, conn, params=[gene_name])
-
-            conn.close()
+            tpm_df = db_config.execute_query(tpm_query, params={'gene_name': gene_name})
+            ratio_df = db_config.execute_query(ratio_query, params={'gene_name': gene_name})
+            log_tpm_df = db_config.execute_query(log_tpm_query, params={'gene_name': gene_name})
 
             return True, {
                 "tpm": tpm_df,

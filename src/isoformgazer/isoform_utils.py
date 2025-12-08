@@ -12,6 +12,8 @@ import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
+from sqlalchemy import text
+from src.isoformgazer.db_config import get_db_config
 from src.isoformgazer.data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap
 from src.isoformgazer.performance_utils import cached, memory_tracker, plot_optimizer
 # suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
@@ -220,18 +222,22 @@ def load_psl_data(psl_file_path: str) -> pd.DataFrame:
     
 
 def get_gene_id_for_gene_name(db_path: str, gene_name: str) -> str:
-    """Get gene_id for a given gene_name from the isoforms database"""
-    conn = sqlite3.connect(db_path)
-    query = "SELECT DISTINCT gene_id FROM isoforms WHERE gene_name = ? LIMIT 1"
-    result = pd.read_sql_query(query, conn, params=[gene_name])
-    conn.close()
-    
+    """Get gene_id for a given gene_name from the isoforms database
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        gene_name: Gene name to look up
+    """
+    db_config = get_db_config()
+    query = "SELECT DISTINCT gene_id FROM isoforms WHERE gene_name = :gene_name LIMIT 1"
+    result = db_config.execute_query(query, params={'gene_name': gene_name})
+
     if len(result) > 0:
         gene_id = result.iloc[0]['gene_id']
         # Remove version number from gene_id (e.g., ENSG00000100320.16 -> ENSG00000100320)
         gene_id_clean = gene_id.split('.')[0]
         return gene_id_clean
-    
+
     else:
         return None
 
@@ -259,57 +265,62 @@ def prepare_gene_psl_data(psl_df: pd.DataFrame):
     
 
 def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: list) -> pd.DataFrame:
-    """Transcript structure processing with caching and memory optimization for faster rendering!"""
+    """Transcript structure processing with caching and memory optimization for faster rendering!
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        gene_name: Gene name to process
+        filtered_ids: Optional list of isoform IDs to filter by
+    """
     #with ProfilerContext(f"process_transcript_structure_{gene_name}"):
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA cache_size = 10000")
-    conn.execute("PRAGMA temp_store = MEMORY")
-    gene_query = "SELECT DISTINCT gene_id FROM isoforms WHERE gene_name = ? LIMIT 1"
-    gene_result = pd.read_sql_query(gene_query, conn, params=[gene_name])
-    
+    db_config = get_db_config()
+
+    gene_query = "SELECT DISTINCT gene_id FROM isoforms WHERE gene_name = :gene_name LIMIT 1"
+    gene_result = db_config.execute_query(gene_query, params={'gene_name': gene_name})
+
     if gene_result.empty:
-        conn.close()
         return pd.DataFrame()
-    
+
     gene_id = gene_result.iloc[0]['gene_id'].split('.')[0]
     #memory_tracker.measure(f"after_gene_lookup_{gene_name}")
-    
+
     if filtered_ids and len(filtered_ids) > 0:
         filtered_ids_int = [int(id) for id in filtered_ids if str(id).isdigit()]
         if filtered_ids_int:
-            placeholders = ','.join(['?'] * len(filtered_ids_int))
+            placeholders = ','.join([f':fid_{i}' for i in range(len(filtered_ids_int))])
             isoform_query = f"""
             SELECT id FROM isoforms
-            WHERE gene_id LIKE ? AND id IN ({placeholders})
+            WHERE gene_id LIKE :gene_id AND id IN ({placeholders})
             ORDER BY isoform_average_tpm DESC NULLS LAST
             """
-            params = [f"{gene_id}%"] + filtered_ids_int
+            params = {'gene_id': f"{gene_id}%"}
+            for i, fid in enumerate(filtered_ids_int):
+                params[f'fid_{i}'] = fid
         else:
-            isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
-            params = [f"{gene_id}%"]
+            isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE :gene_id ORDER BY isoform_average_tpm DESC NULLS LAST"
+            params = {'gene_id': f"{gene_id}%"}
     else:
-        isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
-        params = [f"{gene_id}%"]
+        isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE :gene_id ORDER BY isoform_average_tpm DESC NULLS LAST"
+        params = {'gene_id': f"{gene_id}%"}
 
-    isoform_ids = pd.read_sql_query(isoform_query, conn, params=params)['id'].tolist()
-    
+    isoform_ids = db_config.execute_query(isoform_query, params=params)['id'].tolist()
+
     if not isoform_ids:
-        conn.close()
         return pd.DataFrame()
-    
+
     #memory_tracker.measure(f"after_isoform_lookup_{gene_name}")
-    
-    placeholders = ','.join(['?'] * len(isoform_ids))
+
+    placeholders = ','.join([f':iid_{i}' for i in range(len(isoform_ids))])
     psl_query = f"""
-    SELECT 
-        id, trans_id, gene_id, tName, strand, 
+    SELECT
+        id, trans_id, gene_id, tName, strand,
         tStart, tEnd, blockSizes, tStarts
-    FROM psl_data 
+    FROM psl_data
     WHERE id IN ({placeholders})
     ORDER BY tStart, id
     """
-    gene_psl = pd.read_sql_query(psl_query, conn, params=isoform_ids)
-    conn.close()
+    params = {f'iid_{i}': iid for i, iid in enumerate(isoform_ids)}
+    gene_psl = db_config.execute_query(psl_query, params=params)
     
     #memory_tracker.measure(f"after_psl_query_{gene_name}")
     
@@ -372,36 +383,41 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
 
 
 def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -> pd.DataFrame:
-    """Load expression data from SQLite database with caching"""
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA cache_size = 10000")
+    """Load expression data from SQLite database with caching
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        gene_name: Gene name to load expression data for
+        data_type: Type of data to load ('tpm', 'log_tpm', or 'ratio')
+    """
+    db_config = get_db_config()
 
     gene_id = get_gene_id_for_gene_name(db_path, gene_name)
     if not gene_id:
         return pd.DataFrame()
-    
+
     if data_type.lower() == 'tpm':
         table_name = 'tpm_data'
     elif data_type.lower() == 'log_tpm':
         table_name = 'log_tpm_data'
     else:
         table_name = 'ratio_data'
-    
+
     query = f"""
     SELECT
         exp.*,
         psl.trans_id,
         iso.gene_name,
         iso.isoform_average_tpm
-    FROM {table_name} exp
+    FROM "{table_name}" exp
     JOIN psl_data psl ON exp.id = psl.id
     JOIN isoforms iso ON exp.id = iso.id
-    WHERE iso.gene_name = ?
+    WHERE iso.gene_name = :gene_name
     ORDER BY iso.isoform_average_tpm ASC NULLS LAST, psl.trans_id
     """
 
     try:
-        df = pd.read_sql_query(query, conn, params=[gene_name])
+        df = db_config.execute_query(query, params={'gene_name': gene_name})
         df = df.drop(['index'], axis=1)
 
         numeric_cols = [col for col in df.columns if col not in ['transcript', 'trans_id', 'gene', 'gene_name']]
@@ -416,13 +432,10 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
             nan_count = df[numeric_cols].isna().sum().sum()
 
         return df
-    
+
     except Exception as e:
         print(f"Error loading {data_type} data: {e}")
         return pd.DataFrame()
-    
-    finally:
-        conn.close()
 
 
 def create_transcript_structure_plot(db_path: str,
@@ -443,11 +456,11 @@ def create_transcript_structure_plot(db_path: str,
     
     #with PlotPerformanceContext(gene_name, "transcript_structure"):
         #memory_tracker.measure("plot_start")
-        
-    conn = sqlite3.connect(db_path)
+
+    db_config = get_db_config()
     metadata_query = """SELECT gene_id, ORF_perplexity FROM isoforms
-                        WHERE gene_name = ? LIMIT 1"""
-    metadata_result = pd.read_sql_query(metadata_query, conn, params=[gene_name])
+                        WHERE gene_name = :gene_name LIMIT 1"""
+    metadata_result = db_config.execute_query(metadata_query, params={'gene_name': gene_name})
 
     if not metadata_result.empty:
         gene_ensembl_id = metadata_result.iloc[0]['gene_id']
@@ -456,8 +469,6 @@ def create_transcript_structure_plot(db_path: str,
     else:
         gene_ensembl_id = "Unknown"
         orf_perplexity = "No data available"
-
-    conn.close()
 
     strand = transcript_data['strand'].iloc[0] if not transcript_data.empty else ""
 
@@ -488,19 +499,18 @@ def create_transcript_structure_plot(db_path: str,
             transcript_summary['abundance_tpm'] = transcript_summary['id'].map(organ_tpm_dict).fillna(0)
 
         else:
-            conn = sqlite3.connect(db_path)
             try:
                 tpm_query = """
                 SELECT DISTINCT id, isoform_average_tpm
                 FROM isoforms
-                WHERE gene_name = ?
+                WHERE gene_name = :gene_name
                 """
-                tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
+                tpm_df = db_config.execute_query(tpm_query, params={'gene_name': gene_name})
                 transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
                 transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
 
-            finally:
-                conn.close()
+            except Exception as e:
+                print(f"Warning: Could not load TPM data: {e}")
 
     # Calculate dynamic height if not provided or if using default slider value
     if height is None or height == 600:
@@ -970,10 +980,9 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     tissue_cols = [col for col in expression_data.columns if col not in metadata_cols]
 
     if 'isoform_average_tpm' not in expression_data.columns and db_path:
-        conn = sqlite3.connect(db_path)
-        isoform_tpm_query = "SELECT id, isoform_average_tpm FROM isoforms WHERE gene_name = ?"
-        isoform_tpm = pd.read_sql_query(isoform_tpm_query, conn, params=[gene_name])
-        conn.close()
+        db_config = get_db_config()
+        isoform_tpm_query = "SELECT id, isoform_average_tpm FROM isoforms WHERE gene_name = :gene_name"
+        isoform_tpm = db_config.execute_query(isoform_tpm_query, params={'gene_name': gene_name})
 
         if not isoform_tpm.empty:
             expression_data = expression_data.merge(isoform_tpm, on='id', how='left')
