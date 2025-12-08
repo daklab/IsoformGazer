@@ -636,7 +636,7 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
         idx_pbar.update(1)
         conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_gene ON {atse_table}(gene_id_clean, gene_name)")
         idx_pbar.update(1)
-        conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_coords ON {atse_table}(chromosome, start, end)")
+        conn.execute(f'CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_coords ON {atse_table}(chromosome, start, "end")')
         idx_pbar.update(1)
         if species_name == "Human":
             conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_gencode_transcript ON {gencode_table}(gene_id, transcript_id)")

@@ -727,13 +727,13 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
 
     atse_query = """
     SELECT event_id, gene_id, gene_name, event_strand, chromosome,
-            start, end, junction_id, transcripts, perfect_match_3_prime,
+            start, "end", junction_id, transcripts, perfect_match_3_prime,
             perfect_match_5_prime, both_ends_transcripts,
             only_5_prime_transcripts, only_3_prime_transcripts,
             atse_start, atse_end, event_type
     FROM atse_data
     WHERE (gene_id_clean = :gene_id OR gene_name = :gene_name)
-    ORDER BY start, end
+    ORDER BY start, "end"
     """
     gene_atse = db_config.execute_query(atse_query, params={'gene_id': gene_id_base, 'gene_name': gene_name})
     #memory_tracker.measure(f"after_atse_query_{gene_name}")
