@@ -299,23 +299,32 @@ class SimpleCache:
             'memory_mb': sum(self._estimate_size_mb(obj) for obj in self.cache.values())
         }
 
-cache = SimpleCache()
+try:
+    from src.isoformgazer.redis_cache import get_cache as get_redis_cache
+    from src.isoformgazer.redis_cache import cached as redis_cached
+    cache = get_redis_cache()
+    cached = redis_cached
+    print("Using Redis cache!")
 
-def cached(cache_timeout=300):
-    """Decorator to cache function results"""
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            result, found = cache.get(func, args, kwargs)
-            if found:
+except Exception as e:
+    print(f"Redis cache unavailable ({e}), using in-memory SimpleCache...")
+    cache = SimpleCache()
+
+    def cached(cache_timeout=300):
+        """Decorator to cache function results (SimpleCache fallback)"""
+        def decorator(func):
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                result, found = cache.get(func, args, kwargs)
+                if found:
+                    return result
+
+                result = func(*args, **kwargs)
+                cache.put(func, args, kwargs, result)
+
                 return result
-            
-            result = func(*args, **kwargs)
-            cache.put(func, args, kwargs, result)
-            
-            return result
-        return wrapper
-    return decorator
+            return wrapper
+        return decorator
 
 
 def profile_database_operations():

@@ -1,5 +1,6 @@
 import os
 import math
+import json
 import traceback
 from tqdm import tqdm
 import sqlite3
@@ -9,6 +10,7 @@ import base64
 import matplotlib
 matplotlib.use('Agg')
 from pathlib import Path
+from flask import Response
 import dash
 from dash import html, dcc, dash_table, callback_context
 import dash_bootstrap_components as dbc
@@ -788,6 +790,33 @@ app.index_string = '''
     </body>
 </html>
 '''
+
+###################################################################
+# CACHE STATISTICS API ENDPOINT
+###################################################################
+@app.server.route('/api/cache-stats')
+def api_cache_stats():
+    """
+    API endpoint to check cache statistics.
+    Access: GET /api/cache-stats
+    Returns cache hit/miss stats and Redis connection status
+    """
+    try:
+        from src.isoformgazer.gene_cache_redis import get_cache_stats
+        stats = get_cache_stats()
+
+    except Exception as e:
+        stats = {
+            'error': str(e),
+            'backend': 'unknown',
+            'gene_list_cached': False,
+            'default_gene_cached': False
+        }
+
+    return Response(
+        json.dumps(stats, indent=2),
+        mimetype='application/json'
+    )
 
 ###################################################################
 # APPLICATION TITLE (ISOFORM GAZER)
@@ -3970,6 +3999,30 @@ def display_ascii_banner():
     print(banner)
 
 
+def warm_up_caches():
+    """
+    Warm up critical caches on application startup.
+    Preloads gene list and default gene data to Redis if available.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        from src.isoformgazer.gene_cache_redis import get_cached_gene_list
+        from src.isoformgazer.data_utils import get_all_gene_options
+
+        # Check if gene list is already cached
+        if get_cached_gene_list() is None:
+            logger.info("Warming up gene list cache...")
+            genes = get_all_gene_options(db_path)
+            logger.info(f"✓ Cached {len(genes)} genes to Redis")
+        else:
+            logger.info("✓ Gene list already cached in Redis")
+
+    except Exception as e:
+        logger.warning(f"Cache warm-up skipped (will cache on first request): {e}")
+
+
 if __name__ == '__main__':
     database_exists = check_database_status()
     if not database_exists:
@@ -3977,5 +4030,7 @@ if __name__ == '__main__':
         #verify_database_schema(db_path)
 
     display_ascii_banner()
+
+    warm_up_caches()
 
     app.run(debug=False, port=8050, use_reloader=False)

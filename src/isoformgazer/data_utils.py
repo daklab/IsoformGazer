@@ -108,7 +108,22 @@ def get_all_gene_options(db_path):
 
     Args:
         db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+
+    Returns:
+        List of gene option dicts with Redis caching for improved performance
     """
+    # Try Redis cache first
+    try:
+        from src.isoformgazer.gene_cache_redis import get_cached_gene_list, cache_gene_list
+
+        cached_genes = get_cached_gene_list()
+        if cached_genes:
+            return cached_genes
+    except Exception as e:
+        # Redis unavailable, continue with database query
+        pass
+
+    # Cache miss or Redis unavailable - query database
     db_config = get_db_config()
 
     query = """
@@ -135,6 +150,14 @@ def get_all_gene_options(db_path):
                 'value': gene_name,
                 'search': f"{gene_name.lower()} {gene_id.lower()}"
             })
+
+    # Cache for future requests
+    try:
+        from src.isoformgazer.gene_cache_redis import cache_gene_list
+        cache_gene_list(options)
+    except Exception:
+        # Redis unavailable, no caching
+        pass
 
     return options
 
@@ -697,7 +720,22 @@ def is_cache_valid(base_dir, db_path):
 
 
 def load_default_gene_cache(base_dir):
-    """Load cached data and plots for default gene (A1BG-AS1)"""
+    """Load cached data and plots for default gene (A1BG-AS1)
+
+    Uses Redis cache if available, falls back to file-based cache
+    """
+    # Try Redis cache first
+    try:
+        from src.isoformgazer.gene_cache_redis import get_cached_default_gene_data
+
+        cache_data = get_cached_default_gene_data()
+        if cache_data:
+            return cache_data
+    except Exception:
+        # Redis unavailable, try file cache
+        pass
+
+    # Fall back to file-based cache
     cache_path = get_default_gene_cache_path(base_dir)
 
     if not Path(cache_path).exists():
@@ -713,7 +751,19 @@ def load_default_gene_cache(base_dir):
 
 
 def save_default_gene_cache(base_dir, db_path, cache_data):
-    """Save cached data and plots for default gene (A1BG-AS1)"""
+    """Save cached data and plots for default gene (A1BG-AS1)
+
+    Uses Redis cache if available, also saves to file as backup
+    """
+    # Try Redis cache first
+    try:
+        from src.isoformgazer.gene_cache_redis import cache_default_gene_data
+        cache_default_gene_data(cache_data)
+    except Exception as e:
+        # Redis unavailable, continue with file cache
+        pass
+
+    # Also save to file-based cache as backup
     cache_path = get_default_gene_cache_path(base_dir)
     metadata_path = get_cache_metadata_path(base_dir)
 

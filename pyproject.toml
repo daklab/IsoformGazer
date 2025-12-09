@@ -35,6 +35,9 @@ dependencies = [
     "python-dotenv (>=1.0.0,<2.0.0)",
     "sqlalchemy (>=2.0.44,<3.0.0)",
     "kaleido (>=1.2.0,<2.0.0)",
+    "redis (>=5.0.0,<6.0.0)",
+    "flask (>=3.1.2,<4.0.0)",
+    "chromium (>=0.0.0,<0.0.1)",
 ]
 
 [tool.poetry]
