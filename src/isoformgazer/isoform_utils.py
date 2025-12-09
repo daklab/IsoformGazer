@@ -458,13 +458,13 @@ def create_transcript_structure_plot(db_path: str,
         #memory_tracker.measure("plot_start")
 
     db_config = get_db_config()
-    metadata_query = """SELECT gene_id, ORF_perplexity FROM isoforms
+    metadata_query = """SELECT gene_id, orf_perplexity FROM isoforms
                         WHERE gene_name = :gene_name LIMIT 1"""
     metadata_result = db_config.execute_query(metadata_query, params={'gene_name': gene_name})
 
     if not metadata_result.empty:
         gene_ensembl_id = metadata_result.iloc[0]['gene_id']
-        orf_value = metadata_result.iloc[0]['ORF_perplexity']
+        orf_value = metadata_result.iloc[0]['orf_perplexity']
         orf_perplexity = "None" if pd.isna(orf_value) else f"{orf_value:.3f}"
     else:
         gene_ensembl_id = "Unknown"
@@ -678,7 +678,7 @@ def create_transcript_structure_plot(db_path: str,
                     name='TPM Scale'
                 ))
 
-    title_text = f"Transcripts for Gene {gene_name} ({gene_ensembl_id})<br>(ORF Perplexity: {orf_perplexity}, Coordinates: {min_start} - {max_end}, Strand: {strand})"
+    title_text = f"Transcripts for Gene {gene_name} ({gene_ensembl_id})<br>(orf Perplexity: {orf_perplexity}, Coordinates: {min_start} - {max_end}, Strand: {strand})"
 
     if color_by_abundance:
         right_margin = 300
