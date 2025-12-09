@@ -991,7 +991,7 @@ def create_junction_exon_visualization(gene_data: dict,
         transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
         db_config = get_db_config()
         transcript_ids_query = """
-        SELECT DISTINCT id FROM isoforms
+        SELECT DISTINCT id, isoform_average_tpm FROM isoforms
         WHERE gene_name = :gene_name
         ORDER BY isoform_average_tpm DESC NULLS LAST
         """
