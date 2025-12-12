@@ -707,6 +707,7 @@ def create_transcript_structure_plot(db_path: str,
             b=50
         ),
         hovermode='closest',
+        dragmode='zoom',
         plot_bgcolor='white',
         autosize=True
     )

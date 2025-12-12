@@ -1399,7 +1399,7 @@ def create_junction_exon_visualization(gene_data: dict,
             b=MAX_MARGIN+7
         ),
         hovermode='closest',
-        dragmode='select',
+        dragmode='zoom',
         plot_bgcolor='white',
         autosize=True,
         uirevision='constant'
