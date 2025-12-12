@@ -1230,16 +1230,23 @@ def create_junction_exon_visualization(gene_data: dict,
                 'opacity': 0.8
             })
 
-            junction_hover_x.append((start + end) / 2)
-            junction_hover_y.append(junction_y_pos)
-
             # Build hover text with optional PSI info
             hover_text = f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}'
             if (start, end) in junction_psi_data:
                 psi = junction_psi_data[(start, end)]
                 if psi is not None:
                     hover_text += f"<br>Average PSI: {psi:.2f}"
-            junction_hover_text.append(hover_text)
+
+            # Create invisible line segment with multiple points so user can click anywhere on junction to color it
+            num_points = 20
+            for i in range(num_points + 1):
+                x_point = start + (end - start) * i / num_points
+                junction_hover_x.append(x_point)
+                junction_hover_y.append(junction_y_pos)
+                junction_hover_text.append(hover_text)
+            junction_hover_x.append(None)
+            junction_hover_y.append(None)
+            junction_hover_text.append("")
     
     all_shapes = exon_shapes + junction_shapes
     if all_shapes:
@@ -1262,13 +1269,13 @@ def create_junction_exon_visualization(gene_data: dict,
         fig.add_trace(go.Scatter(
             x=junction_hover_x,
             y=junction_hover_y,
-            mode='markers',
-            marker=dict(size=15, opacity=0, color='rgba(100,100,255,0)',
-                       line=dict(width=0, color='rgba(100,100,255,0)')),
+            mode='lines',
+            line=dict(width=20, color='rgba(100,100,255,0)'),
             showlegend=False,
             hovertemplate='%{text}<extra></extra>',
             text=junction_hover_text,
-            name='Junctions'
+            name='Junctions',
+            connectgaps=False
         ))
 
     # Setup colorscale (needed for both junction and transcript colorbars)
