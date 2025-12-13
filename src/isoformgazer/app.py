@@ -1042,7 +1042,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 placeholder="Type to search for a gene...",
                                 value='A1BG-AS1',
                                 searchable=True,
-                                clearable=True
+                                clearable=False
                             ),
                             html.Div(className='app-controls-desc', children='Select a gene identifier to query or type to search')
                         ]),
@@ -1246,7 +1246,8 @@ app.layout = html.Div(className='app-layout', children=[
                                         {'label': 'Inferno', 'value': 'Inferno'},
                                         {'label': 'Magma', 'value': 'Magma'}
                                     ],
-                                    value='Viridis'
+                                    value='Viridis',
+                                    clearable=False
                                 ),
                                 html.Div(className='app-controls-desc', children='Choose the color theme for the structure plot')
                             ])
@@ -1349,7 +1350,8 @@ app.layout = html.Div(className='app-layout', children=[
                                     {'label': 'Inferno', 'value': 'Inferno'},
                                     {'label': 'Magma', 'value': 'Magma'}
                                 ],
-                                value='Viridis'
+                                value='Viridis',
+                                clearable=False
                             ),
                             html.Div(className='app-controls-desc', children='Choose the color theme of the heatmaps')
                         ]),
@@ -1378,7 +1380,8 @@ app.layout = html.Div(className='app-layout', children=[
                                     {'label': 'Correlation', 'value': 'correlation'},
                                     {'label': 'Manhattan (L1)', 'value': 'cityblock'}
                                 ],
-                                value='euclidean'
+                                value='euclidean',
+                                clearable=False
                             ),
                             html.Div(className='app-controls-desc', children='Distance metric used for clustering in both clustergrams')
                         ]),
@@ -1396,7 +1399,8 @@ app.layout = html.Div(className='app-layout', children=[
                                     {'label': 'Nearest Point', 'value': 'single'},
                                     {'label': 'Furthest Point', 'value': 'complete'}
                                 ],
-                                value='ward'
+                                value='ward',
+                                clearable=False
                             ),
                             html.Div(className='app-controls-desc', children='Hierarchical clustering algorithm used for both clustergrams')
                         ]),
