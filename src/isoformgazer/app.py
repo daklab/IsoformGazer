@@ -1613,7 +1613,8 @@ app.layout = html.Div(className='app-layout', children=[
                                                     )
                                                 ]
                                             )
-                                        ]
+                                        ],
+                                        style={'display': 'none'}
                                     ),
                                     # Store for currently selected junction
                                     dcc.Store(id='selected-junction-info', data={})
@@ -1642,7 +1643,62 @@ app.layout = html.Div(className='app-layout', children=[
                                         ),
                                         html.Div(id="top-barplot-loading-message", className="custom-loading-message")
                                     ])
-                                ])
+                                ]),
+                                # Color picker popups (outside both plot containers so they're always visible)
+                                html.Div(
+                                    id='transcript-color-picker-popup',
+                                    children=[
+                                        html.Div(
+                                            className='junction-header-container',
+                                            children=[
+                                                html.Div(
+                                                    className='junction-color-title',
+                                                    children='Transcript Color'
+                                                ),
+                                                html.Div(
+                                                    className='junction-color-bar'
+                                                ),
+                                                html.Div(
+                                                    id='transcript-id-display',
+                                                    children=''
+                                                )
+                                            ]
+                                        ),
+                                        html.Div(
+                                            style={
+                                                'marginBottom': '12px'
+                                            }
+                                        ),
+                                        html.Div(
+                                            className='junction-color-picker-container',
+                                            children=[
+                                                daq.ColorPicker(
+                                                    id='transcript-individual-color-picker',
+                                                    value={'hex': '#2E86C1'},
+                                                    size=160,
+                                                    theme=None,
+                                                    className='color-picker'
+                                                )
+                                            ]
+                                        ),
+                                        html.Div(
+                                            className='junction-color-buttons-container',
+                                            children=[
+                                                dbc.Button(
+                                                    "Apply",
+                                                    id='transcript-color-apply-btn',
+                                                    className='clear-filters-btn junction-color-btn'
+                                                ),
+                                                dbc.Button(
+                                                    "Reset",
+                                                    id='transcript-color-reset-btn',
+                                                    className='clear-filters-btn junction-color-btn'
+                                                )
+                                            ]
+                                        )
+                                    ],
+                                    style={'display': 'none'}
+                                )
                             ])
                         ])
                     ])
@@ -1851,7 +1907,9 @@ app.layout.children.extend([
     dcc.Store(id='exon-color-store', data='#2E86C1'),
     dcc.Store(id='junction-color-store', data='#85929E'),
     dcc.Store(id='individual-junction-colors', data={}),
+    dcc.Store(id='individual-transcript-colors', data={}),
     dcc.Store(id='viewport-dimensions', data={'width': 1920, 'height': 1080}),
+    dcc.Store(id='selected-transcript-info', data={}),
     dcc.Store(id='loading-progress-store', data=0),
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
@@ -1901,7 +1959,8 @@ def update_junction_color_store(color_value):
 @app.callback(
     [dash.dependencies.Output('selected-junction-info', 'data'),
      dash.dependencies.Output('junction-individual-color-picker', 'value'),
-     dash.dependencies.Output('junction-color-picker-popup', 'style')],
+     dash.dependencies.Output('junction-color-picker-popup', 'style'),
+     dash.dependencies.Output('transcript-color-picker-popup', 'style', allow_duplicate=True)],
     [dash.dependencies.Input('atse-map', 'clickData')],
     [dash.dependencies.State('individual-junction-colors', 'data'),
      dash.dependencies.State('junction-color-store', 'data'),
@@ -1991,7 +2050,10 @@ def handle_junction_click(clickData, individual_colors, global_junction_color, v
         'top': f"{y_pos}px"
     }
 
-    return selected_junction, current_color, popup_style
+    # Hide transcript popup
+    transcript_popup_style = {'display': 'none'}
+
+    return selected_junction, current_color, popup_style, transcript_popup_style
 
 
 @app.callback(
@@ -2069,6 +2131,211 @@ def reset_click_data(apply_clicks, reset_clicks):
     Reset clickData after color operations to allow re-clicking the same junction.
     """
     return None
+
+
+#######################################################################
+# INDIVIDUAL TRANSCRIPT COLOR PICKER CALLBACKS
+#######################################################################
+@app.callback(
+    [dash.dependencies.Output('selected-transcript-info', 'data'),
+     dash.dependencies.Output('transcript-individual-color-picker', 'value'),
+     dash.dependencies.Output('transcript-color-picker-popup', 'style'),
+     dash.dependencies.Output('junction-color-picker-popup', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('atse-map', 'clickData'),
+     dash.dependencies.Input('top-barplot', 'clickData')],
+    [dash.dependencies.State('individual-transcript-colors', 'data'),
+     dash.dependencies.State('exon-color-store', 'data'),
+     dash.dependencies.State('viewport-dimensions', 'data')],
+    prevent_initial_call=True
+)
+def handle_transcript_click(atse_clickData, transcript_clickData, individual_colors, global_exon_color, viewport_dims):
+    """
+    Handle transcript/exon clicks to open the color picker popup.
+    Extract transcript/isoform ID from the hover text.
+    Works for both junction+transcript plot (atse-map) and transcript-only plot (top-barplot).
+    """
+    # Determine which plot was clicked
+    if not callback_context.triggered:
+        raise PreventUpdate
+
+    triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
+
+    if triggered_id == 'atse-map':
+        clickData = atse_clickData
+    elif triggered_id == 'top-barplot':
+        clickData = transcript_clickData
+    else:
+        raise PreventUpdate
+
+    if not clickData or 'points' not in clickData or len(clickData['points']) == 0:
+        raise PreventUpdate
+
+    point = clickData['points'][0]
+
+    # Extract isoform ID from the hover text
+    text = point.get('text', '')
+    if 'Isoform ID:' not in text:
+        raise PreventUpdate
+
+    isoform_id = None
+    transcript_id = None
+    parts = text.split('<br>')
+    for part in parts:
+        if 'Isoform ID:' in part:
+            isoform_id = part.replace('Isoform ID:', '').strip()
+        elif 'Transcript ID:' in part or 'Transcript:' in part:
+            transcript_id = part.replace('Transcript ID:', '').replace('Transcript:', '').strip()
+
+    if not isoform_id:
+        raise PreventUpdate
+
+    # Get coordinates from point
+    x = point.get('x')
+    y = point.get('y')
+
+    if x is None or y is None:
+        raise PreventUpdate
+
+    if individual_colors:
+        current_color_hex = individual_colors.get(isoform_id, global_exon_color)
+    else:
+        current_color_hex = global_exon_color
+
+    current_color = {'hex': current_color_hex}
+
+    selected_transcript = {
+        'id': isoform_id,
+        'transcript_id': transcript_id or isoform_id,
+        'x': x,
+        'y': y
+    }
+
+    # need bounding box of clicked point to position the popup
+    bbox = point.get('bbox', {})
+
+    # Position popup to the right of the top of the clicked element
+    popup_width = 280
+    popup_height = 300
+    offset_x = 15
+    offset_y = 5
+
+    # Get desired position (to the right of the top)
+    x_pos = bbox.get('x1', 0) + offset_x
+    y_pos = bbox.get('y0', 0) + offset_y
+
+    # Add viewport boundary checking
+    viewport_width = viewport_dims.get('width', 1920) if viewport_dims else 1920
+    viewport_height = viewport_dims.get('height', 1080) if viewport_dims else 1080
+
+    # Ensure popup doesn't overflow right edge
+    if x_pos + popup_width > viewport_width:
+        x_pos = max(10, bbox.get('x0', 0) - popup_width - offset_x)
+
+    # Ensure popup doesn't overflow bottom edge
+    if y_pos + popup_height > viewport_height:
+        y_pos = max(10, bbox.get('y1', 0) - popup_height - offset_y)
+
+    # Ensure minimum distance from edges
+    x_pos = max(10, x_pos)
+    y_pos = max(10, y_pos)
+
+    transcript_popup_style = {
+        'position': 'fixed',
+        'zIndex': 10000,
+        'backgroundColor': '#ffffff',
+        'border': '2px solid #EDAE49',
+        'borderRadius': '10px',
+        'padding': '16px',
+        'boxShadow': '0 8px 24px rgba(90, 42, 145, 0.4)',
+        'display': 'block',
+        'width': '280px',
+        'left': f"{x_pos}px",
+        'top': f"{y_pos}px"
+    }
+
+    # Hide junction popup
+    junction_popup_style = {'display': 'none'}
+
+    return selected_transcript, current_color, transcript_popup_style, junction_popup_style
+
+
+@app.callback(
+    dash.dependencies.Output('transcript-id-display', 'children'),
+    [dash.dependencies.Input('selected-transcript-info', 'data')],
+    prevent_initial_call=True
+)
+def update_transcript_id_display(selected_transcript):
+    """
+    Update the transcript ID display in the popup.
+    """
+    if not selected_transcript or 'transcript_id' not in selected_transcript:
+        return ''
+
+    transcript_id = selected_transcript['transcript_id']
+    return transcript_id
+
+
+@app.callback(
+    [dash.dependencies.Output('individual-transcript-colors', 'data'),
+     dash.dependencies.Output('transcript-color-picker-popup', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('transcript-color-apply-btn', 'n_clicks'),
+     dash.dependencies.Input('transcript-color-reset-btn', 'n_clicks'),
+     dash.dependencies.Input('exon-color-store', 'data')],
+    [dash.dependencies.State('selected-transcript-info', 'data'),
+     dash.dependencies.State('transcript-individual-color-picker', 'value'),
+     dash.dependencies.State('individual-transcript-colors', 'data')],
+    prevent_initial_call=True
+)
+def manage_individual_transcript_colors(apply_clicks, reset_clicks, global_color,
+                                       selected_transcript, color_value, individual_colors):
+    """
+    Manage individual transcript colors (apply, reset, or clear all on global color change).
+    """
+    individual_colors = individual_colors or {}
+    triggered_id = callback_context.triggered_id if callback_context.triggered else None
+
+    hidden_style = {
+        'position': 'fixed',
+        'zIndex': 10000,
+        'backgroundColor': '#ffffff',
+        'border': '2px solid #EDAE49',
+        'borderRadius': '10px',
+        'padding': '16px',
+        'boxShadow': '0 8px 24px rgba(90, 42, 145, 0.4)',
+        'display': 'none',
+        'width': '280px'
+    }
+
+    if triggered_id == 'transcript-color-apply-btn':
+        if selected_transcript and 'id' in selected_transcript:
+            if color_value and 'hex' in color_value:
+                individual_colors[selected_transcript['id']] = color_value['hex']
+            return individual_colors, hidden_style
+
+    elif triggered_id == 'transcript-color-reset-btn':
+        if selected_transcript and 'id' in selected_transcript:
+            individual_colors.pop(selected_transcript['id'], None)
+            return individual_colors, hidden_style
+
+    elif triggered_id == 'exon-color-store':
+        return {}, hidden_style
+
+    raise PreventUpdate
+
+
+@app.callback(
+    [dash.dependencies.Output('atse-map', 'clickData', allow_duplicate=True),
+     dash.dependencies.Output('top-barplot', 'clickData', allow_duplicate=True)],
+    [dash.dependencies.Input('transcript-color-apply-btn', 'n_clicks'),
+     dash.dependencies.Input('transcript-color-reset-btn', 'n_clicks')],
+    prevent_initial_call=True
+)
+def reset_transcript_click_data(apply_clicks, reset_clicks):
+    """
+    Reset clickData after transcript color operations to allow re-clicking the same transcript.
+    Resets both junction+transcript plot and transcript-only plot.
+    """
+    return None, None
 
 
 #######################################################################
@@ -3144,13 +3411,14 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
      dash.dependencies.Input('abundance-color-type-radio', 'value'),
      dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
      dash.dependencies.Input('organ-abundance-dropdown', 'value'),
-     dash.dependencies.Input('individual-junction-colors', 'data')]
+     dash.dependencies.Input('individual-junction-colors', 'data'),
+     dash.dependencies.Input('individual-transcript-colors', 'data')]
 )
 def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids,
                               plot_height, exon_color, junction_color, isoform_filter_query,
                               validation_data, color_junctions_by_psi, color_by_abundance,
                               structure_colorscale, abundance_type, tissue_name, organ_name,
-                              individual_junction_colors):
+                              individual_junction_colors, individual_transcript_colors):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -3192,7 +3460,8 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             abundance_type=abundance_type,
             tissue_name=tissue_name,
             organ_name=organ_name,
-            individual_junction_colors=individual_junction_colors
+            individual_junction_colors=individual_junction_colors,
+            individual_transcript_colors=individual_transcript_colors
         )
 
         # Create config with gene name in filename
@@ -3275,9 +3544,10 @@ def toggle_top_panel_plots(hide_junctions):
      dash.dependencies.Input('colorscale-dropdown', 'value'),
      dash.dependencies.Input('abundance-color-type-radio', 'value'),
      dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
-     dash.dependencies.Input('organ-abundance-dropdown', 'value')]
+     dash.dependencies.Input('organ-abundance-dropdown', 'value'),
+     dash.dependencies.Input('individual-transcript-colors', 'data')]
 )
-def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name):
+def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name, individual_transcript_colors):
     """Update transcript structure plot in top panel when toggle is activated"""
     # Only update if junctions are hidden (transcript plot should be shown)
     if not hide_junctions:
@@ -3318,7 +3588,8 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
             colorscale=colorscale,
             abundance_type=abundance_type,
             tissue_name=tissue_name,
-            organ_name=organ_name
+            organ_name=organ_name,
+            individual_transcript_colors=individual_transcript_colors
         )
 
         # Create config with gene name in filename
@@ -3832,7 +4103,8 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
                 colorscale=structure_colorscale,
                 abundance_type=abundance_type,
                 tissue_name=tissue_name,
-                organ_name=organ_name
+                organ_name=organ_name,
+                individual_transcript_colors={}  # Export uses default colors
             )
             filename = f"{selected_gene}_structure_plot.svg"
 

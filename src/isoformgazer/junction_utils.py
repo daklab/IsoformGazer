@@ -942,7 +942,8 @@ def create_junction_exon_visualization(gene_data: dict,
                                        abundance_type: str = 'average',
                                        tissue_name: str = None,
                                        organ_name: str = None,
-                                       individual_junction_colors: dict = None) -> go.Figure:
+                                       individual_junction_colors: dict = None,
+                                       individual_transcript_colors: dict = None) -> go.Figure:
     """Create junction and exon structure plot for junction master table data"""
     if 'error' in gene_data:
         return create_empty_atse_message(gene_data['error'])
@@ -1017,25 +1018,43 @@ def create_junction_exon_visualization(gene_data: dict,
         transcript_labels = [abbreviate_transcript_name(trans_id) for trans_id in transcript_summary['trans_id'].tolist()]
         transcript_y_positions = transcript_summary['trans_order'].tolist()
         
-        intron_x = []
-        intron_y = []
-        intron_text = []
-        
+        # Group introns by color (to minimize number of traces)
+        intron_groups = {}  # color -> list of transcript data
+
         for _, transcript in transcript_summary.iterrows():
-            intron_x.extend([transcript['transcript_start'], transcript['transcript_end'], None])
-            intron_y.extend([transcript['trans_order'], transcript['trans_order'], None])
-            intron_text.extend([f"Isoform ID: {transcript['id']}<br>Transcript: {abbreviate_transcript_name(transcript['trans_id'])}<br>Length: {transcript['transcript_length']:,} bp", "", ""])
-        
-        fig.add_trace(go.Scatter(
-            x=intron_x,
-            y=intron_y,
-            mode='lines',
-            line=dict(color=intron_color, width=2),
-            showlegend=False,
-            hovertemplate='%{text}<extra></extra>',
-            text=intron_text,
-            connectgaps=False
-        ))
+            isoform_id = transcript['id']
+            color = intron_color
+
+            if color not in intron_groups:
+                intron_groups[color] = []
+
+            intron_groups[color].append({
+                'x': [transcript['transcript_start'], transcript['transcript_end'], None],
+                'y': [transcript['trans_order'], transcript['trans_order'], None],
+                'text': [f"Isoform ID: {transcript['id']}<br>Transcript: {abbreviate_transcript_name(transcript['trans_id'])}<br>Length: {transcript['transcript_length']:,} bp", "", ""]
+            })
+
+        # One trace per color group
+        for color, transcripts in intron_groups.items():
+            intron_x = []
+            intron_y = []
+            intron_text = []
+
+            for t in transcripts:
+                intron_x.extend(t['x'])
+                intron_y.extend(t['y'])
+                intron_text.extend(t['text'])
+
+            fig.add_trace(go.Scatter(
+                x=intron_x,
+                y=intron_y,
+                mode='lines',
+                line=dict(color=color, width=2),
+                showlegend=False,
+                hovertemplate='%{text}<extra></extra>',
+                text=intron_text,
+                connectgaps=False
+            ))
         
         exon_shapes = []
         exon_hover_x = []
@@ -1073,6 +1092,7 @@ def create_junction_exon_visualization(gene_data: dict,
 
             trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
 
+            # Check for TPM color first (highest priority when enabled)
             if color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
                 tpm = transcript_tpm_dict[isoform_id]
 
@@ -1086,6 +1106,10 @@ def create_junction_exon_visualization(gene_data: dict,
                 rgba = cmap(normalized)
                 exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
 
+            # Check for individual transcript color (second priority, convert to string for comparison)
+            elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
+                exon_fill_color = individual_transcript_colors[str(isoform_id)]
+
             else:
                 exon_fill_color = exon_color
 
@@ -1098,9 +1122,6 @@ def create_junction_exon_visualization(gene_data: dict,
                     'line': {'color': exon_fill_color, 'width': 1},
                     'opacity': 0.8
                 })
-
-                exon_hover_x.append((exon['exon_start'] + exon['exon_end']) / 2)
-                exon_hover_y.append(trans_order)
 
                 # Build hover text with optional TPM info
                 hover_text = f"Isoform ID: {isoform_id}<br>Transcript ID: {abbreviate_transcript_name(trans_id)}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
@@ -1117,7 +1138,19 @@ def create_junction_exon_visualization(gene_data: dict,
 
                         else:
                             hover_text += f"<br>Average TPM: {tpm:.2f}"
-                exon_hover_text.append(hover_text)
+
+                # Create multiple invisible points across the entire exon block so user can click anywhere on it
+                exon_length = exon['exon_end'] - exon['exon_start']
+                num_points = max(10, int(exon_length / 1000))  # At least 10 points, more for longer exons
+                for i in range(num_points + 1):
+                    x_point = exon['exon_start'] + (exon_length * i / num_points)
+                    exon_hover_x.append(x_point)
+                    exon_hover_y.append(trans_order)
+                    exon_hover_text.append(hover_text)
+                # Add separator
+                exon_hover_x.append(None)
+                exon_hover_y.append(None)
+                exon_hover_text.append("")
         
         junction_y_start = y_max + 0.5
         
@@ -1256,13 +1289,13 @@ def create_junction_exon_visualization(gene_data: dict,
         fig.add_trace(go.Scatter(
             x=exon_hover_x,
             y=exon_hover_y,
-            mode='markers',
-            marker=dict(size=8, opacity=0.05, color='rgba(100,100,100,0.05)',
-                       line=dict(width=0)),
+            mode='lines',
+            line=dict(width=25, color='rgba(100,100,100,0)'),
             showlegend=False,
             hovertemplate='%{text}<extra></extra>',
             text=exon_hover_text,
-            name='Exons'
+            name='Exons',
+            connectgaps=False 
         ))
     
     if junction_hover_x:

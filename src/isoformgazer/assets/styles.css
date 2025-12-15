@@ -2057,6 +2057,11 @@ div[data-value="tab-3"]:hover {
     border: none !important;
 }
 
+#transcript-individual-color-picker .daq-colorpicker--light__chromepicker {
+    border-radius: 0% !important;
+    border: none !important;
+}
+
 /* ######################################################################################
    # Isoform Hash Lookup Styling
    ###################################################################################### */

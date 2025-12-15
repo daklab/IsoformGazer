@@ -435,7 +435,8 @@ def create_transcript_structure_plot(db_path: str,
                                      colorscale: str = 'Viridis',
                                      abundance_type: str = 'average',
                                      tissue_name: str = None,
-                                     organ_name: str = None) -> go.Figure:
+                                     organ_name: str = None,
+                                     individual_transcript_colors: dict = None) -> go.Figure:
     """Create transcript structure plot showing all transcripts with 50%+ speed improvement"""
     
     if transcript_data.empty:
@@ -462,8 +463,19 @@ def create_transcript_structure_plot(db_path: str,
     strand = transcript_data['strand'].iloc[0] if not transcript_data.empty else ""
 
     transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
-    # Get unique transcript IDs in their original order from the database (sorted by isoform_average_tpm DESC)
-    ordered_transcript_ids = transcript_data_opt['id'].drop_duplicates().tolist()
+
+    # Query database for transcript IDs in correct TPM order (like junction_utils.py does)
+    conn = sqlite3.connect(db_path)
+    transcript_ids_query = """
+    SELECT DISTINCT id FROM isoforms
+    WHERE gene_name = ?
+    ORDER BY isoform_average_tpm DESC NULLS LAST
+    """
+    ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=[gene_name])
+    conn.close()
+    ordered_transcript_ids = ordered_ids_df['id'].tolist()
+    # Reverse because transcripts are displayed from top to bottom
+    ordered_transcript_ids = ordered_transcript_ids[::-1]
 
     transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
         'trans_id': 'first',
@@ -554,6 +566,7 @@ def create_transcript_structure_plot(db_path: str,
         trans_order = transcript['trans_order']
         trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
 
+        # Check for TPM color first (highest priority when enabled)
         if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
             tpm = transcript.get('abundance_tpm', 0)
 
@@ -565,6 +578,10 @@ def create_transcript_structure_plot(db_path: str,
 
             rgba = cmap(normalized)
             exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
+
+        # Check for individual transcript color (second priority, convert to string for comparison)
+        elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
+            exon_fill_color = individual_transcript_colors[str(isoform_id)]
 
         else:
             exon_fill_color = exon_color
@@ -579,10 +596,6 @@ def create_transcript_structure_plot(db_path: str,
                 'line': {'color': exon_fill_color, 'width': 1},
                 'opacity': 0.8
             })
-            
-            # Batch add hover points
-            hover_traces_x.append((exon['exon_start'] + exon['exon_end']) / 2)
-            hover_traces_y.append(trans_order)
 
             # Build hover text with optional TPM info
             hover_text = f"Isoform ID: {isoform_id}<br>Transcript ID: {trans_id}<br>Exon: {exon['exon_number']}<br>Size: {exon['exon_size']} bp<br>Coordinates: {exon['exon_start']:,} - {exon['exon_end']:,}"
@@ -598,7 +611,18 @@ def create_transcript_structure_plot(db_path: str,
                     else:
                         hover_text += f"<br>Average TPM: {tpm:.2f}"
 
-            hover_traces_text.append(hover_text)
+            # Create multiple invisible points across the entire exon block so user can click anywhere on it
+            exon_length = exon['exon_end'] - exon['exon_start']
+            num_points = max(10, int(exon_length / 1000))  # At least 10 points, more for longer exons
+            for i in range(num_points + 1):
+                x_point = exon['exon_start'] + (exon_length * i / num_points)
+                hover_traces_x.append(x_point)
+                hover_traces_y.append(trans_order)
+                hover_traces_text.append(hover_text)
+            # Add separator
+            hover_traces_x.append(None)
+            hover_traces_y.append(None)
+            hover_traces_text.append("")
     
     fig.update_layout(shapes=shapes)
 
@@ -606,11 +630,12 @@ def create_transcript_structure_plot(db_path: str,
         fig.add_trace(go.Scatter(
             x=hover_traces_x,
             y=hover_traces_y,
-            mode='markers',
-            marker=dict(size=8, opacity=0),
+            mode='lines',
+            line=dict(width=25, color='rgba(100,100,100,0)'),
             showlegend=False,
             hovertemplate='%{text}<extra></extra>',
-            text=hover_traces_text
+            text=hover_traces_text,
+            connectgaps=False  
         ))
 
     if color_by_abundance:
