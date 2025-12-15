@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use('Agg')
 from pathlib import Path
 import dash
-from dash import html, dcc, dash_table, callback_context
+from dash import html, dcc, dash_table, callback_context, no_update
 import dash_bootstrap_components as dbc
 import dash_daq as daq
 import plotly.graph_objs as go
@@ -1777,7 +1777,14 @@ app.layout = html.Div(className='app-layout', children=[
                         className='filter-error-popup hidden',
                         children=[]
                     ),
-                    left_data_table
+                    dcc.Loading(
+                        id="loading-left-table",
+                        type="default",
+                        color='#EDAE49',
+                        delay_show=0,
+                        delay_hide=100,
+                        children=[left_data_table]
+                    )
                 ]),
                 html.Div(className='table-container', id='table2-container', children=[
                     html.Div(className='table-header-controls', children=[
@@ -1808,7 +1815,14 @@ app.layout = html.Div(className='app-layout', children=[
                         className='filter-error-popup hidden',
                         children=[]
                     ),
-                    right_data_table
+                    dcc.Loading(
+                        id="loading-right-table",
+                        type="default",
+                        color='#EDAE49',
+                        delay_show=0,
+                        delay_hide=100,
+                        children=[right_data_table]
+                    )
                 ])
             ])
         ])
@@ -2560,13 +2574,17 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
-    
-    # Check if current filter is valid before processing
+
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
-    
+
+    # Check what triggered this callback: if only pagination changes, do not need to update full data store.
+    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily 
+    triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
+    pagination_only = triggered_prop in ['left_data_table.page_current', 'left_data_table.page_size']
+
     filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
-    
+
     _, total_count = query_master_table(
         db_path,
         table_name='isoforms',
@@ -2576,7 +2594,7 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
         filters=filters,
         gene_filter=selected_gene
     )
-    
+
     full_data, _ = query_master_table(
         db_path,
         table_name='isoforms',
@@ -2586,16 +2604,18 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
         filters=filters,
         gene_filter=selected_gene
     )
-    
-    # Handle None values for pagination params
+
     page_current = page_current or 0
     page_size = page_size or 10
-    
+
     start_idx = page_current * page_size
     end_idx = (page_current + 1) * page_size
     paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
-    
+
+    if pagination_only:
+        return paginated_data, page_count, no_update
+
     return paginated_data, page_count, full_data
 
 
@@ -2614,13 +2634,17 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
-    
-    # Check if current filter is valid before processing
+
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
-    
+
+    # Check what triggered this callback: if only pagination changes, do not need to update full data store.
+    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily 
+    triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
+    pagination_only = triggered_prop in ['right_data_table.page_current', 'right_data_table.page_size']
+
     filters = parse_filter_query(db_path, filter_query, table_name='junctions')
-    
+
     _, total_count = query_master_table(
         db_path,
         table_name="junctions",
@@ -2630,7 +2654,7 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
         filters=filters,
         gene_filter=selected_gene
     )
-    
+
     full_data, _ = query_master_table(
         db_path,
         table_name="junctions",
@@ -2640,16 +2664,18 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
         filters=filters,
         gene_filter=selected_gene
     )
-    
-    # Handle None values for pagination params
+
     page_current = page_current or 0
     page_size = page_size or 10
-    
+
     start_idx = page_current * page_size
     end_idx = (page_current + 1) * page_size
     paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
-    
+
+    if pagination_only:
+        return paginated_data, page_count, no_update
+
     return paginated_data, page_count, full_data
 
 
