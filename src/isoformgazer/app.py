@@ -1851,6 +1851,7 @@ app.layout.children.extend([
     dcc.Store(id='exon-color-store', data='#2E86C1'),
     dcc.Store(id='junction-color-store', data='#85929E'),
     dcc.Store(id='individual-junction-colors', data={}),
+    dcc.Store(id='viewport-dimensions', data={'width': 1920, 'height': 1080}),
     dcc.Store(id='loading-progress-store', data=0),
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
@@ -1903,10 +1904,11 @@ def update_junction_color_store(color_value):
      dash.dependencies.Output('junction-color-picker-popup', 'style')],
     [dash.dependencies.Input('atse-map', 'clickData')],
     [dash.dependencies.State('individual-junction-colors', 'data'),
-     dash.dependencies.State('junction-color-store', 'data')],
+     dash.dependencies.State('junction-color-store', 'data'),
+     dash.dependencies.State('viewport-dimensions', 'data')],
     prevent_initial_call=True
 )
-def handle_junction_click(clickData, individual_colors, global_junction_color):
+def handle_junction_click(clickData, individual_colors, global_junction_color, viewport_dims):
     """
     Handle junction clicks to open the color picker popup.
     Extract junction ID from the hover text.
@@ -1953,8 +1955,27 @@ def handle_junction_click(clickData, individual_colors, global_junction_color):
 
     # need bounding box of clicked junction point to position the popup
     bbox = point.get('bbox', {})
-    x_pos = bbox.get('x1', 0) + 10 
-    y_pos = bbox.get('y0', 0)
+    popup_width = 280
+    popup_height = 300
+    offset_x = 15
+    offset_y = 5
+
+    x_pos = bbox.get('x1', 0) + offset_x
+    y_pos = bbox.get('y0', 0) + offset_y
+
+    # Add viewport boundary checking to prevent popup from going off-screen
+    viewport_width = viewport_dims.get('width', 1920) if viewport_dims else 1920
+    viewport_height = viewport_dims.get('height', 1080) if viewport_dims else 1080
+
+    if x_pos + popup_width > viewport_width:
+        # Position to the left of the junction instead
+        x_pos = max(10, bbox.get('x0', 0) - popup_width - offset_x)
+
+    if y_pos + popup_height > viewport_height:
+        y_pos = max(10, bbox.get('y1', 0) - popup_height - offset_y)
+
+    x_pos = max(10, x_pos)
+    y_pos = max(10, y_pos)
 
     popup_style = {
         'position': 'fixed',
@@ -3931,6 +3952,24 @@ def update_abundance_dropdowns(color_type, selected_gene):
             traceback.print_exc()
 
     return tissue_options, tissue_value, tissue_style, organ_options, organ_value, organ_style
+
+
+###################################################################
+# VIEWPORT DIMENSIONS TRACKING
+###################################################################
+# neede for individual junction coloring popup positioning
+app.clientside_callback(
+    """
+    function(n_intervals) {
+        return {
+            width: window.innerWidth,
+            height: window.innerHeight
+        };
+    }
+    """,
+    dash.dependencies.Output('viewport-dimensions', 'data'),
+    [dash.dependencies.Input('loading-delay-interval', 'n_intervals')]
+)
 
 
 ###################################################################
