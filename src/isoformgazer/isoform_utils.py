@@ -12,7 +12,7 @@ import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
-from data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap
+from data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap, get_table_prefix
 from performance_utils import cached, memory_tracker, plot_optimizer
 # suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='Mean of empty slice')
@@ -60,50 +60,88 @@ def get_lrs_metadata_replicates() -> List[List[str]]:
     return replicate_groups
 
 
-def get_sample_replicates_mapping() -> List[List[str]]:
+def get_sample_replicates_mapping(species: str = 'Human') -> List[List[str]]:
     """
     Create a mapping of sample IDs to their replicate groups, represented as nested lists.
-    This mapping was obtained using get_lrs_metadata_replicates(). 
+    This mapping was obtained using get_lrs_metadata_replicates().
+
+    Args:
+        species: 'Human' or 'Mouse' - determines which replicate mapping to use
+
+    Returns:
+        List of lists where each sublist contains sample IDs that are replicates
     """
-    replicates_mapping = [['ENCFF168MIB.A673', 'ENCFF861BKY.A673'], ['ENCFF649CYY.Caco.2', 'ENCFF827OXR.Caco.2'], 
-                          ['ENCFF548JGS.Calu3', 'ENCFF569KOA.Calu3'], ['ENCFF417VHJ.GM12878', 'ENCFF281TNJ.GM12878', 
-                           'ENCFF475ORL.GM12878', 'ENCFF329AYV.GM12878', 'ENCFF902UIT.GM12878', 'ENCFF450VAU.GM12878', 
-                           'ENCFF694DIE.GM12878'], ['ENCFF954UFG.GM23338', 'ENCFF251CBB.GM23338'], ['ENCFF853OFP.H1', 
-                           'ENCFF400BQQ.H1', 'ENCFF436GKZ.H1'], ['ENCFF688QGB.H9', 'ENCFF272VSN.H9'], ['ENCFF337VWR.HCT116'], 
-                          ['ENCFF728ITF.HFFc6', 'ENCFF288CJF.HFFc6', 'ENCFF385QZZ.HFFc6'], ['ENCFF609QIM.HL.60', 
-                           'ENCFF274DYS.HL.60'], ['ENCFF483HTA.HepG2', 'ENCFF427JDY.HepG2', 'ENCFF589SMB.HepG2'], 
-                          ['ENCFF197DCI.IMR.90'], ['ENCFF429VVB.K562', 'ENCFF634YSN.K562', 'ENCFF696GDL.K562', 'ENCFF694INI.K562', 
-                           'ENCFF763VZC.K562'], ['ENCFF041EGI.MCF_10A', 'ENCFF702KLU.MCF_10A'], ['ENCFF887DGG.MCF.7'], 
-                          ['ENCFF511KJB.OCI.LY7', 'ENCFF417UQV.OCI.LY7'], ['ENCFF834KTE.PC.3'], ['ENCFF107YRM.PC.9', 
-                           'ENCFF860AWQ.PC.9'], ['ENCFF990CUL.Panc1'], ['ENCFF738UZJ.Right_ventricle_myocardium_inferior'], 
-                          ['ENCFF665LBS.Right_ventricle_myocardium_superior'], ['ENCFF563QZR.WTC11', 'ENCFF370NFS.WTC11', 
-                           'ENCFF245IPA.WTC11'], ['ENCFF417ALN.adrenal_gland'], ['ENCFF211SQY.adrenal_gland'], 
-                          ['ENCFF912HPY.adrenal_gland'], ['ENCFF144KHH.aorta'], ['ENCFF902BIU.aorta'], ['ENCFF316EZQ.astrocyte', 
-                           'ENCFF474GEK.astrocyte'], ['ENCFF680XXE.cardiac_septum'], ['ENCFF352CGL.chondrocyte', 
-                           'ENCFF342HOS.chondrocyte', 'ENCFF011BFA.chondrocyte'], ['ENCFF206TQZ.dorsolateral_prefrontal_cortex'], 
-                          ['ENCFF156TTD.dorsolateral_prefrontal_cortex'], ['ENCFF311CZO.dorsolateral_prefrontal_cortex'], 
-                          ['ENCFF785KVJ.dorsolateral_prefrontal_cortex'], ['ENCFF260AWP.dorsolateral_prefrontal_cortex'], 
-                          ['ENCFF838DFB.dorsolateral_prefrontal_cortex'], ['ENCFF827DUW.dorsolateral_prefrontal_cortex'], 
-                          ['ENCFF708BOP.dorsolateral_prefrontal_cortex'], ['ENCFF446EFU.dorsolateral_prefrontal_cortex'], 
-                          ['ENCFF712CBL.endodermal_cell', 'ENCFF731HST.endodermal_cell', 'ENCFF235QXW.endodermal_cell', 
-                           'ENCFF142LPL.endodermal_cell', 'ENCFF561HIY.endodermal_cell'], ['ENCFF595PPR.endothelial_cell', 
-                           'ENCFF770DXN.endothelial_cell'], ['ENCFF033LRZ.endothelial_cell_of_umbilical_vein', 
-                           'ENCFF096UHO.endothelial_cell_of_umbilical_vein'], ['ENCFF919JFJ.glutamatergic_neuron', 
-                           'ENCFF982WKN.glutamatergic_neuron'], ['ENCFF429JUP.heart_left_ventricle', 'ENCFF602MAI.heart_left_ventricle', 
-                           'ENCFF537NCV.heart_left_ventricle', 'ENCFF185VYD.heart_left_ventricle'], ['ENCFF793PGJ.heart_right_ventricle', 
-                           'ENCFF425VDL.heart_right_ventricle', 'ENCFF615FIC.heart_right_ventricle'], ['ENCFF492BYP.kidney'], 
-                          ['ENCFF920VXE.left_cardiac_atrium'], ['ENCFF245MBY.left_colon'], ['ENCFF733RRO.left_lung'], 
-                          ['ENCFF196WMM.left_lung'], ['ENCFF793CMQ.left_ventricle_myocardium_inferior'], 
-                          ['ENCFF624IQY.left_ventricle_myocardium_superior'], ['ENCFF341BSQ.lower_lobe_of_left_lung'], 
-                          ['ENCFF552NVU.lower_lobe_of_left_lung'], ['ENCFF250IWT.lower_lobe_of_right_lung'], ['ENCFF237FMP.mammary_epithelial_cell', 
-                           'ENCFF617YVE.mammary_epithelial_cell'], ['ENCFF907SZK.mesenteric_fat_pad'], ['ENCFF387HPO.mucosa_of_descending_colon'], 
-                          ['ENCFF511AVQ.mucosa_of_descending_colon'], ['ENCFF026VEI.neural_crest_cell', 'ENCFF249GFH.neural_crest_cell'], 
-                          ['ENCFF556DYU.osteocyte', 'ENCFF560XTG.osteocyte'], ['ENCFF422XLS.ovary'], ['ENCFF187BTK.ovary'], ['ENCFF756AHG.ovary'], 
-                          ['ENCFF960KBO.posterior_vena_cava'], ['ENCFF658OZB.posterior_vena_cava'], ['ENCFF471YEK.progenitor_cell_of_endocrine_pancreas', 
-                           'ENCFF988RQM.progenitor_cell_of_endocrine_pancreas'], ['ENCFF750LYC.psoas_muscle'], ['ENCFF630XEC.psoas_muscle'], 
-                          ['ENCFF242WRZ.right_cardiac_atrium'], ['ENCFF905RVF.right_cardiac_atrium'], ['ENCFF722JJS.right_cardiac_atrium'], 
-                          ['ENCFF899MTI.right_cardiac_atrium'], ['ENCFF318SKH.right_lobe_of_liver'], ['ENCFF306ZPP.right_lobe_of_liver'], 
-                          ['ENCFF580BQX.type_B_pancreatic_cell', 'ENCFF489XQJ.type_B_pancreatic_cell'], ['ENCFF934MBW.upper_lobe_of_right_lung']]
+    if species == "Mouse":
+        replicates_mapping = [['ENCFF565RLW.left_cerebral_cortex', 'ENCFF325BXV.left_cerebral_cortex'], ['ENCFF605NQH.left_cerebral_cortex','ENCFF937WKF.left_cerebral_cortex'],
+                              ['ENCFF518QIV.layer_of_hippocampus', 'ENCFF809BZD.layer_of_hippocampus'], ['ENCFF402OZL.layer_of_hippocampus', 'ENCFF182ZKL.layer_of_hippocampus'],
+                              ['ENCFF327DHL.gastrocnemius', 'ENCFF441MLQ.gastrocnemius'], ['ENCFF223JJA.layer_of_hippocampus', 'ENCFF326JTG.layer_of_hippocampus'],
+                              ['ENCFF977AQV.adrenal_gland', 'ENCFF626SLN.adrenal_gland'], ['ENCFF167GYW.adrenal_gland', 'ENCFF589EMD.adrenal_gland'],
+                              ['ENCFF122PGZ.adrenal_gland', 'ENCFF916NVH.adrenal_gland'],['ENCFF618PJT.gastrocnemius', 'ENCFF124DBU.gastrocnemius'],
+                              ['ENCFF873KDL.adrenal_gland', 'ENCFF866CSV.adrenal_gland'], ['ENCFF863AGD.adrenal_gland', 'ENCFF321AJK.adrenal_gland'],
+                              ['ENCFF435KPO.adrenal_gland', 'ENCFF671OCJ.adrenal_gland'], ['ENCFF811RRD.adrenal_gland'],
+                              ['ENCFF532MMA.layer_of_hippocampus', 'ENCFF175BNQ.layer_of_hippocampus'], ['ENCFF100OAR.adrenal_gland', 'ENCFF604SVZ.adrenal_gland'],
+                              ['ENCFF874VSI.F121.9', 'ENCFF667VXS.F121.9', 'ENCFF313VYZ.F121.9'], ['ENCFF169PFY.adrenal_gland', 'ENCFF142VQP.adrenal_gland'],
+                              ['ENCFF100UBG.left_cerebral_cortex', 'ENCFF812RTU.left_cerebral_cortex'],['ENCFF337DWM.gastrocnemius', 'ENCFF696VVK.gastrocnemius'],
+                              ['ENCFF584WWA.heart', 'ENCFF860CBL.heart'], ['ENCFF429RCV.adrenal_gland', 'ENCFF387GTW.adrenal_gland'],['ENCFF330HVI.layer_of_hippocampus'],
+                              ['ENCFF285NUG.left_cerebral_cortex', 'ENCFF977AFJ.left_cerebral_cortex'], ['ENCFF303OLU.adrenal_gland', 'ENCFF856RHM.adrenal_gland'],
+                              ['ENCFF836THV.adrenal_gland', 'ENCFF970IHS.adrenal_gland'],['ENCFF524YTF.gastrocnemius', 'ENCFF294TJX.gastrocnemius'],
+                              ['ENCFF047OYU.gastrocnemius', 'ENCFF389RMT.gastrocnemius'], ['ENCFF948TOU.gastrocnemius', 'ENCFF369DHX.gastrocnemius'],
+                              ['ENCFF520HCL.left_cerebral_cortex', 'ENCFF132MEJ.left_cerebral_cortex'], ['ENCFF836SSV.heart', 'ENCFF031EVU.heart'],
+                              ['ENCFF773BXP.left_cerebral_cortex', 'ENCFF468KWN.left_cerebral_cortex'],['ENCFF107CZA.gastrocnemius', 'ENCFF957OYJ.gastrocnemius'],
+                              ['ENCFF281GTL.gastrocnemius', 'ENCFF028QQV.gastrocnemius'], ['ENCFF896RNF.layer_of_hippocampus', 'ENCFF346JYL.layer_of_hippocampus'],
+                              ['ENCFF338YTG.layer_of_hippocampus', 'ENCFF509RDZ.layer_of_hippocampus'], ['ENCFF271ZDH.gastrocnemius', 'ENCFF095FKV.gastrocnemius'],
+                              ['ENCFF865ZOH.gastrocnemius', 'ENCFF421HRA.gastrocnemius'],['ENCFF798HCT.gastrocnemius', 'ENCFF069POP.gastrocnemius'],
+                              ['ENCFF177KNR.heart', 'ENCFF468BPP.heart'], ['ENCFF837UMP.gastrocnemius', 'ENCFF556BPF.gastrocnemius'],['ENCFF583MVR.heart', 'ENCFF358AEP.heart'],
+                              ['ENCFF221ABY.gastrocnemius', 'ENCFF435GLV.gastrocnemius'], ['ENCFF988MZV.adrenal_gland', 'ENCFF549DGV.adrenal_gland'],
+                              ['ENCFF032HOK.heart', 'ENCFF356MNK.heart'], ['ENCFF477GNS.gastrocnemius', 'ENCFF462TIY.gastrocnemius'], ['ENCFF885OVT.heart', 'ENCFF484VDN.heart'],
+                              ['ENCFF669LWV.myotube', 'ENCFF003OWX.myotube'], ['ENCFF141ZHE.adrenal_gland', 'ENCFF177RGM.adrenal_gland'], ['ENCFF376LTY.layer_of_hippocampus', 'ENCFF314QJI.layer_of_hippocampus'],
+                              ['ENCFF448KBZ.layer_of_hippocampus', 'ENCFF890RGD.layer_of_hippocampus'], ['ENCFF311BUV.adrenal_gland', 'ENCFF698CVI.adrenal_gland'],
+                              ['ENCFF095CHU.left_cerebral_cortex', 'ENCFF201HBC.left_cerebral_cortex'], ['ENCFF309DMQ.layer_of_hippocampus', 'ENCFF103DSA.layer_of_hippocampus'],
+                              ['ENCFF110OOL.layer_of_hippocampus', 'ENCFF997NDX.layer_of_hippocampus'], ['ENCFF348TRU.forelimb'], ['ENCFF944JXN.left_cerebral_cortex', 'ENCFF148ESR.left_cerebral_cortex'],
+                              ['ENCFF479GNP.left_cerebral_cortex', 'ENCFF402ZUC.left_cerebral_cortex'], ['ENCFF019HRC.C2C12', 'ENCFF676BYQ.C2C12'], ['ENCFF978EIJ.layer_of_hippocampus', 'ENCFF228VBQ.layer_of_hippocampus'],
+                              ['ENCFF046XAX.left_cerebral_cortex', 'ENCFF319GBG.left_cerebral_cortex'], ['ENCFF560ONE.adrenal_gland', 'ENCFF445VZL.adrenal_gland'], ['ENCFF417EKT.forelimb'],
+                              ['ENCFF683BZL.left_cerebral_cortex', 'ENCFF476MLA.left_cerebral_cortex'], ['ENCFF008ATT.C2C12', 'ENCFF238DPX.C2C12']]
+    else:
+        # Human replicates mapping
+        replicates_mapping = [['ENCFF168MIB.A673', 'ENCFF861BKY.A673'], ['ENCFF649CYY.Caco.2', 'ENCFF827OXR.Caco.2'], 
+                        ['ENCFF548JGS.Calu3', 'ENCFF569KOA.Calu3'], ['ENCFF417VHJ.GM12878', 'ENCFF281TNJ.GM12878', 
+                        'ENCFF475ORL.GM12878', 'ENCFF329AYV.GM12878', 'ENCFF902UIT.GM12878', 'ENCFF450VAU.GM12878', 
+                        'ENCFF694DIE.GM12878'], ['ENCFF954UFG.GM23338', 'ENCFF251CBB.GM23338'], ['ENCFF853OFP.H1', 
+                        'ENCFF400BQQ.H1', 'ENCFF436GKZ.H1'], ['ENCFF688QGB.H9', 'ENCFF272VSN.H9'], ['ENCFF337VWR.HCT116'], 
+                        ['ENCFF728ITF.HFFc6', 'ENCFF288CJF.HFFc6', 'ENCFF385QZZ.HFFc6'], ['ENCFF609QIM.HL.60', 
+                        'ENCFF274DYS.HL.60'], ['ENCFF483HTA.HepG2', 'ENCFF427JDY.HepG2', 'ENCFF589SMB.HepG2'], 
+                        ['ENCFF197DCI.IMR.90'], ['ENCFF429VVB.K562', 'ENCFF634YSN.K562', 'ENCFF696GDL.K562', 'ENCFF694INI.K562', 
+                        'ENCFF763VZC.K562'], ['ENCFF041EGI.MCF_10A', 'ENCFF702KLU.MCF_10A'], ['ENCFF887DGG.MCF.7'], 
+                        ['ENCFF511KJB.OCI.LY7', 'ENCFF417UQV.OCI.LY7'], ['ENCFF834KTE.PC.3'], ['ENCFF107YRM.PC.9', 
+                        'ENCFF860AWQ.PC.9'], ['ENCFF990CUL.Panc1'], ['ENCFF738UZJ.Right_ventricle_myocardium_inferior'], 
+                        ['ENCFF665LBS.Right_ventricle_myocardium_superior'], ['ENCFF563QZR.WTC11', 'ENCFF370NFS.WTC11', 
+                        'ENCFF245IPA.WTC11'], ['ENCFF417ALN.adrenal_gland'], ['ENCFF211SQY.adrenal_gland'], 
+                        ['ENCFF912HPY.adrenal_gland'], ['ENCFF144KHH.aorta'], ['ENCFF902BIU.aorta'], ['ENCFF316EZQ.astrocyte', 
+                        'ENCFF474GEK.astrocyte'], ['ENCFF680XXE.cardiac_septum'], ['ENCFF352CGL.chondrocyte', 
+                        'ENCFF342HOS.chondrocyte', 'ENCFF011BFA.chondrocyte'], ['ENCFF206TQZ.dorsolateral_prefrontal_cortex'], 
+                        ['ENCFF156TTD.dorsolateral_prefrontal_cortex'], ['ENCFF311CZO.dorsolateral_prefrontal_cortex'], 
+                        ['ENCFF785KVJ.dorsolateral_prefrontal_cortex'], ['ENCFF260AWP.dorsolateral_prefrontal_cortex'], 
+                        ['ENCFF838DFB.dorsolateral_prefrontal_cortex'], ['ENCFF827DUW.dorsolateral_prefrontal_cortex'], 
+                        ['ENCFF708BOP.dorsolateral_prefrontal_cortex'], ['ENCFF446EFU.dorsolateral_prefrontal_cortex'], 
+                        ['ENCFF712CBL.endodermal_cell', 'ENCFF731HST.endodermal_cell', 'ENCFF235QXW.endodermal_cell', 
+                        'ENCFF142LPL.endodermal_cell', 'ENCFF561HIY.endodermal_cell'], ['ENCFF595PPR.endothelial_cell', 
+                        'ENCFF770DXN.endothelial_cell'], ['ENCFF033LRZ.endothelial_cell_of_umbilical_vein', 
+                        'ENCFF096UHO.endothelial_cell_of_umbilical_vein'], ['ENCFF919JFJ.glutamatergic_neuron', 
+                        'ENCFF982WKN.glutamatergic_neuron'], ['ENCFF429JUP.heart_left_ventricle', 'ENCFF602MAI.heart_left_ventricle', 
+                        'ENCFF537NCV.heart_left_ventricle', 'ENCFF185VYD.heart_left_ventricle'], ['ENCFF793PGJ.heart_right_ventricle', 
+                        'ENCFF425VDL.heart_right_ventricle', 'ENCFF615FIC.heart_right_ventricle'], ['ENCFF492BYP.kidney'], 
+                        ['ENCFF920VXE.left_cardiac_atrium'], ['ENCFF245MBY.left_colon'], ['ENCFF733RRO.left_lung'], 
+                        ['ENCFF196WMM.left_lung'], ['ENCFF793CMQ.left_ventricle_myocardium_inferior'], 
+                        ['ENCFF624IQY.left_ventricle_myocardium_superior'], ['ENCFF341BSQ.lower_lobe_of_left_lung'], 
+                        ['ENCFF552NVU.lower_lobe_of_left_lung'], ['ENCFF250IWT.lower_lobe_of_right_lung'], ['ENCFF237FMP.mammary_epithelial_cell', 
+                        'ENCFF617YVE.mammary_epithelial_cell'], ['ENCFF907SZK.mesenteric_fat_pad'], ['ENCFF387HPO.mucosa_of_descending_colon'], 
+                        ['ENCFF511AVQ.mucosa_of_descending_colon'], ['ENCFF026VEI.neural_crest_cell', 'ENCFF249GFH.neural_crest_cell'], 
+                        ['ENCFF556DYU.osteocyte', 'ENCFF560XTG.osteocyte'], ['ENCFF422XLS.ovary'], ['ENCFF187BTK.ovary'], ['ENCFF756AHG.ovary'], 
+                        ['ENCFF960KBO.posterior_vena_cava'], ['ENCFF658OZB.posterior_vena_cava'], ['ENCFF471YEK.progenitor_cell_of_endocrine_pancreas', 
+                        'ENCFF988RQM.progenitor_cell_of_endocrine_pancreas'], ['ENCFF750LYC.psoas_muscle'], ['ENCFF630XEC.psoas_muscle'], 
+                        ['ENCFF242WRZ.right_cardiac_atrium'], ['ENCFF905RVF.right_cardiac_atrium'], ['ENCFF722JJS.right_cardiac_atrium'], 
+                        ['ENCFF899MTI.right_cardiac_atrium'], ['ENCFF318SKH.right_lobe_of_liver'], ['ENCFF306ZPP.right_lobe_of_liver'], 
+                        ['ENCFF580BQX.type_B_pancreatic_cell', 'ENCFF489XQJ.type_B_pancreatic_cell'], ['ENCFF934MBW.upper_lobe_of_right_lung']]
 
     return replicates_mapping
 
@@ -219,19 +257,20 @@ def load_psl_data(psl_file_path: str) -> pd.DataFrame:
         return pd.DataFrame()
     
 
-def get_gene_id_for_gene_name(db_path: str, gene_name: str) -> str:
+def get_gene_id_for_gene_name(db_path: str, gene_name: str, species="Human") -> str:
     """Get gene_id for a given gene_name from the isoforms database"""
     conn = sqlite3.connect(db_path)
-    query = "SELECT DISTINCT gene_id FROM isoforms WHERE gene_name = ? LIMIT 1"
+    table_prefix = get_table_prefix(species)
+    query = f"SELECT DISTINCT gene_id FROM {table_prefix}isoforms WHERE gene_name = ? LIMIT 1"
     result = pd.read_sql_query(query, conn, params=[gene_name])
     conn.close()
-    
+
     if len(result) > 0:
         gene_id = result.iloc[0]['gene_id']
         # Remove version number from gene_id (e.g., ENSG00000100320.16 -> ENSG00000100320)
         gene_id_clean = gene_id.split('.')[0]
         return gene_id_clean
-    
+
     else:
         return None
 
@@ -258,53 +297,54 @@ def prepare_gene_psl_data(psl_df: pd.DataFrame):
         return pd.DataFrame()
     
 
-def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: list) -> pd.DataFrame:
+def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: list, species="Human") -> pd.DataFrame:
     """Transcript structure processing with caching and memory optimization for faster rendering!"""
     #with ProfilerContext(f"process_transcript_structure_{gene_name}"):
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA cache_size = 10000")
     conn.execute("PRAGMA temp_store = MEMORY")
-    gene_query = "SELECT DISTINCT gene_id FROM isoforms WHERE gene_name = ? LIMIT 1"
+    table_prefix = get_table_prefix(species)
+    gene_query = f"SELECT DISTINCT gene_id FROM {table_prefix}isoforms WHERE gene_name = ? LIMIT 1"
     gene_result = pd.read_sql_query(gene_query, conn, params=[gene_name])
-    
+
     if gene_result.empty:
         conn.close()
         return pd.DataFrame()
-    
+
     gene_id = gene_result.iloc[0]['gene_id'].split('.')[0]
     #memory_tracker.measure(f"after_gene_lookup_{gene_name}")
-    
+
     if filtered_ids and len(filtered_ids) > 0:
         filtered_ids_int = [int(id) for id in filtered_ids if str(id).isdigit()]
         if filtered_ids_int:
             placeholders = ','.join(['?'] * len(filtered_ids_int))
             isoform_query = f"""
-            SELECT id FROM isoforms
+            SELECT id FROM {table_prefix}isoforms
             WHERE gene_id LIKE ? AND id IN ({placeholders})
             ORDER BY isoform_average_tpm DESC NULLS LAST
             """
             params = [f"{gene_id}%"] + filtered_ids_int
         else:
-            isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
+            isoform_query = f"SELECT id FROM {table_prefix}isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
             params = [f"{gene_id}%"]
     else:
-        isoform_query = "SELECT id FROM isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
+        isoform_query = f"SELECT id FROM {table_prefix}isoforms WHERE gene_id LIKE ? ORDER BY isoform_average_tpm DESC NULLS LAST"
         params = [f"{gene_id}%"]
 
     isoform_ids = pd.read_sql_query(isoform_query, conn, params=params)['id'].tolist()
-    
+
     if not isoform_ids:
         conn.close()
         return pd.DataFrame()
-    
+
     #memory_tracker.measure(f"after_isoform_lookup_{gene_name}")
-    
+
     placeholders = ','.join(['?'] * len(isoform_ids))
     psl_query = f"""
-    SELECT 
-        id, trans_id, gene_id, tName, strand, 
+    SELECT
+        id, trans_id, gene_id, tName, strand,
         tStart, tEnd, blockSizes, tStarts
-    FROM psl_data 
+    FROM {table_prefix}psl_data
     WHERE id IN ({placeholders})
     ORDER BY tStart, id
     """
@@ -371,22 +411,23 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
     return result_df
 
 
-def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -> pd.DataFrame:
+def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm', species="Human") -> pd.DataFrame:
     """Load expression data from SQLite database with caching"""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA cache_size = 10000")
 
-    gene_id = get_gene_id_for_gene_name(db_path, gene_name)
+    gene_id = get_gene_id_for_gene_name(db_path, gene_name, species)
     if not gene_id:
         return pd.DataFrame()
-    
+
+    table_prefix = get_table_prefix(species)
     if data_type.lower() == 'tpm':
-        table_name = 'tpm_data'
+        table_name = f'{table_prefix}tpm_data'
     elif data_type.lower() == 'log_tpm':
-        table_name = 'log_tpm_data'
+        table_name = f'{table_prefix}log_tpm_data'
     else:
-        table_name = 'ratio_data'
-    
+        table_name = f'{table_prefix}ratio_data'
+
     query = f"""
     SELECT
         exp.*,
@@ -394,14 +435,14 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
         iso.gene_name,
         iso.isoform_average_tpm
     FROM {table_name} exp
-    JOIN psl_data psl ON exp.id = psl.id
-    JOIN isoforms iso ON exp.id = iso.id
-    WHERE iso.gene_name = ?
+    JOIN {table_prefix}psl_data psl ON exp.id = psl.id
+    JOIN {table_prefix}isoforms iso ON exp.id = iso.id
+    WHERE iso.gene_id LIKE ?
     ORDER BY iso.isoform_average_tpm ASC NULLS LAST, psl.trans_id
     """
 
     try:
-        df = pd.read_sql_query(query, conn, params=[gene_name])
+        df = pd.read_sql_query(query, conn, params=[f"{gene_id}%"])
         df = df.drop(['index'], axis=1)
 
         numeric_cols = [col for col in df.columns if col not in ['transcript', 'trans_id', 'gene', 'gene_name']]
@@ -416,11 +457,11 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm') -
             nan_count = df[numeric_cols].isna().sum().sum()
 
         return df
-    
+
     except Exception as e:
         print(f"Error loading {data_type} data: {e}")
         return pd.DataFrame()
-    
+
     finally:
         conn.close()
 
@@ -436,17 +477,19 @@ def create_transcript_structure_plot(db_path: str,
                                      abundance_type: str = 'average',
                                      tissue_name: str = None,
                                      organ_name: str = None,
-                                     individual_transcript_colors: dict = None) -> go.Figure:
+                                     individual_transcript_colors: dict = None,
+                                     species: str = "Human") -> go.Figure:
     """Create transcript structure plot showing all transcripts with 50%+ speed improvement"""
-    
+
     if transcript_data.empty:
         return create_empty_isoform_message(f"No transcript data for gene: {gene_name}")
     
     #with PlotPerformanceContext(gene_name, "transcript_structure"):
         #memory_tracker.measure("plot_start")
-        
+
+    table_prefix = get_table_prefix(species)
     conn = sqlite3.connect(db_path)
-    metadata_query = """SELECT gene_id, ORF_perplexity FROM isoforms
+    metadata_query = f"""SELECT gene_id, ORF_perplexity FROM {table_prefix}isoforms
                         WHERE gene_name = ? LIMIT 1"""
     metadata_result = pd.read_sql_query(metadata_query, conn, params=[gene_name])
 
@@ -466,14 +509,19 @@ def create_transcript_structure_plot(db_path: str,
 
     # Query database for transcript IDs in correct TPM order (like junction_utils.py does)
     conn = sqlite3.connect(db_path)
-    transcript_ids_query = """
-    SELECT DISTINCT id FROM isoforms
-    WHERE gene_name = ?
-    ORDER BY isoform_average_tpm DESC NULLS LAST
-    """
-    ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=[gene_name])
+    # Get gene_id for gene_name
+    gene_id = get_gene_id_for_gene_name(db_path, gene_name, species)
+    if gene_id:
+        transcript_ids_query = f"""
+        SELECT DISTINCT id FROM {table_prefix}isoforms
+        WHERE gene_id LIKE ?
+        ORDER BY isoform_average_tpm DESC NULLS LAST
+        """
+        ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=[f"{gene_id}%"])
+    else:
+        ordered_ids_df = pd.DataFrame()
     conn.close()
-    ordered_transcript_ids = ordered_ids_df['id'].tolist()
+    ordered_transcript_ids = ordered_ids_df['id'].tolist() if not ordered_ids_df.empty else []
     # Reverse because transcripts are displayed from top to bottom
     ordered_transcript_ids = ordered_transcript_ids[::-1]
 
@@ -492,24 +540,27 @@ def create_transcript_structure_plot(db_path: str,
 
     if color_by_abundance:
         if abundance_type == 'tissue' and tissue_name:
-            tissue_tpm_dict = get_tissue_tpm_for_isoforms(db_path, gene_name, tissue_name)
+            tissue_tpm_dict = get_tissue_tpm_for_isoforms(db_path, gene_name, tissue_name, species)
             transcript_summary['abundance_tpm'] = transcript_summary['id'].map(tissue_tpm_dict).fillna(0)
 
         elif abundance_type == 'organ' and organ_name:
-            organ_tpm_dict = get_organ_tpm_for_isoforms(db_path, gene_name, organ_name)
+            organ_tpm_dict = get_organ_tpm_for_isoforms(db_path, gene_name, organ_name, species)
             transcript_summary['abundance_tpm'] = transcript_summary['id'].map(organ_tpm_dict).fillna(0)
 
         else:
             conn = sqlite3.connect(db_path)
             try:
-                tpm_query = """
-                SELECT DISTINCT id, isoform_average_tpm
-                FROM isoforms
-                WHERE gene_name = ?
-                """
-                tpm_df = pd.read_sql_query(tpm_query, conn, params=[gene_name])
-                transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
-                transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
+                # Get gene_id for gene_name
+                gene_id_for_tpm = get_gene_id_for_gene_name(db_path, gene_name, species)
+                if gene_id_for_tpm:
+                    tpm_query = f"""
+                    SELECT DISTINCT id, isoform_average_tpm
+                    FROM {table_prefix}isoforms
+                    WHERE gene_id LIKE ?
+                    """
+                    tpm_df = pd.read_sql_query(tpm_query, conn, params=[f"{gene_id_for_tpm}%"])
+                    transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+                    transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
 
             finally:
                 conn.close()
@@ -951,8 +1002,19 @@ def calculate_legend_x_position(colorbar_x, offset=0.15):
     return x_position
 
 
-def calculate_bottom_margin(show_labels: bool, transcript_names: list) -> int:
-    """Calculate bottom margin based on label visibility and name lengths"""
+def calculate_bottom_margin(show_labels: bool, transcript_names: list, hide_tissue_labels: bool = False) -> int:
+    """Calculate bottom margin based on label visibility and name lengths
+
+    Args:
+        show_labels: Whether to show transcript (row) labels
+        transcript_names: List of transcript names for sizing
+        hide_tissue_labels: Whether tissue (column) labels are hidden
+    """
+    # If tissue labels are hidden, use minimal bottom margin
+    if hide_tissue_labels:
+        return 50
+
+    # Otherwise, calculate based on transcript labels
     if show_labels:
         max_name_length = max(len(str(name)) for name in transcript_names) if transcript_names else 10
         return max(100, min(200, max_name_length * 7))
@@ -973,7 +1035,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                                           linkage_method: str = 'complete',
                                           show_gridlines: bool = False,
                                           gridline_color: str = '#ffffff',
-                                          db_path: str = None) -> go.Figure:
+                                          db_path: str = None,
+                                          species: str = 'human') -> go.Figure:
     """Create responsive clustergram with transcripts ordered by average TPM (descending)"""
     if data_type == 'TPM' or data_type == 'tpm':
         expression_data = tpm_data
@@ -997,8 +1060,14 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
 
     if 'isoform_average_tpm' not in expression_data.columns and db_path:
         conn = sqlite3.connect(db_path)
-        isoform_tpm_query = "SELECT id, isoform_average_tpm FROM isoforms WHERE gene_name = ?"
-        isoform_tpm = pd.read_sql_query(isoform_tpm_query, conn, params=[gene_name])
+        table_prefix = get_table_prefix(species)
+        # Get gene_id for gene_name
+        gene_id_for_tpm = get_gene_id_for_gene_name(db_path, gene_name, species)
+        if gene_id_for_tpm:
+            isoform_tpm_query = f"SELECT id, isoform_average_tpm FROM {table_prefix}isoforms WHERE gene_id LIKE ?"
+            isoform_tpm = pd.read_sql_query(isoform_tpm_query, conn, params=[f"{gene_id_for_tpm}%"])
+        else:
+            isoform_tpm = pd.DataFrame()
         conn.close()
 
         if not isoform_tpm.empty:
@@ -1026,7 +1095,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         height = max(height, min_required_height)
 
     if collapse_mode == 'tissue':
-        heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_tissue(expression_data, tissue_cols)
+        heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_tissue(expression_data, tissue_cols, species)
 
         # Mapping from tissue name to column indices
         tissue_name_to_indices = {}
@@ -1041,13 +1110,13 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             if tissue_name in tissue_name_to_indices:
                 kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
 
-        # Average TPM and Ratio using only kept tissues
-        tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, kept_tissue_cols)
-        ratio_heatmap_data, _, _ = average_lrs_by_tissue(ratio_data, kept_tissue_cols)
+        # Average TPM and Ratio using only kept tissues, forcing the same output tissues
+        tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
+        ratio_heatmap_data, _, _ = average_lrs_by_tissue(ratio_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         tissue_cols_for_organs = tissue_display_names
 
     elif collapse_mode == 'replicate':
-        heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_replicates(expression_data, tissue_cols)
+        heatmap_data, tissue_display_names, tissue_categories = average_lrs_by_replicates(expression_data, tissue_cols, species)
 
         # Use the same tissue list for TPM and Ratio as used for the main data type
         tissue_name_to_indices = {}
@@ -1062,19 +1131,19 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             if tissue_name in tissue_name_to_indices:
                 kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
 
-        # Average TPM and Ratio using only the kept tissues
-        tpm_heatmap_data, _, _ = average_lrs_by_replicates(tpm_data, kept_tissue_cols)
-        ratio_heatmap_data, _, _ = average_lrs_by_replicates(ratio_data, kept_tissue_cols)
+        # Average TPM and Ratio using only the kept tissues, forcing the same output tissues
+        tpm_heatmap_data, tpm_tissue_names, _ = average_lrs_by_replicates(tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
+        ratio_heatmap_data, ratio_tissue_names, _ = average_lrs_by_replicates(ratio_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         tissue_cols_for_organs = tissue_display_names
 
     else:
         heatmap_data = expression_data[tissue_cols].values.T
         tpm_heatmap_data = tpm_data[tissue_cols].values.T
         ratio_heatmap_data = ratio_data[tissue_cols].values.T
-        tissue_display_names, tissue_categories = process_individual_tissues(tissue_cols)
+        tissue_display_names, tissue_categories = process_individual_tissues(tissue_cols, species)
         tissue_cols_for_organs = tissue_cols
-    
-    organ_list, color_list = create_organ_annotation_bar(tissue_cols_for_organs)
+
+    organ_list, color_list = create_organ_annotation_bar(tissue_cols_for_organs, species=species)
     clean_tissue_names = [extract_tissue_name_from_column(col) for col in tissue_cols_for_organs]
     
     # Ensure proper data orientation: rows = transcripts, columns = tissues
@@ -1084,7 +1153,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         clustergram_data = heatmap_data
     
     num_tissues = len(clean_tissue_names)
-    hide_tissue_labels = (num_tissues > 30) or (show_tables == 'show')
+    # Hide tissue labels for mouse data by default due to many cell types
+    hide_tissue_labels = (num_tissues > 30) or (show_tables == 'show') or (species == 'Mouse')
     #left_margin = min(40, int(height * 0.1))
     if not show_labels or (num_transcripts > 30): 
         left_margin = 2  # Minimum left margin, just enough to prevent figure overflow
@@ -1095,10 +1165,10 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         left_margin = min(70, max(20, 7 * max_label_len + 10))
     
     if hide_tissue_labels:
-        bottom_margin = 50 
+        bottom_margin = 50
         actual_clustergram_height = height
     else:
-        bottom_margin = max(200, int(height * 0.35)) 
+        bottom_margin = max(200, int(height * 0.35))
         actual_clustergram_height = height - 80
 
     clustergram_data_processed = pd.DataFrame(clustergram_data).copy()
@@ -1152,7 +1222,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             column_colors=color_list,
             height=actual_clustergram_height,
             color_threshold={'row': 0.7, 'col': 0.7},
-            hidden_labels='col' if not show_labels else None,
+            hidden_labels='col' if hide_tissue_labels else None,
             cluster='col', 
             color_list={
                 'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
@@ -1245,8 +1315,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
 
     except Exception as e:
         print(f"Warning: Could not update colorbar position: {e}")
-    
-    organ_list, color_list = create_organ_annotation_bar(tissue_cols_for_organs)
+
+    organ_list, color_list = create_organ_annotation_bar(tissue_cols_for_organs, species=species)
     unique_organs = []
     unique_colors = []
     for organ, color in zip(organ_list, color_list):
@@ -1338,7 +1408,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                 l=min(20, left_margin + 50),
                 r=350,
                 t=90,
-                b=calculate_bottom_margin(show_labels, transcript_names_abbreviated)
+                b=calculate_bottom_margin(show_labels, transcript_names_abbreviated, hide_tissue_labels)
         ),
         autosize=True,
         width=None,
@@ -1418,76 +1488,47 @@ def apply_colorscale_to_clustergram(fig, colorscale, show_nan_as_black=False):
     return fig
 
 
-def average_lrs_by_tissue(tpm_data: pd.DataFrame, 
-                                tissue_cols: List[str]) -> Tuple[np.ndarray, List[str], List[str]]:
-    """Collapse multiple experiments per tissue by averaging values"""
-    tissue_to_organ_mapping = get_tissue_to_organ_mapping()
+def average_lrs_by_tissue(tpm_data: pd.DataFrame,
+                                tissue_cols: List[str],
+                                species: str = 'human',
+                                force_keep_tissues: List[str] = None) -> Tuple[np.ndarray, List[str], List[str]]:
+    """Collapse multiple experiments per tissue by averaging values
+
+    Args:
+        tpm_data: DataFrame with expression data
+        tissue_cols: List of column names to process
+        species: Species identifier
+        force_keep_tissues: If provided, ensures output includes these tissues in this order,
+                           padding with NaN rows if tissue not found in data
+    """
+    tissue_to_organ_mapping = get_tissue_to_organ_mapping(species)
     tissue_mapping = {}
-    
+
     for col in tissue_cols:
         tissue_mapping[col] = extract_tissue_name_from_column(col)
-    
+
     # Group columns by tissue name
     tissue_groups = {}
     for col, tissue_name in tissue_mapping.items():
         if tissue_name not in tissue_groups:
             tissue_groups[tissue_name] = []
         tissue_groups[tissue_name].append(col)
-    
-    averaged_data = []
-    tissue_display_names = []
-    tissue_categories = []
-    
+
+    # First pass: compute averages for all tissues
+    tissue_data_map = {}  # tissue_name -> averaged_values
+
     for tissue_name, columns in tissue_groups.items():
         tissue_data = tpm_data[columns].values
 
-        # skip if all values in tissue are NaN
+        # skip if all values in tissue are NaN (unless forced to keep)
         if np.isnan(tissue_data).all():
-            continue
-
-        # Use nanmean to properly handle NaN values
-        if np.isnan(tissue_data).any():
-            mask = ~np.isnan(tissue_data)
-            with np.errstate(invalid='ignore', all='ignore'):
-                averaged_values = np.where(mask.any(axis=1), np.nanmean(tissue_data, axis=1), np.nan)
-        else:
-            averaged_values = np.mean(tissue_data, axis=1)
-
-        averaged_data.append(averaged_values)
-
-        tissue_display_names.append(tissue_name)
-        tissue_category = tissue_to_organ_mapping[tissue_name]
-        tissue_categories.append(tissue_category)
-    
-    heatmap_data = np.array(averaged_data)
-    
-    return heatmap_data, tissue_display_names, tissue_categories
-
-
-def average_lrs_by_replicates(tpm_data: pd.DataFrame, 
-                              tissue_cols: List[str]) -> Tuple[np.ndarray, List[str], List[str]]:
-    """Collapse only replicates by averaging, keep unique samples separate"""
-    replicate_groups = get_sample_replicates_mapping()
-    tissue_to_organ_mapping = get_tissue_to_organ_mapping()
-    
-    averaged_data = []
-    tissue_display_names = []
-    tissue_categories = []
-    
-    for group in replicate_groups:
-        # Find which columns from tissue_cols are in this group
-        group_columns = [col for col in tissue_cols if col in group]
-        if not group_columns:
-            continue 
-        
-        # Case 1: multiple replicates, so need to average them
-        if len(group_columns) > 1:
-            tissue_data = tpm_data[group_columns].values
-
-            if np.isnan(tissue_data).all():
+            if force_keep_tissues is None:
                 continue
-
-            # Use nanmean to properly preserve NaN if present
+            else:
+                # Keep as all NaN
+                averaged_values = np.full(len(tpm_data), np.nan)
+        else:
+            # Use nanmean to properly handle NaN values
             if np.isnan(tissue_data).any():
                 mask = ~np.isnan(tissue_data)
                 with np.errstate(invalid='ignore', all='ignore'):
@@ -1495,40 +1536,167 @@ def average_lrs_by_replicates(tpm_data: pd.DataFrame,
             else:
                 averaged_values = np.mean(tissue_data, axis=1)
 
+        tissue_data_map[tissue_name] = averaged_values
+
+    # Second pass: build output in correct order
+    if force_keep_tissues is not None:
+        # Use forced tissue list, padding with NaN if tissue not in data
+        averaged_data = []
+        tissue_display_names = []
+        tissue_categories = []
+
+        for tissue_name in force_keep_tissues:
+            if tissue_name in tissue_data_map:
+                averaged_data.append(tissue_data_map[tissue_name])
+            else:
+                # Tissue not found in this data, pad with NaN
+                averaged_data.append(np.full(len(tpm_data), np.nan))
+
+            tissue_display_names.append(tissue_name)
+            tissue_category = tissue_to_organ_mapping.get(tissue_name, 'unknown')
+            tissue_categories.append(tissue_category)
+    else:
+        # Use natural order
+        averaged_data = []
+        tissue_display_names = []
+        tissue_categories = []
+
+        for tissue_name, averaged_values in tissue_data_map.items():
+            averaged_data.append(averaged_values)
+            tissue_display_names.append(tissue_name)
+            tissue_category = tissue_to_organ_mapping.get(tissue_name, 'unknown')
+            tissue_categories.append(tissue_category)
+
+    heatmap_data = np.array(averaged_data)
+
+    return heatmap_data, tissue_display_names, tissue_categories
+
+
+def average_lrs_by_replicates(tpm_data: pd.DataFrame,
+                              tissue_cols: List[str],
+                              species: str = 'human',
+                              force_keep_tissues: List[str] = None) -> Tuple[np.ndarray, List[str], List[str]]:
+    """Collapse only replicates by averaging, keep unique samples separate
+
+    Args:
+        tpm_data: DataFrame with expression data
+        tissue_cols: List of column names to process
+        species: Species identifier
+        force_keep_tissues: If provided, ensures output includes these tissues in this order,
+                           padding with NaN rows if tissue not found in data
+    """
+    replicate_groups = get_sample_replicates_mapping(species)
+    tissue_to_organ_mapping = get_tissue_to_organ_mapping(species)
+
+    # First pass: collect data for all available tissues
+    tissue_data_map = {}  # tissue_name -> averaged_values
+
+    for group in replicate_groups:
+        # Find which columns from tissue_cols are in this group
+        group_columns = [col for col in tissue_cols if col in group]
+        if not group_columns:
+            continue
+
+        tissue_name = extract_tissue_name_from_column(group_columns[0])
+
+        # Case 1: multiple replicates, so need to average them
+        if len(group_columns) > 1:
+            tissue_data = tpm_data[group_columns].values
+
+            if np.isnan(tissue_data).all():
+                if force_keep_tissues is None:
+                    continue  # Skip if not forced to keep
+                else:
+                    # Keep as all NaN
+                    averaged_values = np.full(len(tpm_data), np.nan)
+            else:
+                # Use nanmean to properly preserve NaN if present
+                if np.isnan(tissue_data).any():
+                    mask = ~np.isnan(tissue_data)
+                    with np.errstate(invalid='ignore', all='ignore'):
+                        averaged_values = np.where(mask.any(axis=1), np.nanmean(tissue_data, axis=1), np.nan)
+                else:
+                    averaged_values = np.mean(tissue_data, axis=1)
+
         # Case 2: single replicate
         else:
             averaged_values = tpm_data[group_columns[0]].values
 
-        averaged_data.append(averaged_values)
+        tissue_data_map[tissue_name] = averaged_values
 
-        tissue_name = extract_tissue_name_from_column(group_columns[0])
-        tissue_display_names.append(tissue_name)
-        
-        tissue_category = tissue_to_organ_mapping.get(tissue_name, 'unknown')
-        tissue_categories.append(tissue_category)
-    
+    # Second pass: build output in correct order
+    if force_keep_tissues is not None:
+        # Use forced tissue list, padding with NaN if tissue not in data
+        averaged_data = []
+        tissue_display_names = []
+        tissue_categories = []
+
+        for tissue_name in force_keep_tissues:
+            if tissue_name in tissue_data_map:
+                averaged_data.append(tissue_data_map[tissue_name])
+            else:
+                # Tissue not found in this data, pad with NaN
+                averaged_data.append(np.full(len(tpm_data), np.nan))
+
+            tissue_display_names.append(tissue_name)
+            tissue_category = tissue_to_organ_mapping.get(tissue_name, 'unknown')
+            tissue_categories.append(tissue_category)
+    else:
+        # Use natural order from replicate groups
+        averaged_data = []
+        tissue_display_names = []
+        tissue_categories = []
+
+        for group in replicate_groups:
+            group_columns = [col for col in tissue_cols if col in group]
+            if not group_columns:
+                continue
+
+            tissue_name = extract_tissue_name_from_column(group_columns[0])
+            if tissue_name in tissue_data_map:
+                averaged_data.append(tissue_data_map[tissue_name])
+                tissue_display_names.append(tissue_name)
+                tissue_category = tissue_to_organ_mapping.get(tissue_name, 'unknown')
+                tissue_categories.append(tissue_category)
+
     heatmap_data = np.array(averaged_data)
-    
+
     return heatmap_data, tissue_display_names, tissue_categories
 
 
-def process_individual_tissues(tissue_cols: List[str]) -> Tuple[List[str], List[str]]:
+def process_individual_tissues(tissue_cols: List[str], species: str = 'human') -> Tuple[List[str], List[str]]:
     """Process individual tissue experiments (current behavior)"""
     tissue_display_names = []
     tissue_categories = []
-    tissue_to_organ_mapping = get_tissue_to_organ_mapping()
+    tissue_to_organ_mapping = get_tissue_to_organ_mapping(species)
     
     for col in tissue_cols:
         display_name = extract_tissue_name_from_column(col)
         tissue_display_names.append(display_name)
-        tissue_category = tissue_to_organ_mapping[display_name]
+        tissue_category = tissue_to_organ_mapping.get(display_name, 'unknown')
         tissue_categories.append(tissue_category)
     
     return tissue_display_names, tissue_categories
 
 
-def get_tissue_to_organ_mapping():
-    """Create tissue to organ mapping with complete heart anatomy"""
+def get_mouse_tissue_to_organ_mapping():
+    """Create mouse-specific tissue to organ mapping"""
+    return {
+        'left cerebral cortex': 'brain',
+        'layer of hippocampus': 'brain',
+        'gastrocnemius': 'muscle',
+        'adrenal gland': 'adrenal gland',
+        'heart': 'heart',
+        'F121.9': 'cell line',
+        'F121-9': 'cell line',
+        'myotube': 'muscle',
+        'C2C12': 'muscle cell line',
+        'forelimb': 'limb'
+    }
+
+
+def get_human_tissue_to_organ_mapping():
+    """Create human-specific tissue to organ mapping with complete heart anatomy"""
     return {
         'GM12878': 'blood',
         'HL-60': 'blood',
@@ -1552,9 +1720,9 @@ def get_tissue_to_organ_mapping():
         'H9': 'embryo',
         'neural crest cell': 'embryo',
         'endothelial cell of umbilical vein': 'epithelial',
-        'HepG2': 'liver', 
+        'HepG2': 'liver',
         'mammary epithelial cell': 'epithelial',
-        'MCF 10A': 'breast', 
+        'MCF 10A': 'breast',
         'MCF.7': 'breast',
         'MCF-7': 'breast',
         'Panc1': 'pancreas',
@@ -1595,6 +1763,22 @@ def get_tissue_to_organ_mapping():
     }
 
 
+def get_tissue_to_organ_mapping(species='human'):
+    """
+    Get tissue to organ mapping for the specified species.
+
+    Args:
+        species: 'human' or 'mouse'
+
+    Returns:
+        Dictionary mapping tissue names to organ categories
+    """
+    if species.lower() == 'mouse':
+        return get_mouse_tissue_to_organ_mapping()
+    else:
+        return get_human_tissue_to_organ_mapping()
+
+
 def get_organ_colors():
     """Get organ color mapping based on R code"""
     organ_colors = {
@@ -1617,7 +1801,11 @@ def get_organ_colors():
         'breast': '#EE82EE',       # violet
         'pancreas': '#90EE90',     # lightgreen
         'prostate': '#FFFF00',     # yellow
-        'vessels': '#D2691E'       # chocolate
+        'vessels': '#D2691E',      # chocolate
+        'cell line': '#A9A9A9',    # gray
+        'muscle cell line': '#A9A9A9',  # gray
+        'limb': '#DEB887',         # light orange
+        'unknown': '#CCCCCC'       # light gray for unmapped tissues
     }
     return organ_colors
 
@@ -1637,32 +1825,32 @@ def extract_tissue_name_from_column(column_name):
     return tissue_name
 
 
-def create_organ_annotation_bar(tissue_cols, height=20):
+def create_organ_annotation_bar(tissue_cols, height=20, species='human'):
     """Create organ color annotation bar for clustergram"""
-    tissue_to_organ = get_tissue_to_organ_mapping()
+    tissue_to_organ = get_tissue_to_organ_mapping(species)
     organ_colors = get_organ_colors()
-    
+
     organ_list = []
     color_list = []
-    
+
     for col in tissue_cols:
         tissue_name = extract_tissue_name_from_column(col)
         organ = tissue_to_organ.get(tissue_name, 'unknown')
         color = organ_colors.get(organ, '#CCCCCC')
-        
+
         organ_list.append(organ)
         color_list.append(color)
 
     return organ_list, color_list
 
 
-def get_tissue_tpm_for_isoforms(db_path: str, gene_name: str, tissue_name: str) -> dict:
+def get_tissue_tpm_for_isoforms(db_path: str, gene_name: str, tissue_name: str, species="Human") -> dict:
     """
     Get TPM values averaged by tissue for all isoforms of a gene.
     Returns a dictionary mapping isoform_id -> tissue_average_tpm
     """
     try:
-        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm', species=species)
 
         if tpm_data.empty:
             return {}
@@ -1694,24 +1882,25 @@ def get_tissue_tpm_for_isoforms(db_path: str, gene_name: str, tissue_name: str) 
         return {}
 
 
-def get_organ_tpm_for_isoforms(db_path: str, gene_name: str, organ_name: str) -> dict:
+def get_organ_tpm_for_isoforms(db_path: str, gene_name: str, organ_name: str, species="Human") -> dict:
     """
     Get TPM values averaged by organ for all isoforms of a gene.
     Returns a dictionary mapping isoform_id -> organ_average_tpm
     """
     try:
-        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm', species=species)
 
         if tpm_data.empty:
             return {}
 
-        tissue_to_organ = get_tissue_to_organ_mapping()
+        tissue_to_organ = get_tissue_to_organ_mapping(species)
 
         organ_cols = []
         for col in tpm_data.columns:
             if col.startswith('ENCFF'):
                 tissue_name = extract_tissue_name_from_column(col)
-                if tissue_to_organ.get(tissue_name, '').lower() == organ_name.lower():
+                mapped_organ = tissue_to_organ.get(tissue_name, '')
+                if mapped_organ.lower() == organ_name.lower():
                     organ_cols.append(col)
 
         if not organ_cols:
@@ -1737,10 +1926,10 @@ def get_organ_tpm_for_isoforms(db_path: str, gene_name: str, organ_name: str) ->
         return {}
 
 
-def get_unique_tissues_for_gene(db_path: str, gene_name: str) -> list:
+def get_unique_tissues_for_gene(db_path: str, gene_name: str, species: str = 'Human') -> list:
     """Get list of unique tissues for a given gene"""
     try:
-        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm', species=species)
 
         if tpm_data.empty:
             return []
@@ -1763,15 +1952,15 @@ def get_unique_tissues_for_gene(db_path: str, gene_name: str) -> list:
         return []
 
 
-def get_unique_organs_for_gene(db_path: str, gene_name: str) -> list:
+def get_unique_organs_for_gene(db_path: str, gene_name: str, species: str = 'Human') -> list:
     """Get list of unique organs for a given gene"""
     try:
-        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm')
+        tpm_data = load_expression_data(db_path, gene_name, data_type='tpm', species=species)
 
         if tpm_data.empty:
             return []
 
-        tissue_to_organ = get_tissue_to_organ_mapping()
+        tissue_to_organ = get_tissue_to_organ_mapping(species)
 
         organs = set()
         exclude_cols = {'id', 'transcript', 'trans_id', 'gene', 'gene_name', 'isoform_average_tpm',

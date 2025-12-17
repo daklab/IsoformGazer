@@ -442,10 +442,10 @@ class MemoryTracker:
 memory_tracker = MemoryTracker()
 
 @timing_decorator(threshold_seconds=0.5)
-def cached_transcript_structure_processing(db_path: str, gene_name: str, filtered_ids: list):
+def cached_transcript_structure_processing(db_path: str, gene_name: str, filtered_ids: list, species: str = "Human"):
     """Cached version of transcript structure processing"""
     isoform_utils = importlib.import_module('isoform_utils')
-    return isoform_utils.process_transcript_structure(db_path, gene_name, filtered_ids)
+    return isoform_utils.process_transcript_structure(db_path, gene_name, filtered_ids, species)
 
 
 @timing_decorator(threshold_seconds=0.5)

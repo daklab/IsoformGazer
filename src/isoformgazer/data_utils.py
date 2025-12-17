@@ -13,6 +13,11 @@ from datetime import datetime
 from pathlib import Path
 
 
+def get_table_prefix(species="Human"):
+    """Convert species name to table prefix for database queries"""
+    return "mouse_" if species == "Mouse" else ""
+
+
 def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, filters=None, gene_filter=None):
     """
     Query isoform data with pagination, sorting, and filtering.
@@ -89,19 +94,20 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
     return df.to_dict('records'), total_count
 
 
-def get_all_gene_options(db_path):
+def get_all_gene_options(db_path, species="Human"):
     """Loads all gene options from database at startup for fast client-side filtering"""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA cache_size = 10000")
 
-    query = """
+    table_prefix = get_table_prefix(species)
+    query = f"""
     SELECT DISTINCT
         CASE
             WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
             ELSE gene_name
         END as gene_name,
         gene_id
-    FROM isoforms
+    FROM {table_prefix}isoforms
     WHERE gene_id IS NOT NULL
     ORDER BY gene_name
     """
@@ -123,20 +129,21 @@ def get_all_gene_options(db_path):
     return options
 
 
-def get_gene_options(db_path, search_term=None, limit=10):
+def get_gene_options(db_path, search_term=None, limit=10, species="Human"):
     """Get gene options for dropdown from database"""
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA cache_size = 10000")
 
+    table_prefix = get_table_prefix(species)
     if search_term:
-        query = """
+        query = f"""
         SELECT DISTINCT
             CASE
                 WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
                 ELSE gene_name
             END as gene_name,
             gene_id
-        FROM isoforms
+        FROM {table_prefix}isoforms
         WHERE gene_id IS NOT NULL
         AND (
             (gene_name IS NOT NULL AND gene_name LIKE ?)
@@ -148,14 +155,14 @@ def get_gene_options(db_path, search_term=None, limit=10):
         """
         df = pd.read_sql_query(query, conn, params=[f"%{search_term}%", f"%{search_term}%", f"%{search_term}%", limit])
     else:
-        query = """
+        query = f"""
         SELECT DISTINCT
             CASE
                 WHEN gene_name IS NULL OR gene_name = '' THEN 'Unknown'
                 ELSE gene_name
             END as gene_name,
             gene_id
-        FROM isoforms
+        FROM {table_prefix}isoforms
         WHERE gene_id IS NOT NULL
         ORDER BY gene_name
         LIMIT ?
@@ -662,7 +669,7 @@ def clear_default_gene_cache(base_dir):
         print(f"Warning: Could not clear cache: {e}")
 
 
-def generate_default_gene_cache(db_path, gene_name='A1BG-AS1'):
+def generate_default_gene_cache(db_path, gene_name='A1BG-AS1', species="Human"):
     """
     Generate cache for default gene data and plots.
     This function queries all necessary data for the default gene to populate
@@ -673,11 +680,12 @@ def generate_default_gene_cache(db_path, gene_name='A1BG-AS1'):
     cache_data = {}
 
     try:
+        table_prefix = get_table_prefix(species)
         isoform_data, _ = query_master_table(
             db_path,
-            table_name='isoforms',
+            table_name=f'{table_prefix}isoforms',
             page=0,
-            page_size=10, 
+            page_size=10,
             sort_by=None,
             filters=None,
             gene_filter=gene_name
@@ -686,7 +694,7 @@ def generate_default_gene_cache(db_path, gene_name='A1BG-AS1'):
 
         junction_data, _ = query_master_table(
             db_path,
-            table_name='junctions',
+            table_name=f'{table_prefix}junctions',
             page=0,
             page_size=100,
             sort_by=None,

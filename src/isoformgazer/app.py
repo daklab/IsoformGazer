@@ -26,20 +26,22 @@ from data_utils import (
     get_master_table_columns, parse_filter_query, query_master_table, get_gene_options,
     get_all_gene_options, create_custom_spinner, validate_filter_input,
     is_cache_valid, load_default_gene_cache, save_default_gene_cache,
-    generate_default_gene_cache, get_default_gene_cache_path, extract_gtf_attr_val
+    generate_default_gene_cache, get_default_gene_cache_path, extract_gtf_attr_val,
+    get_table_prefix
 )
 from junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
-    load_atse_data, process_gene_atse_data, create_empty_atse_message, 
-    create_junction_exon_visualization, create_empty_clustergram_message, 
-    filter_junctions_by_transcripts, filter_transcripts_by_junctions
+    load_atse_data, process_gene_atse_data, create_empty_atse_message,
+    create_junction_exon_visualization, create_empty_clustergram_message,
+    filter_junctions_by_transcripts, filter_transcripts_by_junctions,
+    get_gene_id_from_atse
 )
 from isoform_utils import (
     load_expression_data, process_transcript_structure, create_transcript_structure_plot,
     create_isoform_expression_clustergram, create_empty_isoform_message,
     calculate_unified_plot_height, calculate_clustergram_min_height, calculate_single_isoform_hash,
     calculate_dynamic_structure_plot_height, parse_gtf_and_calculate_hashes, generate_annotated_gtf,
-    get_unique_tissues_for_gene, get_unique_organs_for_gene
+    get_unique_tissues_for_gene, get_unique_organs_for_gene, get_gene_id_for_gene_name
 )
 
 RANDOM_SEED = 18
@@ -1027,6 +1029,20 @@ app.layout = html.Div(className='app-layout', children=[
                 ]),
                 dcc.Tab(label='Query', className='tab-1', value='tab-2', children=[
                     html.Div(className='control-tab', children=[
+                        html.H2('Species', className='alignment-settings-section'),
+                        html.Div(className='app-controls-block', children=[
+                            dcc.Dropdown(
+                                id='species-dropdown',
+                                options=[
+                                    {'label': 'Human (GRCh38)', 'value': 'Human'},
+                                    {'label': 'Mouse (GRCm38)', 'value': 'Mouse'}
+                                ],
+                                value='Human',
+                                searchable=False,
+                                clearable=False
+                            ),
+                            html.Div(className='app-controls-desc', children='Select species to visualize data from')
+                        ]),
                         html.H2('Search by Gene', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             dcc.Dropdown(
@@ -2548,46 +2564,47 @@ def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_co
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('right_data_table', 'filter_query'),
      dash.dependencies.Input('left-table-validation-store', 'data'),
-     dash.dependencies.Input('right-table-validation-store', 'data')]
+     dash.dependencies.Input('right-table-validation-store', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, left_validation, right_validation):
+def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, left_validation, right_validation, species):
     """Store ALL filtered transcript/junction IDs from FULL datasets with transcript-based junction filtering"""
     # Check if either filter is invalid: if so, don't update filtered stores since user will need to fix errors before query proceeds
     if ((isoform_filter_query and left_validation and not left_validation.get('valid', True)) or
         (junction_filter_query and right_validation and not right_validation.get('valid', True))):
         raise PreventUpdate
-    
+
     try:
         has_isoform_filters = bool(isoform_filter_query and isoform_filter_query.strip())
         has_junction_filters = bool(junction_filter_query and junction_filter_query.strip())
-        
+
         filtered_transcript_ids = []
         if isoform_full_data:
             filtered_transcript_ids = [row.get('id', '') for row in isoform_full_data if row.get('id')]
-        
+
         filtered_junction_ids = []
         if junction_full_data:
             filtered_junction_ids = [row.get('junction_id', '') for row in junction_full_data if row.get('junction_id')]
-        
-        # Handle bidirectional filtering between transcripts and junctions when filters are applied        
+
+        # Handle bidirectional filtering between transcripts and junctions when filters are applied
         if has_isoform_filters or has_junction_filters:
             transcript_based_junction_ids = []
             junction_based_transcript_ids = []
-            
+
             # Isoform filtering → Junction filtering
             if selected_gene and has_isoform_filters and filtered_transcript_ids:
                 try:
                     transcript_based_junction_ids = filter_junctions_by_transcripts(
-                        db_path, selected_gene, filtered_transcript_ids
+                        db_path, selected_gene, filtered_transcript_ids, species
                     )
                 except Exception as e:
                     print(f"Error in transcript-based junction filtering: {e}")
-            
+
             # Junction filtering → Isoform filtering
             if has_junction_filters and filtered_junction_ids:
                 try:
                     junction_based_transcript_ids = filter_transcripts_by_junctions(
-                        db_path, filtered_junction_ids
+                        db_path, filtered_junction_ids, species
                     )
                 except Exception as e:
                     print(f"Error in junction-based transcript filtering: {e}")
@@ -2662,22 +2679,57 @@ def update_button_states(left_filter, right_filter):
 
 
 ##############################################################################################
-# CALLBACK FOR QUERYING BY GENE IN CONTROL PANEL ('Query' tab): if no search is performed, we 
-# show the first five gene names, but otherwise filter by the top ten matches to the current 
-# search string. 
+# Update all-gene-options-store when species changes
+##############################################################################################
+@app.callback(
+    dash.dependencies.Output('all-gene-options-store', 'data'),
+    [dash.dependencies.Input('species-dropdown', 'value')]
+)
+def update_all_gene_options_on_species_change(species):
+    """Reload all gene options when species changes"""
+    return get_all_gene_options(db_path, species)
+
+
+##############################################################################################
+# Reset gene selection when species changes
+##############################################################################################
+@app.callback(
+    dash.dependencies.Output('gene-search-dropdown', 'value', allow_duplicate=True),
+    [dash.dependencies.Input('species-dropdown', 'value')],
+    [dash.dependencies.State('gene-search-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def reset_gene_on_species_change(species, current_gene):
+    """Reset gene selection to default when species changes"""
+    if species == "Mouse":
+        return "COL1A1"
+    else:
+        return "A1BG-AS1"
+
+
+##############################################################################################
+# CALLBACK FOR QUERYING BY GENE IN CONTROL PANEL ('Query' tab): if no search is performed, we
+# show the first five gene names, but otherwise filter by the top ten matches to the current
+# search string.
 ##############################################################################################
 @app.callback(
     [dash.dependencies.Output('gene-search-dropdown', 'options'),
      dash.dependencies.Output('gene-search-dropdown', 'value')],
-    [dash.dependencies.Input('gene-search-dropdown', 'search_value')],
+    [dash.dependencies.Input('gene-search-dropdown', 'search_value'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     [dash.dependencies.State('gene-search-dropdown', 'value'),
      dash.dependencies.State('all-gene-options-store', 'data')]
 )
-def update_gene_options(search_value, current_value, all_gene_options):
+def update_gene_options(search_value, species, current_value, all_gene_options):
     """Update gene options using client-side filtering from cached data"""
     # If no cached options available, fall back to database query (shouldn't happen)
     if not all_gene_options:
-        all_gene_options = get_all_gene_options(db_path)
+        all_gene_options = get_all_gene_options(db_path, species)
+
+    # Special case: if switching to Mouse species and current gene is A1BG-AS1, switch to A4GALT
+    # (A1BG-AS1 has no mouse data)
+    if species == 'Mouse' and current_value == 'A1BG-AS1':
+        current_value = 'A4GALT'
 
     if not search_value:
         options = all_gene_options[:10]
@@ -2695,10 +2747,10 @@ def update_gene_options(search_value, current_value, all_gene_options):
         return options, 'A1BG-AS1'
 
     option_values = [opt['value'] for opt in options]
-    
+
     if current_value in option_values:
         return options, current_value
-    
+
     else:
         # Find the current value in all options and add it to the list
         current_option = next((opt for opt in all_gene_options if opt['value'] == current_value), None)
@@ -2706,6 +2758,30 @@ def update_gene_options(search_value, current_value, all_gene_options):
             options = [current_option] + [opt for opt in options if opt['value'] != current_value]
 
         return options, current_value
+
+
+@app.callback(
+    [dash.dependencies.Output('hide-junctions-toggle', 'value'),
+     dash.dependencies.Output('color-junctions-by-psi-toggle', 'value'),
+     dash.dependencies.Output('color-by-abundance-toggle', 'value'),
+     dash.dependencies.Output('abundance-color-type-radio', 'value'),
+     dash.dependencies.Output('tissue-abundance-dropdown', 'value', allow_duplicate=True),
+     dash.dependencies.Output('organ-abundance-dropdown', 'value', allow_duplicate=True),
+     dash.dependencies.Output('gridlines-toggle', 'value')],
+    [dash.dependencies.Input('gene-search-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def reset_custom_settings_on_gene_change(selected_gene):
+    """Reset all custom settings to defaults when a new gene is selected (except colorscales)"""
+    return (
+        False,      # hide-junctions-toggle: show junctions by default
+        False,      # color-junctions-by-psi-toggle: off by default
+        False,      # color-by-abundance-toggle: off by default
+        'average',  # abundance-color-type-radio: average by default
+        None,       # tissue-abundance-dropdown: no tissue selected
+        None,       # organ-abundance-dropdown: no organ selected
+        False       # gridlines-toggle: off by default
+    )
 
 
 ######################################################################
@@ -2744,9 +2820,10 @@ def format_value(val, field_name=None):
 @app.callback(
     [dash.dependencies.Output('gene-level-summary', 'children'),
      dash.dependencies.Output('orf-level-summary', 'children')],
-    [dash.dependencies.Input('gene-search-dropdown', 'value')]
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_summary_blocks(selected_gene):
+def update_summary_blocks(selected_gene, species):
     """Update Gene-Level and ORF-Level summary blocks based on selected gene"""
     if not selected_gene:
         return (
@@ -2756,23 +2833,44 @@ def update_summary_blocks(selected_gene):
 
     try:
         # Get the first row data for the selected gene, since these columns have the same values for all rows
+        table_prefix = get_table_prefix(species)
         conn = sqlite3.connect(db_path)
-        query = """
-        SELECT
-            gene_protein_category,
-            gene_potential,
-            gene_perplexity,
-            ptc_potential,
-            ptc_perplexity,
-            gene_average_tpm,
-            gene_expressed_samples,
-            orf_potential,
-            orf_perplexity,
-            orf_expressed_samples
-        FROM isoforms
-        WHERE gene_name = ?
-        LIMIT 1
-        """
+
+        # Mouse data doesn't have gene_protein_category column
+        if species == "Mouse":
+            query = f"""
+            SELECT
+                gene_potential,
+                gene_perplexity,
+                ptc_potential,
+                ptc_perplexity,
+                gene_average_tpm,
+                gene_expressed_samples,
+                ORF_potential,
+                ORF_perplexity,
+                ORF_expressed_samples
+            FROM {table_prefix}isoforms
+            WHERE gene_name = ?
+            LIMIT 1
+            """
+        else:
+            query = f"""
+            SELECT
+                gene_protein_category,
+                gene_potential,
+                gene_perplexity,
+                ptc_potential,
+                ptc_perplexity,
+                gene_average_tpm,
+                gene_expressed_samples,
+                orf_potential,
+                orf_perplexity,
+                orf_expressed_samples
+            FROM {table_prefix}isoforms
+            WHERE gene_name = ?
+            LIMIT 1
+            """
+
         cursor = conn.cursor()
         cursor.execute(query, (selected_gene,))
         row = cursor.fetchone()
@@ -2784,15 +2882,28 @@ def update_summary_blocks(selected_gene):
                 [html.P("No data found for selected gene", className='summary-placeholder')]
             )
 
-        (gene_protein_category, gene_potential, gene_perplexity, ptc_potential, 
-         ptc_perplexity, gene_average_tpm, gene_expressed_samples, 
-         orf_potential, orf_perplexity, orf_expressed_samples) = row
+        if species == "Mouse":
+            (gene_potential, gene_perplexity, ptc_potential,
+             ptc_perplexity, gene_average_tpm, gene_expressed_samples,
+             orf_potential, orf_perplexity, orf_expressed_samples) = row
+            gene_protein_category = None
+        else:
+            (gene_protein_category, gene_potential, gene_perplexity, ptc_potential,
+             ptc_perplexity, gene_average_tpm, gene_expressed_samples,
+             orf_potential, orf_perplexity, orf_expressed_samples) = row
 
-        gene_summary = [
-            html.Div(className='summary-item', children=[
-                html.Span('Gene Protein Category:', className='summary-label'),
-                format_protein_category(gene_protein_category)
-            ]),
+        gene_summary = []
+
+        # Only show protein category for human data
+        if species != "Mouse" and gene_protein_category is not None:
+            gene_summary.append(
+                html.Div(className='summary-item', children=[
+                    html.Span('Gene Protein Category:', className='summary-label'),
+                    format_protein_category(gene_protein_category)
+                ])
+            )
+
+        gene_summary.extend([
             html.Div(className='summary-item', children=[
                 html.Span('Number of detected transcripts:', className='summary-label'),
                 html.Span(format_value(gene_potential, 'gene_potential'), className='summary-value')
@@ -2817,7 +2928,7 @@ def update_summary_blocks(selected_gene):
                 html.Span('Gene Expressed Samples:', className='summary-label'),
                 html.Span(format_value(gene_expressed_samples), className='summary-value')
             ])
-        ]
+        ])
 
         orf_summary = [
             html.Div(className='summary-item', children=[
@@ -2856,9 +2967,10 @@ def update_summary_blocks(selected_gene):
      dash.dependencies.Input('left_data_table', 'sort_by'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('left-table-validation-store', 'data')]
+     dash.dependencies.Input('left-table-validation-store', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data):
+def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
@@ -2867,30 +2979,39 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
         raise PreventUpdate
 
     # Check what triggered this callback: if only pagination changes, do not need to update full data store.
-    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily 
+    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
     triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
     pagination_only = triggered_prop in ['left_data_table.page_current', 'left_data_table.page_size']
 
-    filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
+    table_prefix = get_table_prefix(species)
+    table_name = f'{table_prefix}isoforms'
+    filters = parse_filter_query(db_path, filter_query, table_name=table_name)
+
+    # Convert gene_name to gene_id for filtering to get all transcripts (including those with gene_name='NAN')
+    gene_filter = selected_gene
+    if selected_gene:
+        gene_id = get_gene_id_for_gene_name(db_path, selected_gene, species)
+        if gene_id:
+            gene_filter = gene_id
 
     _, total_count = query_master_table(
         db_path,
-        table_name='isoforms',
+        table_name=table_name,
         page=0,
         page_size=0,
         sort_by=None,
         filters=filters,
-        gene_filter=selected_gene
+        gene_filter=gene_filter
     )
 
     full_data, _ = query_master_table(
         db_path,
-        table_name='isoforms',
+        table_name=table_name,
         page=0,
         page_size=total_count,
         sort_by=sort_by,
         filters=filters,
-        gene_filter=selected_gene
+        gene_filter=gene_filter
     )
 
     page_current = page_current or 0
@@ -2916,9 +3037,10 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
      dash.dependencies.Input('right_data_table', 'sort_by'),
      dash.dependencies.Input('right_data_table', 'filter_query'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('right-table-validation-store', 'data')]
+     dash.dependencies.Input('right-table-validation-store', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data):
+def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
@@ -2927,30 +3049,39 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
         raise PreventUpdate
 
     # Check what triggered this callback: if only pagination changes, do not need to update full data store.
-    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily 
+    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
     triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
     pagination_only = triggered_prop in ['right_data_table.page_current', 'right_data_table.page_size']
 
-    filters = parse_filter_query(db_path, filter_query, table_name='junctions')
+    table_prefix = get_table_prefix(species)
+    table_name = f'{table_prefix}junctions'
+    filters = parse_filter_query(db_path, filter_query, table_name=table_name)
+
+    # Convert gene_name to gene_id for filtering to get all junctions (including those for transcripts with gene_name='NAN')
+    gene_filter = selected_gene
+    if selected_gene:
+        gene_id = get_gene_id_from_atse(db_path, selected_gene, species)
+        if gene_id:
+            gene_filter = gene_id
 
     _, total_count = query_master_table(
         db_path,
-        table_name="junctions",
+        table_name=table_name,
         page=0,
         page_size=0,
         sort_by=None,
         filters=filters,
-        gene_filter=selected_gene
+        gene_filter=gene_filter
     )
 
     full_data, _ = query_master_table(
         db_path,
-        table_name="junctions",
+        table_name=table_name,
         page=0,
         page_size=total_count,
         sort_by=sort_by,
         filters=filters,
-        gene_filter=selected_gene
+        gene_filter=gene_filter
     )
 
     page_current = page_current or 0
@@ -2980,11 +3111,12 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('clustergram-height-slider', 'value')],
+     dash.dependencies.Input('clustergram-height-slider', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     [dash.dependencies.State('bar-height-slider', 'value')],
     prevent_initial_call=True
 )
-def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filtered_junction_ids, clustergram_height, current_height):
+def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filtered_junction_ids, clustergram_height, species, current_height):
     """Calculate unified height for both plots and update slider and panels when gene changes"""
     if not selected_gene:
         panel_height = max(clustergram_height + 50, 760)
@@ -2995,8 +3127,8 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
 
     try:
         filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
-        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-        gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+        gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
 
         # Calculate unified height for structure plots based on both transcript and junction data: use max height from either
         calculated_height = calculate_unified_plot_height(transcript_data, gene_data)
@@ -3057,10 +3189,11 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
     [dash.dependencies.Input('clustergram-height-slider', 'value'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('filtered-junction-store', 'data')],
+     dash.dependencies.Input('filtered-junction-store', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     prevent_initial_call=True
 )
-def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids, filtered_junction_ids):
+def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids, filtered_junction_ids, species):
     """Adjust panel heights based on clustergram height slider and gene data"""
 
     if not selected_gene:
@@ -3070,8 +3203,8 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
     else:
         try:
             filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
-            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
 
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
@@ -3127,18 +3260,19 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('gridlines-toggle', 'value')]
+     dash.dependencies.Input('gridlines-toggle', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_junction_clustergram(selected_gene, colorscale,
                                 filtered_junction_ids, show_celltype_labels, clustergram_height,
-                                distance_metric, linkage_method, filtered_isoform_ids, show_gridlines):
+                                distance_metric, linkage_method, filtered_isoform_ids, show_gridlines, species):
     """Update junction visualization based on gene selection and filtering"""
 
     if selected_gene:
         try:
             filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
-            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
 
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
@@ -3152,7 +3286,7 @@ def update_junction_clustergram(selected_gene, colorscale,
             heatmap_height = clustergram_height
     else:
         heatmap_height = clustergram_height
-    
+
     if not selected_gene:
         try:
             fig = create_summary_clustergram(db_path,
@@ -3161,7 +3295,8 @@ def update_junction_clustergram(selected_gene, colorscale,
                                              show_celltype_labels=show_celltype_labels,
                                              distance_metric=distance_metric,
                                              linkage_method=linkage_method,
-                                             show_gridlines=show_gridlines)
+                                             show_gridlines=show_gridlines,
+                                             species=species)
             fig.update_layout(
                 autosize=True,
                 width=None,
@@ -3204,7 +3339,8 @@ def update_junction_clustergram(selected_gene, colorscale,
             show_celltype_labels=show_celltype_labels,
             distance_metric=distance_metric,
             linkage_method=linkage_method,
-            show_gridlines=show_gridlines
+            show_gridlines=show_gridlines,
+            species=species
         )
         fig.update_layout(
             autosize=True,
@@ -3254,12 +3390,13 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('gridlines-toggle', 'value')]
+     dash.dependencies.Input('gridlines-toggle', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
                           show_labels, collapse_mode, filtered_transcript_ids,
                           clustergram_height, distance_metric, linkage_method, filtered_junction_ids,
-                          show_gridlines):
+                          show_gridlines, species):
     """Update isoform clustergram with unified height based on both isoform and junction data"""
     # Return empty figure if no gene selected
     if not selected_gene:
@@ -3286,15 +3423,18 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
 
     ratio_data = load_expression_data(db_path=db_path,
                                       gene_name=selected_gene,
-                                      data_type='ratio')
+                                      data_type='ratio',
+                                      species=species)
 
     tpm_data = load_expression_data(db_path=db_path,
                                     gene_name=selected_gene,
-                                    data_type='tpm')
+                                    data_type='tpm',
+                                    species=species)
 
     log_tpm_data = load_expression_data(db_path=db_path,
                                         gene_name=selected_gene,
-                                        data_type='log_tpm')
+                                        data_type='log_tpm',
+                                        species=species)
 
     if data_type_selection == 'ratio':
         data_type = "Ratio"
@@ -3306,8 +3446,8 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
     if selected_gene:
         try:
             filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
-            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
 
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
@@ -3354,7 +3494,8 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
             linkage_method=linkage_method,
             show_gridlines=show_gridlines,
             gridline_color=gridline_color,
-            db_path=db_path
+            db_path=db_path,
+            species=species
         )
         fig.update_layout(
             autosize=True,
@@ -3412,13 +3553,14 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
      dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
      dash.dependencies.Input('organ-abundance-dropdown', 'value'),
      dash.dependencies.Input('individual-junction-colors', 'data'),
-     dash.dependencies.Input('individual-transcript-colors', 'data')]
+     dash.dependencies.Input('individual-transcript-colors', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids,
                               plot_height, exon_color, junction_color, isoform_filter_query,
                               validation_data, color_junctions_by_psi, color_by_abundance,
                               structure_colorscale, abundance_type, tissue_name, organ_name,
-                              individual_junction_colors, individual_transcript_colors):
+                              individual_junction_colors, individual_transcript_colors, species):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -3441,7 +3583,8 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
         gene_data = process_gene_atse_data(
             selected_gene,
             db_path,
-            filtered_junction_ids=filtered_junction_ids
+            filtered_junction_ids=filtered_junction_ids,
+            species=species
         )
 
         show_labels = False
@@ -3461,7 +3604,8 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             tissue_name=tissue_name,
             organ_name=organ_name,
             individual_junction_colors=individual_junction_colors,
-            individual_transcript_colors=individual_transcript_colors
+            individual_transcript_colors=individual_transcript_colors,
+            species=species
         )
 
         # Create config with gene name in filename
@@ -3541,13 +3685,14 @@ def toggle_top_panel_plots(hide_junctions):
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('left-table-validation-store', 'data'),
      dash.dependencies.Input('color-by-abundance-toggle', 'value'),
-     dash.dependencies.Input('colorscale-dropdown', 'value'),
+     dash.dependencies.Input('structure-plot-colorscale-dropdown', 'value'),
      dash.dependencies.Input('abundance-color-type-radio', 'value'),
      dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
      dash.dependencies.Input('organ-abundance-dropdown', 'value'),
-     dash.dependencies.Input('individual-transcript-colors', 'data')]
+     dash.dependencies.Input('individual-transcript-colors', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name, individual_transcript_colors):
+def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name, individual_transcript_colors, species):
     """Update transcript structure plot in top panel when toggle is activated"""
     # Only update if junctions are hidden (transcript plot should be shown)
     if not hide_junctions:
@@ -3569,7 +3714,7 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
 
     try:
         filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
-        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
 
         # transcript plot function handles its own height calculation when using default: only overriden when user manually sets a specific height
         if plot_height == 600:
@@ -3589,7 +3734,8 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
             abundance_type=abundance_type,
             tissue_name=tissue_name,
             organ_name=organ_name,
-            individual_transcript_colors=individual_transcript_colors
+            individual_transcript_colors=individual_transcript_colors,
+            species=species
         )
 
         # Create config with gene name in filename
@@ -3668,10 +3814,11 @@ def adjust_top_panel_height(plot_height):
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('hide-junctions-toggle', 'value')],
+     dash.dependencies.Input('hide-junctions-toggle', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     [dash.dependencies.State('bar-height-slider', 'value')]
 )
-def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_junction_ids, hide_junctions, current_height):
+def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_junction_ids, hide_junctions, species, current_height):
     """Calculate unified height for top panel using the same system as old structure plots"""
     if not selected_gene:
         container_style = {'height': '400px', 'min-height': '400px', 'margin-bottom': '15px'}
@@ -3690,13 +3837,13 @@ def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_jun
 
     try:
         filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
-        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
 
         if hide_junctions:
             num_transcripts = len(transcript_data['id'].unique()) if not transcript_data.empty else 0
             calculated_height = calculate_dynamic_structure_plot_height(num_transcripts)
         else:
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
             calculated_height = calculate_unified_plot_height(transcript_data, gene_data)
 
         if abs(calculated_height - current_height) < 100:
@@ -4071,10 +4218,11 @@ def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
      dash.dependencies.State('structure-plot-colorscale-dropdown', 'value'),
      dash.dependencies.State('abundance-color-type-radio', 'value'),
      dash.dependencies.State('tissue-abundance-dropdown', 'value'),
-     dash.dependencies.State('organ-abundance-dropdown', 'value')],
+     dash.dependencies.State('organ-abundance-dropdown', 'value'),
+     dash.dependencies.State('species-dropdown', 'value')],
     prevent_initial_call=True
 )
-def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, structure_colorscale, abundance_type, tissue_name, organ_name):
+def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, structure_colorscale, abundance_type, tissue_name, organ_name, species):
     """Export selected plot with custom dimensions as SVG"""
     if not n_clicks or not width or not height or not selected_gene:
         raise PreventUpdate
@@ -4090,7 +4238,7 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
 
         if plot_selection == 'structure':
             filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
-            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
 
             fig = create_transcript_structure_plot(
                 db_path,
@@ -4104,7 +4252,8 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
                 abundance_type=abundance_type,
                 tissue_name=tissue_name,
                 organ_name=organ_name,
-                individual_transcript_colors={}  # Export uses default colors
+                individual_transcript_colors={},  # Export uses default colors
+                species=species
             )
             filename = f"{selected_gene}_structure_plot.svg"
 
@@ -4189,10 +4338,11 @@ def toggle_structure_plot_colorscale(color_junctions_by_psi, color_by_abundance)
      dash.dependencies.Output('organ-abundance-dropdown', 'value'),
      dash.dependencies.Output('organ-dropdown-container', 'style')],
     [dash.dependencies.Input('abundance-color-type-radio', 'value'),
-     dash.dependencies.Input('gene-search-dropdown', 'value')],
+     dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     prevent_initial_call=False
 )
-def update_abundance_dropdowns(color_type, selected_gene):
+def update_abundance_dropdowns(color_type, selected_gene, species):
     """Update tissue and organ dropdown options and visibility based on selected coloring type"""
     tissue_options = []
     tissue_value = None
@@ -4203,7 +4353,7 @@ def update_abundance_dropdowns(color_type, selected_gene):
 
     if color_type == 'tissue' and selected_gene:
         try:
-            tissues = get_unique_tissues_for_gene(db_path, selected_gene)
+            tissues = get_unique_tissues_for_gene(db_path, selected_gene, species)
             if tissues:
                 tissue_options = [{'label': f' {tissue}', 'value': tissue} for tissue in tissues]
                 tissue_value = tissue_options[0]['value'] if tissue_options else None
@@ -4214,7 +4364,7 @@ def update_abundance_dropdowns(color_type, selected_gene):
 
     elif color_type == 'organ' and selected_gene:
         try:
-            organs = get_unique_organs_for_gene(db_path, selected_gene)
+            organs = get_unique_organs_for_gene(db_path, selected_gene, species)
             if organs:
                 organ_options = [{'label': f' {organ}', 'value': organ} for organ in organs]
                 organ_value = organ_options[0]['value'] if organ_options else None
