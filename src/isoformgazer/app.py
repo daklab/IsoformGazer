@@ -1,18 +1,17 @@
 import os
 import math
-import json
 import traceback
 from tqdm import tqdm
 import sqlite3
+import scipy
 import numpy as np
 import pandas as pd
 import base64
 import matplotlib
 matplotlib.use('Agg')
 from pathlib import Path
-from flask import Response
 import dash
-from dash import html, dcc, dash_table, callback_context
+from dash import html, dcc, dash_table, callback_context, no_update
 import dash_bootstrap_components as dbc
 import dash_daq as daq
 import plotly.graph_objs as go
@@ -23,38 +22,30 @@ from colorama import Fore, Style, init
 import traceback
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
-
-# Import database configuration
-from src.isoformgazer.db_config import initialize_database, get_db_config
 from src.isoformgazer.data_utils import (
     get_master_table_columns, parse_filter_query, query_master_table, get_gene_options,
     get_all_gene_options, create_custom_spinner, validate_filter_input,
     is_cache_valid, load_default_gene_cache, save_default_gene_cache,
-    generate_default_gene_cache, get_default_gene_cache_path, extract_gtf_attr_val
+    generate_default_gene_cache, get_default_gene_cache_path, extract_gtf_attr_val,
+    get_table_prefix
 )
 from src.isoformgazer.junction_utils import (
     create_summary_clustergram, create_gene_clustergram,
-    load_atse_data, process_gene_atse_data, create_empty_atse_message, 
-    create_junction_exon_visualization, create_empty_clustergram_message, 
-    filter_junctions_by_transcripts, filter_transcripts_by_junctions
+    load_atse_data, process_gene_atse_data, create_empty_atse_message,
+    create_junction_exon_visualization, create_empty_clustergram_message,
+    filter_junctions_by_transcripts, filter_transcripts_by_junctions,
+    get_gene_id_from_atse
 )
 from src.isoformgazer.isoform_utils import (
     load_expression_data, process_transcript_structure, create_transcript_structure_plot,
     create_isoform_expression_clustergram, create_empty_isoform_message,
     calculate_unified_plot_height, calculate_clustergram_min_height, calculate_single_isoform_hash,
     calculate_dynamic_structure_plot_height, parse_gtf_and_calculate_hashes, generate_annotated_gtf,
-    get_unique_tissues_for_gene, get_unique_organs_for_gene
+    get_unique_tissues_for_gene, get_unique_organs_for_gene, get_gene_id_for_gene_name
 )
 
 RANDOM_SEED = 18
 np.random.seed(RANDOM_SEED)
-
-###################################################################
-# POSTGRESQL DATABASE SETUP
-###################################################################
-# All environment variables are loaded from .env file
-from dotenv import load_dotenv
-load_dotenv()
 
 ###################################################################
 # SQLLITE DATABASE SETUP
@@ -240,7 +231,7 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
                     chunk['trans_id'] = chunk['qName']
                     chunk['gene_id'] = 'unknown'
             chunk['transcript_length'] = chunk['tend'] - chunk['tstart']
-            
+
             if 'index' in chunk.columns:
                 chunk.drop(columns=['index'], inplace=True)
 
@@ -728,40 +719,21 @@ def create_loading_progress_figure():
     return fig
 
 ###################################################################
-# APPLICATION AND DB CONNECTION SETUP
+# APPLICATION SETUP
 ###################################################################
+db_path = setup_local_database()
 base_dir = os.path.dirname(os.path.abspath(__file__))
-db_type = os.getenv('DB_TYPE', 'sqlite').lower()
-
-if db_type == 'postgresql':
-    print(f"{Fore.CYAN}Initializing PostgreSQL database connection...{Style.RESET_ALL}")
-    initialize_database(use_postgresql=True)
-    db_config = get_db_config()
-    print(f"{Fore.GREEN}Connected to IsoformGazer database{Style.RESET_ALL}")
-    # db_path is None for PostgreSQL mode (we use db_config instead)
-    db_path = None
-
-else:
-    print(f"{Fore.CYAN}Using SQLite database for local development...{Style.RESET_ALL}")
-    db_path = setup_local_database()
-    initialize_database(db_path=db_path, use_postgresql=False)
-    db_config = get_db_config()
-    print(f"{Fore.GREEN}✓ Connected to SQLite database at {db_path}{Style.RESET_ALL}")
-
-app = dash.Dash(__name__, suppress_callback_exceptions=True)
-server = app.server
 
 # Cache for default gene A1BG-AS1
 DEFAULT_GENE = 'A1BG-AS1'
 default_gene_cache = None
 cache_loaded_from_disk = False
 
-# Note: Cache validation logic still uses db_path for SQLite compatibility
-if db_type == 'sqlite' and is_cache_valid(base_dir, db_path):
+if is_cache_valid(base_dir, db_path):
     default_gene_cache = load_default_gene_cache(base_dir)
     cache_loaded_from_disk = True
 
-if not default_gene_cache and db_path:
+if not default_gene_cache:
     default_gene_cache = generate_default_gene_cache(db_path, DEFAULT_GENE)
     if default_gene_cache:
         save_default_gene_cache(base_dir, db_path, default_gene_cache)
@@ -790,33 +762,6 @@ app.index_string = '''
     </body>
 </html>
 '''
-
-###################################################################
-# CACHE STATISTICS API ENDPOINT
-###################################################################
-@app.server.route('/api/cache-stats')
-def api_cache_stats():
-    """
-    API endpoint to check cache statistics.
-    Access: GET /api/cache-stats
-    Returns cache hit/miss stats and Redis connection status
-    """
-    try:
-        from src.isoformgazer.gene_cache_redis import get_cache_stats
-        stats = get_cache_stats()
-
-    except Exception as e:
-        stats = {
-            'error': str(e),
-            'backend': 'unknown',
-            'gene_list_cached': False,
-            'default_gene_cached': False
-        }
-
-    return Response(
-        json.dumps(stats, indent=2),
-        mimetype='application/json'
-    )
 
 ###################################################################
 # APPLICATION TITLE (ISOFORM GAZER)
@@ -1084,6 +1029,20 @@ app.layout = html.Div(className='app-layout', children=[
                 ]),
                 dcc.Tab(label='Query', className='tab-1', value='tab-2', children=[
                     html.Div(className='control-tab', children=[
+                        html.H2('Species', className='alignment-settings-section'),
+                        html.Div(className='app-controls-block', children=[
+                            dcc.Dropdown(
+                                id='species-dropdown',
+                                options=[
+                                    {'label': 'Human (GRCh38)', 'value': 'Human'},
+                                    {'label': 'Mouse (GRCm38)', 'value': 'Mouse'}
+                                ],
+                                value='Human',
+                                searchable=False,
+                                clearable=False
+                            ),
+                            html.Div(className='app-controls-desc', children='Select species to visualize data from')
+                        ]),
                         html.H2('Search by Gene', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             dcc.Dropdown(
@@ -1099,7 +1058,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 placeholder="Type to search for a gene...",
                                 value='A1BG-AS1',
                                 searchable=True,
-                                clearable=True
+                                clearable=False
                             ),
                             html.Div(className='app-controls-desc', children='Select a gene identifier to query or type to search')
                         ]),
@@ -1303,7 +1262,8 @@ app.layout = html.Div(className='app-layout', children=[
                                         {'label': 'Inferno', 'value': 'Inferno'},
                                         {'label': 'Magma', 'value': 'Magma'}
                                     ],
-                                    value='Viridis'
+                                    value='Viridis',
+                                    clearable=False
                                 ),
                                 html.Div(className='app-controls-desc', children='Choose the color theme for the structure plot')
                             ])
@@ -1406,7 +1366,8 @@ app.layout = html.Div(className='app-layout', children=[
                                     {'label': 'Inferno', 'value': 'Inferno'},
                                     {'label': 'Magma', 'value': 'Magma'}
                                 ],
-                                value='Viridis'
+                                value='Viridis',
+                                clearable=False
                             ),
                             html.Div(className='app-controls-desc', children='Choose the color theme of the heatmaps')
                         ]),
@@ -1435,7 +1396,8 @@ app.layout = html.Div(className='app-layout', children=[
                                     {'label': 'Correlation', 'value': 'correlation'},
                                     {'label': 'Manhattan (L1)', 'value': 'cityblock'}
                                 ],
-                                value='euclidean'
+                                value='euclidean',
+                                clearable=False
                             ),
                             html.Div(className='app-controls-desc', children='Distance metric used for clustering in both clustergrams')
                         ]),
@@ -1453,7 +1415,8 @@ app.layout = html.Div(className='app-layout', children=[
                                     {'label': 'Nearest Point', 'value': 'single'},
                                     {'label': 'Furthest Point', 'value': 'complete'}
                                 ],
-                                value='ward'
+                                value='ward',
+                                clearable=False
                             ),
                             html.Div(className='app-controls-desc', children='Hierarchical clustering algorithm used for both clustergrams')
                         ]),
@@ -1666,7 +1629,8 @@ app.layout = html.Div(className='app-layout', children=[
                                                     )
                                                 ]
                                             )
-                                        ]
+                                        ],
+                                        style={'display': 'none'}
                                     ),
                                     # Store for currently selected junction
                                     dcc.Store(id='selected-junction-info', data={})
@@ -1695,7 +1659,62 @@ app.layout = html.Div(className='app-layout', children=[
                                         ),
                                         html.Div(id="top-barplot-loading-message", className="custom-loading-message")
                                     ])
-                                ])
+                                ]),
+                                # Color picker popups (outside both plot containers so they're always visible)
+                                html.Div(
+                                    id='transcript-color-picker-popup',
+                                    children=[
+                                        html.Div(
+                                            className='junction-header-container',
+                                            children=[
+                                                html.Div(
+                                                    className='junction-color-title',
+                                                    children='Transcript Color'
+                                                ),
+                                                html.Div(
+                                                    className='junction-color-bar'
+                                                ),
+                                                html.Div(
+                                                    id='transcript-id-display',
+                                                    children=''
+                                                )
+                                            ]
+                                        ),
+                                        html.Div(
+                                            style={
+                                                'marginBottom': '12px'
+                                            }
+                                        ),
+                                        html.Div(
+                                            className='junction-color-picker-container',
+                                            children=[
+                                                daq.ColorPicker(
+                                                    id='transcript-individual-color-picker',
+                                                    value={'hex': '#2E86C1'},
+                                                    size=160,
+                                                    theme=None,
+                                                    className='color-picker'
+                                                )
+                                            ]
+                                        ),
+                                        html.Div(
+                                            className='junction-color-buttons-container',
+                                            children=[
+                                                dbc.Button(
+                                                    "Apply",
+                                                    id='transcript-color-apply-btn',
+                                                    className='clear-filters-btn junction-color-btn'
+                                                ),
+                                                dbc.Button(
+                                                    "Reset",
+                                                    id='transcript-color-reset-btn',
+                                                    className='clear-filters-btn junction-color-btn'
+                                                )
+                                            ]
+                                        )
+                                    ],
+                                    style={'display': 'none'}
+                                )
                             ])
                         ])
                     ])
@@ -1830,7 +1849,14 @@ app.layout = html.Div(className='app-layout', children=[
                         className='filter-error-popup hidden',
                         children=[]
                     ),
-                    left_data_table
+                    dcc.Loading(
+                        id="loading-left-table",
+                        type="default",
+                        color='#EDAE49',
+                        delay_show=0,
+                        delay_hide=100,
+                        children=[left_data_table]
+                    )
                 ]),
                 html.Div(className='table-container', id='table2-container', children=[
                     html.Div(className='table-header-controls', children=[
@@ -1861,7 +1887,14 @@ app.layout = html.Div(className='app-layout', children=[
                         className='filter-error-popup hidden',
                         children=[]
                     ),
-                    right_data_table
+                    dcc.Loading(
+                        id="loading-right-table",
+                        type="default",
+                        color='#EDAE49',
+                        delay_show=0,
+                        delay_hide=100,
+                        children=[right_data_table]
+                    )
                 ])
             ])
         ])
@@ -1890,6 +1923,9 @@ app.layout.children.extend([
     dcc.Store(id='exon-color-store', data='#2E86C1'),
     dcc.Store(id='junction-color-store', data='#85929E'),
     dcc.Store(id='individual-junction-colors', data={}),
+    dcc.Store(id='individual-transcript-colors', data={}),
+    dcc.Store(id='viewport-dimensions', data={'width': 1920, 'height': 1080}),
+    dcc.Store(id='selected-transcript-info', data={}),
     dcc.Store(id='loading-progress-store', data=0),
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
@@ -1939,13 +1975,15 @@ def update_junction_color_store(color_value):
 @app.callback(
     [dash.dependencies.Output('selected-junction-info', 'data'),
      dash.dependencies.Output('junction-individual-color-picker', 'value'),
-     dash.dependencies.Output('junction-color-picker-popup', 'style')],
+     dash.dependencies.Output('junction-color-picker-popup', 'style'),
+     dash.dependencies.Output('transcript-color-picker-popup', 'style', allow_duplicate=True)],
     [dash.dependencies.Input('atse-map', 'clickData')],
     [dash.dependencies.State('individual-junction-colors', 'data'),
-     dash.dependencies.State('junction-color-store', 'data')],
+     dash.dependencies.State('junction-color-store', 'data'),
+     dash.dependencies.State('viewport-dimensions', 'data')],
     prevent_initial_call=True
 )
-def handle_junction_click(clickData, individual_colors, global_junction_color):
+def handle_junction_click(clickData, individual_colors, global_junction_color, viewport_dims):
     """
     Handle junction clicks to open the color picker popup.
     Extract junction ID from the hover text.
@@ -1992,8 +2030,27 @@ def handle_junction_click(clickData, individual_colors, global_junction_color):
 
     # need bounding box of clicked junction point to position the popup
     bbox = point.get('bbox', {})
-    x_pos = bbox.get('x1', 0) + 10 
-    y_pos = bbox.get('y0', 0)
+    popup_width = 280
+    popup_height = 300
+    offset_x = 15
+    offset_y = 5
+
+    x_pos = bbox.get('x1', 0) + offset_x
+    y_pos = bbox.get('y0', 0) + offset_y
+
+    # Add viewport boundary checking to prevent popup from going off-screen
+    viewport_width = viewport_dims.get('width', 1920) if viewport_dims else 1920
+    viewport_height = viewport_dims.get('height', 1080) if viewport_dims else 1080
+
+    if x_pos + popup_width > viewport_width:
+        # Position to the left of the junction instead
+        x_pos = max(10, bbox.get('x0', 0) - popup_width - offset_x)
+
+    if y_pos + popup_height > viewport_height:
+        y_pos = max(10, bbox.get('y1', 0) - popup_height - offset_y)
+
+    x_pos = max(10, x_pos)
+    y_pos = max(10, y_pos)
 
     popup_style = {
         'position': 'fixed',
@@ -2009,7 +2066,10 @@ def handle_junction_click(clickData, individual_colors, global_junction_color):
         'top': f"{y_pos}px"
     }
 
-    return selected_junction, current_color, popup_style
+    # Hide transcript popup
+    transcript_popup_style = {'display': 'none'}
+
+    return selected_junction, current_color, popup_style, transcript_popup_style
 
 
 @app.callback(
@@ -2087,6 +2147,211 @@ def reset_click_data(apply_clicks, reset_clicks):
     Reset clickData after color operations to allow re-clicking the same junction.
     """
     return None
+
+
+#######################################################################
+# INDIVIDUAL TRANSCRIPT COLOR PICKER CALLBACKS
+#######################################################################
+@app.callback(
+    [dash.dependencies.Output('selected-transcript-info', 'data'),
+     dash.dependencies.Output('transcript-individual-color-picker', 'value'),
+     dash.dependencies.Output('transcript-color-picker-popup', 'style'),
+     dash.dependencies.Output('junction-color-picker-popup', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('atse-map', 'clickData'),
+     dash.dependencies.Input('top-barplot', 'clickData')],
+    [dash.dependencies.State('individual-transcript-colors', 'data'),
+     dash.dependencies.State('exon-color-store', 'data'),
+     dash.dependencies.State('viewport-dimensions', 'data')],
+    prevent_initial_call=True
+)
+def handle_transcript_click(atse_clickData, transcript_clickData, individual_colors, global_exon_color, viewport_dims):
+    """
+    Handle transcript/exon clicks to open the color picker popup.
+    Extract transcript/isoform ID from the hover text.
+    Works for both junction+transcript plot (atse-map) and transcript-only plot (top-barplot).
+    """
+    # Determine which plot was clicked
+    if not callback_context.triggered:
+        raise PreventUpdate
+
+    triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
+
+    if triggered_id == 'atse-map':
+        clickData = atse_clickData
+    elif triggered_id == 'top-barplot':
+        clickData = transcript_clickData
+    else:
+        raise PreventUpdate
+
+    if not clickData or 'points' not in clickData or len(clickData['points']) == 0:
+        raise PreventUpdate
+
+    point = clickData['points'][0]
+
+    # Extract isoform ID from the hover text
+    text = point.get('text', '')
+    if 'Isoform ID:' not in text:
+        raise PreventUpdate
+
+    isoform_id = None
+    transcript_id = None
+    parts = text.split('<br>')
+    for part in parts:
+        if 'Isoform ID:' in part:
+            isoform_id = part.replace('Isoform ID:', '').strip()
+        elif 'Transcript ID:' in part or 'Transcript:' in part:
+            transcript_id = part.replace('Transcript ID:', '').replace('Transcript:', '').strip()
+
+    if not isoform_id:
+        raise PreventUpdate
+
+    # Get coordinates from point
+    x = point.get('x')
+    y = point.get('y')
+
+    if x is None or y is None:
+        raise PreventUpdate
+
+    if individual_colors:
+        current_color_hex = individual_colors.get(isoform_id, global_exon_color)
+    else:
+        current_color_hex = global_exon_color
+
+    current_color = {'hex': current_color_hex}
+
+    selected_transcript = {
+        'id': isoform_id,
+        'transcript_id': transcript_id or isoform_id,
+        'x': x,
+        'y': y
+    }
+
+    # need bounding box of clicked point to position the popup
+    bbox = point.get('bbox', {})
+
+    # Position popup to the right of the top of the clicked element
+    popup_width = 280
+    popup_height = 300
+    offset_x = 15
+    offset_y = 5
+
+    # Get desired position (to the right of the top)
+    x_pos = bbox.get('x1', 0) + offset_x
+    y_pos = bbox.get('y0', 0) + offset_y
+
+    # Add viewport boundary checking
+    viewport_width = viewport_dims.get('width', 1920) if viewport_dims else 1920
+    viewport_height = viewport_dims.get('height', 1080) if viewport_dims else 1080
+
+    # Ensure popup doesn't overflow right edge
+    if x_pos + popup_width > viewport_width:
+        x_pos = max(10, bbox.get('x0', 0) - popup_width - offset_x)
+
+    # Ensure popup doesn't overflow bottom edge
+    if y_pos + popup_height > viewport_height:
+        y_pos = max(10, bbox.get('y1', 0) - popup_height - offset_y)
+
+    # Ensure minimum distance from edges
+    x_pos = max(10, x_pos)
+    y_pos = max(10, y_pos)
+
+    transcript_popup_style = {
+        'position': 'fixed',
+        'zIndex': 10000,
+        'backgroundColor': '#ffffff',
+        'border': '2px solid #EDAE49',
+        'borderRadius': '10px',
+        'padding': '16px',
+        'boxShadow': '0 8px 24px rgba(90, 42, 145, 0.4)',
+        'display': 'block',
+        'width': '280px',
+        'left': f"{x_pos}px",
+        'top': f"{y_pos}px"
+    }
+
+    # Hide junction popup
+    junction_popup_style = {'display': 'none'}
+
+    return selected_transcript, current_color, transcript_popup_style, junction_popup_style
+
+
+@app.callback(
+    dash.dependencies.Output('transcript-id-display', 'children'),
+    [dash.dependencies.Input('selected-transcript-info', 'data')],
+    prevent_initial_call=True
+)
+def update_transcript_id_display(selected_transcript):
+    """
+    Update the transcript ID display in the popup.
+    """
+    if not selected_transcript or 'transcript_id' not in selected_transcript:
+        return ''
+
+    transcript_id = selected_transcript['transcript_id']
+    return transcript_id
+
+
+@app.callback(
+    [dash.dependencies.Output('individual-transcript-colors', 'data'),
+     dash.dependencies.Output('transcript-color-picker-popup', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('transcript-color-apply-btn', 'n_clicks'),
+     dash.dependencies.Input('transcript-color-reset-btn', 'n_clicks'),
+     dash.dependencies.Input('exon-color-store', 'data')],
+    [dash.dependencies.State('selected-transcript-info', 'data'),
+     dash.dependencies.State('transcript-individual-color-picker', 'value'),
+     dash.dependencies.State('individual-transcript-colors', 'data')],
+    prevent_initial_call=True
+)
+def manage_individual_transcript_colors(apply_clicks, reset_clicks, global_color,
+                                       selected_transcript, color_value, individual_colors):
+    """
+    Manage individual transcript colors (apply, reset, or clear all on global color change).
+    """
+    individual_colors = individual_colors or {}
+    triggered_id = callback_context.triggered_id if callback_context.triggered else None
+
+    hidden_style = {
+        'position': 'fixed',
+        'zIndex': 10000,
+        'backgroundColor': '#ffffff',
+        'border': '2px solid #EDAE49',
+        'borderRadius': '10px',
+        'padding': '16px',
+        'boxShadow': '0 8px 24px rgba(90, 42, 145, 0.4)',
+        'display': 'none',
+        'width': '280px'
+    }
+
+    if triggered_id == 'transcript-color-apply-btn':
+        if selected_transcript and 'id' in selected_transcript:
+            if color_value and 'hex' in color_value:
+                individual_colors[selected_transcript['id']] = color_value['hex']
+            return individual_colors, hidden_style
+
+    elif triggered_id == 'transcript-color-reset-btn':
+        if selected_transcript and 'id' in selected_transcript:
+            individual_colors.pop(selected_transcript['id'], None)
+            return individual_colors, hidden_style
+
+    elif triggered_id == 'exon-color-store':
+        return {}, hidden_style
+
+    raise PreventUpdate
+
+
+@app.callback(
+    [dash.dependencies.Output('atse-map', 'clickData', allow_duplicate=True),
+     dash.dependencies.Output('top-barplot', 'clickData', allow_duplicate=True)],
+    [dash.dependencies.Input('transcript-color-apply-btn', 'n_clicks'),
+     dash.dependencies.Input('transcript-color-reset-btn', 'n_clicks')],
+    prevent_initial_call=True
+)
+def reset_transcript_click_data(apply_clicks, reset_clicks):
+    """
+    Reset clickData after transcript color operations to allow re-clicking the same transcript.
+    Resets both junction+transcript plot and transcript-only plot.
+    """
+    return None, None
 
 
 #######################################################################
@@ -2299,46 +2564,47 @@ def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_co
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('right_data_table', 'filter_query'),
      dash.dependencies.Input('left-table-validation-store', 'data'),
-     dash.dependencies.Input('right-table-validation-store', 'data')]
+     dash.dependencies.Input('right-table-validation-store', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, left_validation, right_validation):
+def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, left_validation, right_validation, species):
     """Store ALL filtered transcript/junction IDs from FULL datasets with transcript-based junction filtering"""
     # Check if either filter is invalid: if so, don't update filtered stores since user will need to fix errors before query proceeds
     if ((isoform_filter_query and left_validation and not left_validation.get('valid', True)) or
         (junction_filter_query and right_validation and not right_validation.get('valid', True))):
         raise PreventUpdate
-    
+
     try:
         has_isoform_filters = bool(isoform_filter_query and isoform_filter_query.strip())
         has_junction_filters = bool(junction_filter_query and junction_filter_query.strip())
-        
+
         filtered_transcript_ids = []
         if isoform_full_data:
             filtered_transcript_ids = [row.get('id', '') for row in isoform_full_data if row.get('id')]
-        
+
         filtered_junction_ids = []
         if junction_full_data:
             filtered_junction_ids = [row.get('junction_id', '') for row in junction_full_data if row.get('junction_id')]
-        
-        # Handle bidirectional filtering between transcripts and junctions when filters are applied        
+
+        # Handle bidirectional filtering between transcripts and junctions when filters are applied
         if has_isoform_filters or has_junction_filters:
             transcript_based_junction_ids = []
             junction_based_transcript_ids = []
-            
+
             # Isoform filtering → Junction filtering
             if selected_gene and has_isoform_filters and filtered_transcript_ids:
                 try:
                     transcript_based_junction_ids = filter_junctions_by_transcripts(
-                        db_path, selected_gene, filtered_transcript_ids
+                        db_path, selected_gene, filtered_transcript_ids, species
                     )
                 except Exception as e:
                     print(f"Error in transcript-based junction filtering: {e}")
-            
+
             # Junction filtering → Isoform filtering
             if has_junction_filters and filtered_junction_ids:
                 try:
                     junction_based_transcript_ids = filter_transcripts_by_junctions(
-                        db_path, filtered_junction_ids
+                        db_path, filtered_junction_ids, species
                     )
                 except Exception as e:
                     print(f"Error in junction-based transcript filtering: {e}")
@@ -2413,22 +2679,57 @@ def update_button_states(left_filter, right_filter):
 
 
 ##############################################################################################
-# CALLBACK FOR QUERYING BY GENE IN CONTROL PANEL ('Query' tab): if no search is performed, we 
-# show the first five gene names, but otherwise filter by the top ten matches to the current 
-# search string. 
+# Update all-gene-options-store when species changes
+##############################################################################################
+@app.callback(
+    dash.dependencies.Output('all-gene-options-store', 'data'),
+    [dash.dependencies.Input('species-dropdown', 'value')]
+)
+def update_all_gene_options_on_species_change(species):
+    """Reload all gene options when species changes"""
+    return get_all_gene_options(db_path, species)
+
+
+##############################################################################################
+# Reset gene selection when species changes
+##############################################################################################
+@app.callback(
+    dash.dependencies.Output('gene-search-dropdown', 'value', allow_duplicate=True),
+    [dash.dependencies.Input('species-dropdown', 'value')],
+    [dash.dependencies.State('gene-search-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def reset_gene_on_species_change(species, current_gene):
+    """Reset gene selection to default when species changes"""
+    if species == "Mouse":
+        return "COL1A1"
+    else:
+        return "A1BG-AS1"
+
+
+##############################################################################################
+# CALLBACK FOR QUERYING BY GENE IN CONTROL PANEL ('Query' tab): if no search is performed, we
+# show the first five gene names, but otherwise filter by the top ten matches to the current
+# search string.
 ##############################################################################################
 @app.callback(
     [dash.dependencies.Output('gene-search-dropdown', 'options'),
      dash.dependencies.Output('gene-search-dropdown', 'value')],
-    [dash.dependencies.Input('gene-search-dropdown', 'search_value')],
+    [dash.dependencies.Input('gene-search-dropdown', 'search_value'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     [dash.dependencies.State('gene-search-dropdown', 'value'),
      dash.dependencies.State('all-gene-options-store', 'data')]
 )
-def update_gene_options(search_value, current_value, all_gene_options):
+def update_gene_options(search_value, species, current_value, all_gene_options):
     """Update gene options using client-side filtering from cached data"""
     # If no cached options available, fall back to database query (shouldn't happen)
     if not all_gene_options:
-        all_gene_options = get_all_gene_options(db_path)
+        all_gene_options = get_all_gene_options(db_path, species)
+
+    # Special case: if switching to Mouse species and current gene is A1BG-AS1, switch to A4GALT
+    # (A1BG-AS1 has no mouse data)
+    if species == 'Mouse' and current_value == 'A1BG-AS1':
+        current_value = 'A4GALT'
 
     if not search_value:
         options = all_gene_options[:10]
@@ -2446,10 +2747,10 @@ def update_gene_options(search_value, current_value, all_gene_options):
         return options, 'A1BG-AS1'
 
     option_values = [opt['value'] for opt in options]
-    
+
     if current_value in option_values:
         return options, current_value
-    
+
     else:
         # Find the current value in all options and add it to the list
         current_option = next((opt for opt in all_gene_options if opt['value'] == current_value), None)
@@ -2457,6 +2758,30 @@ def update_gene_options(search_value, current_value, all_gene_options):
             options = [current_option] + [opt for opt in options if opt['value'] != current_value]
 
         return options, current_value
+
+
+@app.callback(
+    [dash.dependencies.Output('hide-junctions-toggle', 'value'),
+     dash.dependencies.Output('color-junctions-by-psi-toggle', 'value'),
+     dash.dependencies.Output('color-by-abundance-toggle', 'value'),
+     dash.dependencies.Output('abundance-color-type-radio', 'value'),
+     dash.dependencies.Output('tissue-abundance-dropdown', 'value', allow_duplicate=True),
+     dash.dependencies.Output('organ-abundance-dropdown', 'value', allow_duplicate=True),
+     dash.dependencies.Output('gridlines-toggle', 'value')],
+    [dash.dependencies.Input('gene-search-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def reset_custom_settings_on_gene_change(selected_gene):
+    """Reset all custom settings to defaults when a new gene is selected (except colorscales)"""
+    return (
+        False,      # hide-junctions-toggle: show junctions by default
+        False,      # color-junctions-by-psi-toggle: off by default
+        False,      # color-by-abundance-toggle: off by default
+        'average',  # abundance-color-type-radio: average by default
+        None,       # tissue-abundance-dropdown: no tissue selected
+        None,       # organ-abundance-dropdown: no organ selected
+        False       # gridlines-toggle: off by default
+    )
 
 
 ######################################################################
@@ -2495,9 +2820,10 @@ def format_value(val, field_name=None):
 @app.callback(
     [dash.dependencies.Output('gene-level-summary', 'children'),
      dash.dependencies.Output('orf-level-summary', 'children')],
-    [dash.dependencies.Input('gene-search-dropdown', 'value')]
+    [dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_summary_blocks(selected_gene):
+def update_summary_blocks(selected_gene, species):
     """Update Gene-Level and ORF-Level summary blocks based on selected gene"""
     if not selected_gene:
         return (
@@ -2507,47 +2833,77 @@ def update_summary_blocks(selected_gene):
 
     try:
         # Get the first row data for the selected gene, since these columns have the same values for all rows
-        query = """
-        SELECT
-            gene_protein_category,
-            gene_potential,
-            gene_perplexity,
-            ptc_potential,
-            ptc_perplexity,
-            gene_average_tpm,
-            gene_expressed_samples,
-            orf_potential,
-            orf_perplexity,
-            orf_expressed_samples
-        FROM isoforms
-        WHERE gene_name = :gene_name
-        LIMIT 1
-        """
-        result_df = db_config.execute_query(query, params={'gene_name': selected_gene})
+        table_prefix = get_table_prefix(species)
+        conn = sqlite3.connect(db_path)
 
-        if result_df.empty:
+        # Mouse data doesn't have gene_protein_category column
+        if species == "Mouse":
+            query = f"""
+            SELECT
+                gene_potential,
+                gene_perplexity,
+                ptc_potential,
+                ptc_perplexity,
+                gene_average_tpm,
+                gene_expressed_samples,
+                ORF_potential,
+                ORF_perplexity,
+                ORF_expressed_samples
+            FROM {table_prefix}isoforms
+            WHERE gene_name = ?
+            LIMIT 1
+            """
+        else:
+            query = f"""
+            SELECT
+                gene_protein_category,
+                gene_potential,
+                gene_perplexity,
+                ptc_potential,
+                ptc_perplexity,
+                gene_average_tpm,
+                gene_expressed_samples,
+                orf_potential,
+                orf_perplexity,
+                orf_expressed_samples
+            FROM {table_prefix}isoforms
+            WHERE gene_name = ?
+            LIMIT 1
+            """
+
+        cursor = conn.cursor()
+        cursor.execute(query, (selected_gene,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
             return (
                 [html.P("No data found for selected gene", className='summary-placeholder')],
                 [html.P("No data found for selected gene", className='summary-placeholder')]
             )
 
-        row = result_df.iloc[0]
-        gene_protein_category = row['gene_protein_category']
-        gene_potential = row['gene_potential']
-        gene_perplexity = row['gene_perplexity']
-        ptc_potential = row['ptc_potential']
-        ptc_perplexity = row['ptc_perplexity']
-        gene_average_tpm = row['gene_average_tpm']
-        gene_expressed_samples = row['gene_expressed_samples']
-        orf_potential = row['orf_potential']
-        orf_perplexity = row['orf_perplexity']
-        orf_expressed_samples = row['orf_expressed_samples']
+        if species == "Mouse":
+            (gene_potential, gene_perplexity, ptc_potential,
+             ptc_perplexity, gene_average_tpm, gene_expressed_samples,
+             orf_potential, orf_perplexity, orf_expressed_samples) = row
+            gene_protein_category = None
+        else:
+            (gene_protein_category, gene_potential, gene_perplexity, ptc_potential,
+             ptc_perplexity, gene_average_tpm, gene_expressed_samples,
+             orf_potential, orf_perplexity, orf_expressed_samples) = row
 
-        gene_summary = [
-            html.Div(className='summary-item', children=[
-                html.Span('Gene Protein Category:', className='summary-label'),
-                format_protein_category(gene_protein_category)
-            ]),
+        gene_summary = []
+
+        # Only show protein category for human data
+        if species != "Mouse" and gene_protein_category is not None:
+            gene_summary.append(
+                html.Div(className='summary-item', children=[
+                    html.Span('Gene Protein Category:', className='summary-label'),
+                    format_protein_category(gene_protein_category)
+                ])
+            )
+
+        gene_summary.extend([
             html.Div(className='summary-item', children=[
                 html.Span('Number of detected transcripts:', className='summary-label'),
                 html.Span(format_value(gene_potential, 'gene_potential'), className='summary-value')
@@ -2572,7 +2928,7 @@ def update_summary_blocks(selected_gene):
                 html.Span('Gene Expressed Samples:', className='summary-label'),
                 html.Span(format_value(gene_expressed_samples), className='summary-value')
             ])
-        ]
+        ])
 
         orf_summary = [
             html.Div(className='summary-item', children=[
@@ -2611,48 +2967,64 @@ def update_summary_blocks(selected_gene):
      dash.dependencies.Input('left_data_table', 'sort_by'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('left-table-validation-store', 'data')]
+     dash.dependencies.Input('left-table-validation-store', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data):
+def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
-    
-    # Check if current filter is valid before processing
+
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
-    
-    filters = parse_filter_query(db_path, filter_query, table_name='isoforms')
-    
+
+    # Check what triggered this callback: if only pagination changes, do not need to update full data store.
+    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
+    triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
+    pagination_only = triggered_prop in ['left_data_table.page_current', 'left_data_table.page_size']
+
+    table_prefix = get_table_prefix(species)
+    table_name = f'{table_prefix}isoforms'
+    filters = parse_filter_query(db_path, filter_query, table_name=table_name)
+
+    # Convert gene_name to gene_id for filtering to get all transcripts (including those with gene_name='NAN')
+    gene_filter = selected_gene
+    if selected_gene:
+        gene_id = get_gene_id_for_gene_name(db_path, selected_gene, species)
+        if gene_id:
+            gene_filter = gene_id
+
     _, total_count = query_master_table(
         db_path,
-        table_name='isoforms',
+        table_name=table_name,
         page=0,
         page_size=0,
         sort_by=None,
         filters=filters,
-        gene_filter=selected_gene
+        gene_filter=gene_filter
     )
-    
+
     full_data, _ = query_master_table(
         db_path,
-        table_name='isoforms',
+        table_name=table_name,
         page=0,
         page_size=total_count,
         sort_by=sort_by,
         filters=filters,
-        gene_filter=selected_gene
+        gene_filter=gene_filter
     )
-    
-    # Handle None values for pagination params
+
     page_current = page_current or 0
     page_size = page_size or 10
-    
+
     start_idx = page_current * page_size
     end_idx = (page_current + 1) * page_size
     paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
-    
+
+    if pagination_only:
+        return paginated_data, page_count, no_update
+
     return paginated_data, page_count, full_data
 
 
@@ -2665,48 +3037,64 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
      dash.dependencies.Input('right_data_table', 'sort_by'),
      dash.dependencies.Input('right_data_table', 'filter_query'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('right-table-validation-store', 'data')]
+     dash.dependencies.Input('right-table-validation-store', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data):
+def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
-    
-    # Check if current filter is valid before processing
+
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
-    
-    filters = parse_filter_query(db_path, filter_query, table_name='junctions')
-    
+
+    # Check what triggered this callback: if only pagination changes, do not need to update full data store.
+    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
+    triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
+    pagination_only = triggered_prop in ['right_data_table.page_current', 'right_data_table.page_size']
+
+    table_prefix = get_table_prefix(species)
+    table_name = f'{table_prefix}junctions'
+    filters = parse_filter_query(db_path, filter_query, table_name=table_name)
+
+    # Convert gene_name to gene_id for filtering to get all junctions (including those for transcripts with gene_name='NAN')
+    gene_filter = selected_gene
+    if selected_gene:
+        gene_id = get_gene_id_from_atse(db_path, selected_gene, species)
+        if gene_id:
+            gene_filter = gene_id
+
     _, total_count = query_master_table(
         db_path,
-        table_name="junctions",
+        table_name=table_name,
         page=0,
         page_size=0,
         sort_by=None,
         filters=filters,
-        gene_filter=selected_gene
+        gene_filter=gene_filter
     )
-    
+
     full_data, _ = query_master_table(
         db_path,
-        table_name="junctions",
+        table_name=table_name,
         page=0,
         page_size=total_count,
         sort_by=sort_by,
         filters=filters,
-        gene_filter=selected_gene
+        gene_filter=gene_filter
     )
-    
-    # Handle None values for pagination params
+
     page_current = page_current or 0
     page_size = page_size or 10
-    
+
     start_idx = page_current * page_size
     end_idx = (page_current + 1) * page_size
     paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
-    
+
+    if pagination_only:
+        return paginated_data, page_count, no_update
+
     return paginated_data, page_count, full_data
 
 
@@ -2723,11 +3111,12 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('clustergram-height-slider', 'value')],
+     dash.dependencies.Input('clustergram-height-slider', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     [dash.dependencies.State('bar-height-slider', 'value')],
     prevent_initial_call=True
 )
-def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filtered_junction_ids, clustergram_height, current_height):
+def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filtered_junction_ids, clustergram_height, species, current_height):
     """Calculate unified height for both plots and update slider and panels when gene changes"""
     if not selected_gene:
         panel_height = max(clustergram_height + 50, 760)
@@ -2738,8 +3127,8 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
 
     try:
         filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
-        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-        gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+        gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
 
         # Calculate unified height for structure plots based on both transcript and junction data: use max height from either
         calculated_height = calculate_unified_plot_height(transcript_data, gene_data)
@@ -2800,10 +3189,11 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
     [dash.dependencies.Input('clustergram-height-slider', 'value'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('filtered-junction-store', 'data')],
+     dash.dependencies.Input('filtered-junction-store', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     prevent_initial_call=True
 )
-def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids, filtered_junction_ids):
+def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids, filtered_junction_ids, species):
     """Adjust panel heights based on clustergram height slider and gene data"""
 
     if not selected_gene:
@@ -2813,8 +3203,8 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
     else:
         try:
             filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
-            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
 
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
@@ -2870,18 +3260,19 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
-     dash.dependencies.Input('gridlines-toggle', 'value')]
+     dash.dependencies.Input('gridlines-toggle', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_junction_clustergram(selected_gene, colorscale,
                                 filtered_junction_ids, show_celltype_labels, clustergram_height,
-                                distance_metric, linkage_method, filtered_isoform_ids, show_gridlines):
+                                distance_metric, linkage_method, filtered_isoform_ids, show_gridlines, species):
     """Update junction visualization based on gene selection and filtering"""
 
     if selected_gene:
         try:
             filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
-            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
 
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
@@ -2895,7 +3286,7 @@ def update_junction_clustergram(selected_gene, colorscale,
             heatmap_height = clustergram_height
     else:
         heatmap_height = clustergram_height
-    
+
     if not selected_gene:
         try:
             fig = create_summary_clustergram(db_path,
@@ -2904,7 +3295,8 @@ def update_junction_clustergram(selected_gene, colorscale,
                                              show_celltype_labels=show_celltype_labels,
                                              distance_metric=distance_metric,
                                              linkage_method=linkage_method,
-                                             show_gridlines=show_gridlines)
+                                             show_gridlines=show_gridlines,
+                                             species=species)
             fig.update_layout(
                 autosize=True,
                 width=None,
@@ -2947,7 +3339,8 @@ def update_junction_clustergram(selected_gene, colorscale,
             show_celltype_labels=show_celltype_labels,
             distance_metric=distance_metric,
             linkage_method=linkage_method,
-            show_gridlines=show_gridlines
+            show_gridlines=show_gridlines,
+            species=species
         )
         fig.update_layout(
             autosize=True,
@@ -2997,12 +3390,13 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('distance-metric-dropdown', 'value'),
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('gridlines-toggle', 'value')]
+     dash.dependencies.Input('gridlines-toggle', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
                           show_labels, collapse_mode, filtered_transcript_ids,
                           clustergram_height, distance_metric, linkage_method, filtered_junction_ids,
-                          show_gridlines):
+                          show_gridlines, species):
     """Update isoform clustergram with unified height based on both isoform and junction data"""
     # Return empty figure if no gene selected
     if not selected_gene:
@@ -3029,15 +3423,18 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
 
     ratio_data = load_expression_data(db_path=db_path,
                                       gene_name=selected_gene,
-                                      data_type='ratio')
+                                      data_type='ratio',
+                                      species=species)
 
     tpm_data = load_expression_data(db_path=db_path,
                                     gene_name=selected_gene,
-                                    data_type='tpm')
+                                    data_type='tpm',
+                                    species=species)
 
     log_tpm_data = load_expression_data(db_path=db_path,
                                         gene_name=selected_gene,
-                                        data_type='log_tpm')
+                                        data_type='log_tpm',
+                                        species=species)
 
     if data_type_selection == 'ratio':
         data_type = "Ratio"
@@ -3049,8 +3446,8 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
     if selected_gene:
         try:
             filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
-            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
 
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
@@ -3097,7 +3494,8 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
             linkage_method=linkage_method,
             show_gridlines=show_gridlines,
             gridline_color=gridline_color,
-            db_path=db_path
+            db_path=db_path,
+            species=species
         )
         fig.update_layout(
             autosize=True,
@@ -3154,13 +3552,15 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
      dash.dependencies.Input('abundance-color-type-radio', 'value'),
      dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
      dash.dependencies.Input('organ-abundance-dropdown', 'value'),
-     dash.dependencies.Input('individual-junction-colors', 'data')]
+     dash.dependencies.Input('individual-junction-colors', 'data'),
+     dash.dependencies.Input('individual-transcript-colors', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_transcript_ids,
                               plot_height, exon_color, junction_color, isoform_filter_query,
                               validation_data, color_junctions_by_psi, color_by_abundance,
                               structure_colorscale, abundance_type, tissue_name, organ_name,
-                              individual_junction_colors):
+                              individual_junction_colors, individual_transcript_colors, species):
     """Update ATSE splice junction visualization with filtered data"""
     # Check if current filter is valid: if not, don't update plot
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
@@ -3183,7 +3583,8 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
         gene_data = process_gene_atse_data(
             selected_gene,
             db_path,
-            filtered_junction_ids=filtered_junction_ids
+            filtered_junction_ids=filtered_junction_ids,
+            species=species
         )
 
         show_labels = False
@@ -3202,7 +3603,9 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             abundance_type=abundance_type,
             tissue_name=tissue_name,
             organ_name=organ_name,
-            individual_junction_colors=individual_junction_colors
+            individual_junction_colors=individual_junction_colors,
+            individual_transcript_colors=individual_transcript_colors,
+            species=species
         )
 
         # Create config with gene name in filename
@@ -3282,12 +3685,14 @@ def toggle_top_panel_plots(hide_junctions):
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('left-table-validation-store', 'data'),
      dash.dependencies.Input('color-by-abundance-toggle', 'value'),
-     dash.dependencies.Input('colorscale-dropdown', 'value'),
+     dash.dependencies.Input('structure-plot-colorscale-dropdown', 'value'),
      dash.dependencies.Input('abundance-color-type-radio', 'value'),
      dash.dependencies.Input('tissue-abundance-dropdown', 'value'),
-     dash.dependencies.Input('organ-abundance-dropdown', 'value')]
+     dash.dependencies.Input('organ-abundance-dropdown', 'value'),
+     dash.dependencies.Input('individual-transcript-colors', 'data'),
+     dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name):
+def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, exon_color, hide_junctions, filter_query, validation_data, color_by_abundance, colorscale, abundance_type, tissue_name, organ_name, individual_transcript_colors, species):
     """Update transcript structure plot in top panel when toggle is activated"""
     # Only update if junctions are hidden (transcript plot should be shown)
     if not hide_junctions:
@@ -3309,7 +3714,7 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
 
     try:
         filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
-        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
 
         # transcript plot function handles its own height calculation when using default: only overriden when user manually sets a specific height
         if plot_height == 600:
@@ -3328,7 +3733,9 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
             colorscale=colorscale,
             abundance_type=abundance_type,
             tissue_name=tissue_name,
-            organ_name=organ_name
+            organ_name=organ_name,
+            individual_transcript_colors=individual_transcript_colors,
+            species=species
         )
 
         # Create config with gene name in filename
@@ -3407,10 +3814,11 @@ def adjust_top_panel_height(plot_height):
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
-     dash.dependencies.Input('hide-junctions-toggle', 'value')],
+     dash.dependencies.Input('hide-junctions-toggle', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     [dash.dependencies.State('bar-height-slider', 'value')]
 )
-def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_junction_ids, hide_junctions, current_height):
+def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_junction_ids, hide_junctions, species, current_height):
     """Calculate unified height for top panel using the same system as old structure plots"""
     if not selected_gene:
         container_style = {'height': '400px', 'min-height': '400px', 'margin-bottom': '15px'}
@@ -3429,13 +3837,13 @@ def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_jun
 
     try:
         filtered_ids = [int(id) for id in filtered_transcript_ids] if filtered_transcript_ids else []
-        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+        transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
 
         if hide_junctions:
             num_transcripts = len(transcript_data['id'].unique()) if not transcript_data.empty else 0
             calculated_height = calculate_dynamic_structure_plot_height(num_transcripts)
         else:
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids)
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids, species)
             calculated_height = calculate_unified_plot_height(transcript_data, gene_data)
 
         if abs(calculated_height - current_height) < 100:
@@ -3611,6 +4019,9 @@ def download_hash_results(download_clicks, stored_data):
         else:
             hash_results = stored_data
 
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
         # Results TSV format: gene_id, transcript_id, gencode_transcript_id, hash_id
         lines = ["gene_id\ttranscript_id\tgencode_transcript_id\thash_id"]
 
@@ -3623,17 +4034,19 @@ def download_hash_results(download_clicks, stored_data):
             # Note: this is version-agnostic matching! (e.g., ENSG00000223972.5 matches ENSG00000223972.6)
             gene_base = gene_id.split('.')[0] if '.' in gene_id else gene_id
 
-            query = """
+            cursor.execute("""
                 SELECT DISTINCT transcript_id FROM gencode_gtf
-                WHERE gene_id LIKE :gene_id_pattern
+                WHERE gene_id LIKE ?
                 ORDER BY transcript_id
                 LIMIT 1
-            """
-            gencode_df = db_config.execute_query(query, params={'gene_id_pattern': f"{gene_base}.%"})
+            """, (f"{gene_base}.%",))
 
-            gencode_transcript_id = gencode_df.iloc[0]['transcript_id'] if not gencode_df.empty else "N/A"
+            gencode_result = cursor.fetchone()
+            gencode_transcript_id = gencode_result[0] if gencode_result else "N/A"
 
             lines.append(f"{gene_id}\t{transcript_id}\t{gencode_transcript_id}\t{hash_id}")
+
+        conn.close()
         download_content = "\n".join(lines)
 
         return dict(content=download_content, filename="isoform_hashes.tsv")
@@ -3805,10 +4218,11 @@ def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
      dash.dependencies.State('structure-plot-colorscale-dropdown', 'value'),
      dash.dependencies.State('abundance-color-type-radio', 'value'),
      dash.dependencies.State('tissue-abundance-dropdown', 'value'),
-     dash.dependencies.State('organ-abundance-dropdown', 'value')],
+     dash.dependencies.State('organ-abundance-dropdown', 'value'),
+     dash.dependencies.State('species-dropdown', 'value')],
     prevent_initial_call=True
 )
-def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, structure_colorscale, abundance_type, tissue_name, organ_name):
+def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, structure_colorscale, abundance_type, tissue_name, organ_name, species):
     """Export selected plot with custom dimensions as SVG"""
     if not n_clicks or not width or not height or not selected_gene:
         raise PreventUpdate
@@ -3824,7 +4238,7 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
 
         if plot_selection == 'structure':
             filtered_ids = [int(id) for id in filtered_ids] if filtered_ids else []
-            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids)
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
 
             fig = create_transcript_structure_plot(
                 db_path,
@@ -3837,7 +4251,9 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
                 colorscale=structure_colorscale,
                 abundance_type=abundance_type,
                 tissue_name=tissue_name,
-                organ_name=organ_name
+                organ_name=organ_name,
+                individual_transcript_colors={},  # Export uses default colors
+                species=species
             )
             filename = f"{selected_gene}_structure_plot.svg"
 
@@ -3922,10 +4338,11 @@ def toggle_structure_plot_colorscale(color_junctions_by_psi, color_by_abundance)
      dash.dependencies.Output('organ-abundance-dropdown', 'value'),
      dash.dependencies.Output('organ-dropdown-container', 'style')],
     [dash.dependencies.Input('abundance-color-type-radio', 'value'),
-     dash.dependencies.Input('gene-search-dropdown', 'value')],
+     dash.dependencies.Input('gene-search-dropdown', 'value'),
+     dash.dependencies.Input('species-dropdown', 'value')],
     prevent_initial_call=False
 )
-def update_abundance_dropdowns(color_type, selected_gene):
+def update_abundance_dropdowns(color_type, selected_gene, species):
     """Update tissue and organ dropdown options and visibility based on selected coloring type"""
     tissue_options = []
     tissue_value = None
@@ -3936,7 +4353,7 @@ def update_abundance_dropdowns(color_type, selected_gene):
 
     if color_type == 'tissue' and selected_gene:
         try:
-            tissues = get_unique_tissues_for_gene(db_path, selected_gene)
+            tissues = get_unique_tissues_for_gene(db_path, selected_gene, species)
             if tissues:
                 tissue_options = [{'label': f' {tissue}', 'value': tissue} for tissue in tissues]
                 tissue_value = tissue_options[0]['value'] if tissue_options else None
@@ -3947,7 +4364,7 @@ def update_abundance_dropdowns(color_type, selected_gene):
 
     elif color_type == 'organ' and selected_gene:
         try:
-            organs = get_unique_organs_for_gene(db_path, selected_gene)
+            organs = get_unique_organs_for_gene(db_path, selected_gene, species)
             if organs:
                 organ_options = [{'label': f' {organ}', 'value': organ} for organ in organs]
                 organ_value = organ_options[0]['value'] if organ_options else None
@@ -3957,6 +4374,24 @@ def update_abundance_dropdowns(color_type, selected_gene):
             traceback.print_exc()
 
     return tissue_options, tissue_value, tissue_style, organ_options, organ_value, organ_style
+
+
+###################################################################
+# VIEWPORT DIMENSIONS TRACKING
+###################################################################
+# neede for individual junction coloring popup positioning
+app.clientside_callback(
+    """
+    function(n_intervals) {
+        return {
+            width: window.innerWidth,
+            height: window.innerHeight
+        };
+    }
+    """,
+    dash.dependencies.Output('viewport-dimensions', 'data'),
+    [dash.dependencies.Input('loading-delay-interval', 'n_intervals')]
+)
 
 
 ###################################################################
@@ -3999,30 +4434,6 @@ def display_ascii_banner():
     print(banner)
 
 
-def warm_up_caches():
-    """
-    Warm up critical caches on application startup.
-    Preloads gene list and default gene data to Redis if available.
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-
-    try:
-        from src.isoformgazer.gene_cache_redis import get_cached_gene_list
-        from src.isoformgazer.data_utils import get_all_gene_options
-
-        # Check if gene list is already cached
-        if get_cached_gene_list() is None:
-            logger.info("Warming up gene list cache...")
-            genes = get_all_gene_options(db_path)
-            logger.info(f"✓ Cached {len(genes)} genes to Redis")
-        else:
-            logger.info("✓ Gene list already cached in Redis")
-
-    except Exception as e:
-        logger.warning(f"Cache warm-up skipped (will cache on first request): {e}")
-
-
 if __name__ == '__main__':
     database_exists = check_database_status()
     if not database_exists:
@@ -4031,6 +4442,4 @@ if __name__ == '__main__':
 
     display_ascii_banner()
 
-    warm_up_caches()
-
-    app.run(debug=False, port=8050, use_reloader=False)
+    app.run(debug=True, port=8050, use_reloader=False)

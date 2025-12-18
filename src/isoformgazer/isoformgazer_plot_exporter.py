@@ -29,14 +29,14 @@ from PIL import Image
 from dotenv import load_dotenv
 load_dotenv()
 
-from db_config import initialize_database, get_db_config
-from isoform_utils import (
+from src.isoformgazer.db_config import initialize_database, get_db_config
+from src.isoformgazer.isoform_utils import (
     create_transcript_structure_plot,
     create_isoform_expression_clustergram,
     process_transcript_structure,
     load_expression_data,
 )
-from junction_utils import (
+from src.isoformgazer.junction_utils import (
     create_gene_clustergram,
     create_junction_exon_visualization,
     process_gene_atse_data,

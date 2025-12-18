@@ -99,7 +99,7 @@ class RedisCache:
                 self.use_redis = False
 
         if not self.use_redis:
-            from src.isoformgazer.performance_utils import SimpleCache
+            from performance_utils import SimpleCache
             self.memory_cache = SimpleCache(max_size=max_memory_cache_size)
             logger.info("Using in-memory cache as fallback")
 
