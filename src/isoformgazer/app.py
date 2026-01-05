@@ -103,6 +103,25 @@ def setup_local_database(data_dir=None, force_rebuild=False):
     mouse_data_dir = os.path.join(data_dir, "mouse")
     load_species_data(conn, mouse_data_dir, table_prefix="mouse_", species_name="Mouse")
 
+    ######################################################################
+    # Load human-mouse high-confidence conserved junctions mapping table
+    ######################################################################
+    print(f"\n================================================================================")
+    print(f"Loading human-mouse conserved junctions mapping")
+    print(f"================================================================================\n")
+    conserved_junctions_file = os.path.join(mouse_data_dir, "junction_mapping_mouse_human_with_annotations.csv")
+
+    with tqdm(desc="Loading conserved junctions mapping data", unit=" rows") as pbar:
+        df_conserved = pd.read_csv(conserved_junctions_file)
+        pbar.update(len(df_conserved))
+
+    with tqdm(desc="Writing conserved junctions mapping to local database", unit="rows", total=len(df_conserved)) as pbar:
+        df_conserved.to_sql('human_mouse_conserved_junctions', conn, if_exists='replace', index=False)
+        pbar.update(len(df_conserved))
+
+    print(f" Processed all {len(df_conserved):,} rows from conserved junctions mapping!")
+    print()
+
     conn.commit()
     conn.close()
 
