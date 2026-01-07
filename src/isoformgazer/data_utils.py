@@ -617,7 +617,7 @@ def is_cache_valid(base_dir, db_path):
 
 
 def load_default_gene_cache(base_dir):
-    """Load cached data and plots for default gene (A1BG-AS1)"""
+    """Load cached data and plots for default gene (AACS)"""
     cache_path = get_default_gene_cache_path(base_dir)
 
     if not Path(cache_path).exists():
@@ -633,7 +633,7 @@ def load_default_gene_cache(base_dir):
 
 
 def save_default_gene_cache(base_dir, db_path, cache_data):
-    """Save cached data and plots for default gene (A1BG-AS1)"""
+    """Save cached data and plots for default gene (AACS)"""
     cache_path = get_default_gene_cache_path(base_dir)
     metadata_path = get_cache_metadata_path(base_dir)
 
@@ -642,7 +642,7 @@ def save_default_gene_cache(base_dir, db_path, cache_data):
             pickle.dump(cache_data, f)
 
         metadata = {
-            'gene_name': 'A1BG-AS1',
+            'gene_name': 'AACS',
             'timestamp': datetime.now().isoformat(),
             'db_hash': get_database_hash(db_path),
             'cache_version': 1
@@ -669,7 +669,7 @@ def clear_default_gene_cache(base_dir):
         print(f"Warning: Could not clear cache: {e}")
 
 
-def generate_default_gene_cache(db_path, gene_name='A1BG-AS1', species="Human"):
+def generate_default_gene_cache(db_path, gene_name='AACS', species="Human"):
     """
     Generate cache for default gene data and plots.
     This function queries all necessary data for the default gene to populate
