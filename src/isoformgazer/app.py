@@ -1199,7 +1199,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 html.Div('Color by Average PSI', className='app-controls-name toggle-switch-label-wide'),
                                 daq.ToggleSwitch(
                                     id='color-junctions-by-psi-toggle',
-                                    value=False,
+                                    value=True,
                                     label={'label': 'Off / On', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
                                     className='toggle-switch-inline'
@@ -1212,7 +1212,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 html.Div('Color by Abundance', className='app-controls-name toggle-switch-label-wide'),
                                 daq.ToggleSwitch(
                                     id='color-by-abundance-toggle',
-                                    value=False,
+                                    value=True,
                                     label={'label': 'Off / On', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
                                     className='toggle-switch-inline'
@@ -2787,8 +2787,8 @@ def reset_custom_settings_on_gene_change(selected_gene):
     """Reset all custom settings to defaults when a new gene is selected (except colorscales)"""
     return (
         False,      # hide-junctions-toggle: show junctions by default
-        False,      # color-junctions-by-psi-toggle: off by default
-        False,      # color-by-abundance-toggle: off by default
+        True,       # color-junctions-by-psi-toggle: on by default
+        True,       # color-by-abundance-toggle: on by default
         'average',  # abundance-color-type-radio: average by default
         None,       # tissue-abundance-dropdown: no tissue selected
         None,       # organ-abundance-dropdown: no organ selected
