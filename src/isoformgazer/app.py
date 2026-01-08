@@ -103,6 +103,25 @@ def setup_local_database(data_dir=None, force_rebuild=False):
     mouse_data_dir = os.path.join(data_dir, "mouse")
     load_species_data(conn, mouse_data_dir, table_prefix="mouse_", species_name="Mouse")
 
+    ######################################################################
+    # Load human-mouse high-confidence conserved junctions mapping table
+    ######################################################################
+    print(f"\n================================================================================")
+    print(f"Loading human-mouse conserved junctions mapping")
+    print(f"================================================================================\n")
+    conserved_junctions_file = os.path.join(mouse_data_dir, "junction_mapping_mouse_human_with_annotations.csv")
+
+    with tqdm(desc="Loading conserved junctions mapping data", unit=" rows") as pbar:
+        df_conserved = pd.read_csv(conserved_junctions_file)
+        pbar.update(len(df_conserved))
+
+    with tqdm(desc="Writing conserved junctions mapping to local database", unit="rows", total=len(df_conserved)) as pbar:
+        df_conserved.to_sql('human_mouse_conserved_junctions', conn, if_exists='replace', index=False)
+        pbar.update(len(df_conserved))
+
+    print(f" Processed all {len(df_conserved):,} rows from conserved junctions mapping!")
+    print()
+
     conn.commit()
     conn.close()
 
@@ -312,9 +331,9 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
     # Load junction master table data
     ########################################################
     if species_name == "Human":
-        junction_file = os.path.join(species_data_dir, "pseudobulk_final_broad_cell_type_20250623_171456_withmappings.csv")
+        junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_aligned_20260105_170740_withmappings.csv")
     if species_name == "Mouse":
-        junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_20251119_144144_withmappings.csv")
+        junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_20260105_171037_withmappings.csv")
     
     # Need to count total lines (minus header) to estimate progress
     with open(junction_file, 'r') as f:
@@ -724,8 +743,8 @@ def create_loading_progress_figure():
 db_path = setup_local_database()
 base_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Cache for default gene A1BG-AS1
-DEFAULT_GENE = 'A1BG-AS1'
+# Cache for default gene AACS
+DEFAULT_GENE = 'AACS'
 default_gene_cache = None
 cache_loaded_from_disk = False
 
@@ -1048,7 +1067,7 @@ app.layout = html.Div(className='app-layout', children=[
                             dcc.Dropdown(
                                 id='gene-search-dropdown',
                                 options=[
-                                    {'label': 'A1BG-AS1', 'value': 'A1BG-AS1'},
+                                    {'label': 'AACS', 'value': 'AACS'},
                                     {'label': 'RBFOX2 (RNA Binding Fox-1 Homolog 2)', 'value': 'RBFOX2'},
                                     {'label': 'EGFR (Epidermal growth factor receptor)', 'value': 'EGFR'},
                                     {'label': 'BRCA1 (Breast cancer type 1)', 'value': 'BRCA1'},
@@ -1056,7 +1075,7 @@ app.layout = html.Div(className='app-layout', children=[
                                     {'label': 'TP53 (Tumor protein p53)', 'value': 'TP53'}
                                 ],
                                 placeholder="Type to search for a gene...",
-                                value='A1BG-AS1',
+                                value='AACS',
                                 searchable=True,
                                 clearable=False
                             ),
@@ -1180,7 +1199,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 html.Div('Color by Average PSI', className='app-controls-name toggle-switch-label-wide'),
                                 daq.ToggleSwitch(
                                     id='color-junctions-by-psi-toggle',
-                                    value=False,
+                                    value=True,
                                     label={'label': 'Off / On', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
                                     className='toggle-switch-inline'
@@ -1193,7 +1212,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 html.Div('Color by Abundance', className='app-controls-name toggle-switch-label-wide'),
                                 daq.ToggleSwitch(
                                     id='color-by-abundance-toggle',
-                                    value=False,
+                                    value=True,
                                     label={'label': 'Off / On', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
                                     className='toggle-switch-inline'
@@ -2541,7 +2560,7 @@ def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_co
     if loading_complete:
         return 'loading-overlay hidden', True, True
 
-    data_loaded = bool(isoform_data and junction_data)
+    data_loaded = (isoform_data is not None) and (junction_data is not None)
     if data_loaded and timer_intervals == 0:
         return 'loading-overlay', False, False
 
@@ -2701,10 +2720,8 @@ def update_all_gene_options_on_species_change(species):
 )
 def reset_gene_on_species_change(species, current_gene):
     """Reset gene selection to default when species changes"""
-    if species == "Mouse":
-        return "COL1A1"
-    else:
-        return "A1BG-AS1"
+    # AACS has data in both human and mouse
+    return "AACS"
 
 
 ##############################################################################################
@@ -2726,16 +2743,11 @@ def update_gene_options(search_value, species, current_value, all_gene_options):
     if not all_gene_options:
         all_gene_options = get_all_gene_options(db_path, species)
 
-    # Special case: if switching to Mouse species and current gene is A1BG-AS1, switch to A4GALT
-    # (A1BG-AS1 has no mouse data)
-    if species == 'Mouse' and current_value == 'A1BG-AS1':
-        current_value = 'A4GALT'
-
     if not search_value:
         options = all_gene_options[:10]
-        a1bg_option = {'label': 'A1BG-AS1', 'value': 'A1BG-AS1', 'search': 'a1bg-as1'}
-        if not any(opt['value'] == 'A1BG-AS1' for opt in options):
-            options.insert(0, a1bg_option)
+        aacs_option = {'label': 'AACS', 'value': 'AACS', 'search': 'aacs'}
+        if not any(opt['value'] == 'AACS' for opt in options):
+            options.insert(0, aacs_option)
     else:
         # Client-side filtering using the pre-computed search string
         search_lower = search_value.lower()
@@ -2744,7 +2756,7 @@ def update_gene_options(search_value, species, current_value, all_gene_options):
 
     # Handle current value preservation
     if current_value is None:
-        return options, 'A1BG-AS1'
+        return options, 'AACS'
 
     option_values = [opt['value'] for opt in options]
 
@@ -2775,8 +2787,8 @@ def reset_custom_settings_on_gene_change(selected_gene):
     """Reset all custom settings to defaults when a new gene is selected (except colorscales)"""
     return (
         False,      # hide-junctions-toggle: show junctions by default
-        False,      # color-junctions-by-psi-toggle: off by default
-        False,      # color-by-abundance-toggle: off by default
+        True,       # color-junctions-by-psi-toggle: on by default
+        True,       # color-by-abundance-toggle: on by default
         'average',  # abundance-color-type-radio: average by default
         None,       # tissue-abundance-dropdown: no tissue selected
         None,       # organ-abundance-dropdown: no organ selected
@@ -3770,7 +3782,7 @@ def update_top_transcript_structure(selected_gene, plot_height, filtered_ids, ex
 )
 def update_top_barplot_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
-        selected_gene = 'A1BG-AS1'
+        selected_gene = 'AACS'
     T = len(filtered_ids) if filtered_ids else 0
     return f"Loading data for {T} transcript structures for {selected_gene}"
 
@@ -3891,7 +3903,7 @@ def update_top_panel_height(selected_gene, filtered_transcript_ids, filtered_jun
 )
 def update_heatmap1_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
-        selected_gene = 'A1BG-AS1'
+        selected_gene = 'AACS'
     T = len(filtered_ids) if filtered_ids else 0
     return f"Loading data for {T} isoform transcripts for {selected_gene}"
 
@@ -3903,7 +3915,7 @@ def update_heatmap1_loading_message(selected_gene, filtered_ids):
 )
 def update_atse_map_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
-        selected_gene = 'A1BG-AS1'
+        selected_gene = 'AACS'
     N = len(filtered_ids) if filtered_ids else 0
     return f"Loading data for {N} junctions for {selected_gene}"
 
@@ -3915,7 +3927,7 @@ def update_atse_map_loading_message(selected_gene, filtered_ids):
 )
 def update_heatmap2_loading_message(selected_gene, filtered_ids):
     if not selected_gene:
-        selected_gene = 'A1BG-AS1'
+        selected_gene = 'AACS'
     N = len(filtered_ids) if filtered_ids else 0
     return f"Loading data for {N} junctions for {selected_gene}"
 

@@ -1220,6 +1220,35 @@ def create_junction_exon_visualization(gene_data: dict,
 
         cmap = get_matplotlib_colormap(colorscale)
 
+    # Query conserved junctions data for cross-species mapping
+    conserved_junctions_data = {}
+    if junctions:
+        conn = sqlite3.connect(db_path)
+        try:
+            conserved_query = """
+            SELECT mouse_junction_id, human_junction_id, sequence_similarity
+            FROM human_mouse_conserved_junctions
+            """
+            conserved_df = pd.read_sql_query(conserved_query, conn)
+
+            # Create lookup based on species...
+            # For human: map human_junction_id -> (mouse_junction_id, sequence_similarity)
+            # For mouse: map mouse_junction_id -> (human_junction_id, sequence_similarity)
+            if species == "Human":
+                for _, row in conserved_df.iterrows():
+                    conserved_junctions_data[row['human_junction_id']] = {
+                        'conserved_junction_id': row['mouse_junction_id'],
+                        'sequence_similarity': row['sequence_similarity']
+                    }
+            elif species == "Mouse":
+                for _, row in conserved_df.iterrows():
+                    conserved_junctions_data[row['mouse_junction_id']] = {
+                        'conserved_junction_id': row['human_junction_id'],
+                        'sequence_similarity': row['sequence_similarity']
+                    }
+        finally:
+            conn.close()
+
     if junctions:
         for i, junction in enumerate(junctions):
             start = junction['start']
@@ -1268,6 +1297,16 @@ def create_junction_exon_visualization(gene_data: dict,
                 psi = junction_psi_data[(start, end)]
                 if psi is not None:
                     hover_text += f"<br>Average PSI: {psi:.2f}"
+
+            # Add conserved junction information if available
+            if junction_id in conserved_junctions_data:
+                conserved_data = conserved_junctions_data[junction_id]
+                if species == "Human":
+                    hover_text += f"<br>Conserved Mouse Junction ID: {conserved_data['conserved_junction_id']}"
+                    hover_text += f"<br>Conserved Mouse Junction Sequence Similarity: {conserved_data['sequence_similarity']:.2%}"
+                elif species == "Mouse":
+                    hover_text += f"<br>Conserved Human Junction ID: {conserved_data['conserved_junction_id']}"
+                    hover_text += f"<br>Conserved Human Junction Sequence Similarity: {conserved_data['sequence_similarity']:.2%}"
 
             # Create invisible line segment with multiple points so user can click anywhere on junction to color it
             num_points = 20
