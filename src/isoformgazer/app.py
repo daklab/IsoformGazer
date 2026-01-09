@@ -1,5 +1,6 @@
 import os
 import math
+import json
 import traceback
 from tqdm import tqdm
 import sqlite3
@@ -10,6 +11,7 @@ import base64
 import matplotlib
 matplotlib.use('Agg')
 from pathlib import Path
+from flask import Response
 import dash
 from dash import html, dcc, dash_table, callback_context, no_update
 import dash_bootstrap_components as dbc
@@ -22,6 +24,8 @@ from colorama import Fore, Style, init
 import traceback
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
+from src.isoformgazer.db_config import initialize_database, get_db_config
+from src.isoformgazer.gene_cache_redis import get_cached_gene_list
 from src.isoformgazer.data_utils import (
     get_master_table_columns, parse_filter_query, query_master_table, get_gene_options,
     get_all_gene_options, create_custom_spinner, validate_filter_input,
@@ -46,6 +50,13 @@ from src.isoformgazer.isoform_utils import (
 
 RANDOM_SEED = 18
 np.random.seed(RANDOM_SEED)
+
+###################################################################
+# POSTGRESQL DATABASE SETUP
+###################################################################
+# All environment variables are loaded from .env file
+from dotenv import load_dotenv
+load_dotenv()
 
 ###################################################################
 # SQLLITE DATABASE SETUP
@@ -738,21 +749,40 @@ def create_loading_progress_figure():
     return fig
 
 ###################################################################
-# APPLICATION SETUP
+# APPLICATION AND DB CONNECTION SETUP
 ###################################################################
-db_path = setup_local_database()
 base_dir = os.path.dirname(os.path.abspath(__file__))
+db_type = os.getenv('DB_TYPE', 'sqlite').lower()
 
-# Cache for default gene AACS
-DEFAULT_GENE = 'AACS'
+if db_type == 'postgresql':
+    print(f"{Fore.CYAN}Initializing PostgreSQL database connection...{Style.RESET_ALL}")
+    initialize_database(use_postgresql=True)
+    db_config = get_db_config()
+    print(f"{Fore.GREEN}Connected to IsoformGazer database{Style.RESET_ALL}")
+    # db_path is None for PostgreSQL mode (we use db_config instead)
+    db_path = None
+
+else:
+    print(f"{Fore.CYAN}Using SQLite database for local development...{Style.RESET_ALL}")
+    db_path = setup_local_database()
+    initialize_database(db_path=db_path, use_postgresql=False)
+    db_config = get_db_config()
+    print(f"{Fore.GREEN}Connected to SQLite database at {db_path}{Style.RESET_ALL}")
+
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
+server = app.server
+
+# Cache for default gene A1BG-AS1
+DEFAULT_GENE = 'A1BG-AS1'
 default_gene_cache = None
 cache_loaded_from_disk = False
 
-if is_cache_valid(base_dir, db_path):
+# Note: Cache validation logic still uses db_path for SQLite compatibility
+if db_type == 'sqlite' and is_cache_valid(base_dir, db_path):
     default_gene_cache = load_default_gene_cache(base_dir)
     cache_loaded_from_disk = True
 
-if not default_gene_cache:
+if not default_gene_cache and db_path:
     default_gene_cache = generate_default_gene_cache(db_path, DEFAULT_GENE)
     if default_gene_cache:
         save_default_gene_cache(base_dir, db_path, default_gene_cache)
@@ -781,6 +811,33 @@ app.index_string = '''
     </body>
 </html>
 '''
+
+###################################################################
+# CACHE STATISTICS API ENDPOINT
+###################################################################
+@app.server.route('/api/cache-stats')
+def api_cache_stats():
+    """
+    API endpoint to check cache statistics.
+    Access: GET /api/cache-stats
+    Returns cache hit/miss stats and Redis connection status
+    """
+    try:
+        from src.isoformgazer.gene_cache_redis import get_cache_stats
+        stats = get_cache_stats()
+
+    except Exception as e:
+        stats = {
+            'error': str(e),
+            'backend': 'unknown',
+            'gene_list_cached': False,
+            'default_gene_cached': False
+        }
+
+    return Response(
+        json.dumps(stats, indent=2),
+        mimetype='application/json'
+    )
 
 ###################################################################
 # APPLICATION TITLE (ISOFORM GAZER)
@@ -2846,7 +2903,7 @@ def update_summary_blocks(selected_gene, species):
     try:
         # Get the first row data for the selected gene, since these columns have the same values for all rows
         table_prefix = get_table_prefix(species)
-        conn = sqlite3.connect(db_path)
+        db_config = get_db_config()
 
         # Mouse data doesn't have gene_protein_category column
         if species == "Mouse":
@@ -2862,7 +2919,7 @@ def update_summary_blocks(selected_gene, species):
                 ORF_perplexity,
                 ORF_expressed_samples
             FROM {table_prefix}isoforms
-            WHERE gene_name = ?
+            WHERE gene_name = :gene_name
             LIMIT 1
             """
         else:
@@ -2879,14 +2936,16 @@ def update_summary_blocks(selected_gene, species):
                 orf_perplexity,
                 orf_expressed_samples
             FROM {table_prefix}isoforms
-            WHERE gene_name = ?
+            WHERE gene_name = :gene_name
             LIMIT 1
             """
 
-        cursor = conn.cursor()
-        cursor.execute(query, (selected_gene,))
-        row = cursor.fetchone()
-        conn.close()
+        result = db_config.execute_query(query, params={'gene_name': selected_gene})
+
+        if result.empty:
+            row = None
+        else:
+            row = tuple(result.iloc[0])
 
         if not row:
             return (
@@ -4031,8 +4090,7 @@ def download_hash_results(download_clicks, stored_data):
         else:
             hash_results = stored_data
 
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        db_config = get_db_config()
 
         # Results TSV format: gene_id, transcript_id, gencode_transcript_id, hash_id
         lines = ["gene_id\ttranscript_id\tgencode_transcript_id\thash_id"]
@@ -4046,19 +4104,18 @@ def download_hash_results(download_clicks, stored_data):
             # Note: this is version-agnostic matching! (e.g., ENSG00000223972.5 matches ENSG00000223972.6)
             gene_base = gene_id.split('.')[0] if '.' in gene_id else gene_id
 
-            cursor.execute("""
+            gencode_query = """
                 SELECT DISTINCT transcript_id FROM gencode_gtf
-                WHERE gene_id LIKE ?
+                WHERE gene_id LIKE :gene_id
                 ORDER BY transcript_id
                 LIMIT 1
-            """, (f"{gene_base}.%",))
+            """
+            gencode_result = db_config.execute_query(gencode_query, params={'gene_id': f"{gene_base}.%"})
 
-            gencode_result = cursor.fetchone()
-            gencode_transcript_id = gencode_result[0] if gencode_result else "N/A"
+            gencode_transcript_id = gencode_result.iloc[0]['transcript_id'] if not gencode_result.empty else "N/A"
 
             lines.append(f"{gene_id}\t{transcript_id}\t{gencode_transcript_id}\t{hash_id}")
 
-        conn.close()
         download_content = "\n".join(lines)
 
         return dict(content=download_content, filename="isoform_hashes.tsv")
@@ -4446,6 +4503,26 @@ def display_ascii_banner():
     print(banner)
 
 
+def warm_up_caches():
+    """
+    Warm up critical caches on application startup.
+    Preloads gene list and default gene data to Redis if available.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        if get_cached_gene_list() is None:
+            logger.info("Warming up gene list cache...")
+            genes = get_all_gene_options(db_path)
+            logger.info(f"Cached {len(genes)} genes to Redis")
+        else:
+            logger.info("Gene list already cached in Redis")
+
+    except Exception as e:
+        logger.warning(f"Cache warm-up skipped (will cache on first request): {e}")
+
+
 if __name__ == '__main__':
     database_exists = check_database_status()
     if not database_exists:
@@ -4454,4 +4531,6 @@ if __name__ == '__main__':
 
     display_ascii_banner()
 
-    app.run(debug=True, port=8050, use_reloader=False)
+    warm_up_caches()
+
+    app.run(debug=False, port=8050, use_reloader=False)

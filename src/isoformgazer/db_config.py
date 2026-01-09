@@ -164,16 +164,33 @@ class DatabaseConfig:
         Execute a query and return results as pandas DataFrame.
 
         Args:
-            query: SQL query string (can use SQLAlchemy text() or raw string)
+            query: SQL query string using :param style parameters
             params: Dictionary of query parameters
 
         Returns:
             pandas DataFrame with query results
         """
-        with self.get_connection() as conn:
-            if params:
-                result = pd.read_sql_query(text(query), conn, params=params)
+        if params:
+            if self.is_postgresql():
+                # Convert :param to %(param)s for psycopg2
+                # Sort param names by length (longest first) to avoid partial replacements
+                # e.g., :jid_10 should be replaced before :jid_1
+                converted_query = query
+                for param_name in sorted(params.keys(), key=len, reverse=True):
+                    converted_query = converted_query.replace(f':{param_name}', f'%({param_name})s')
+                query_to_execute = converted_query
             else:
+                query_to_execute = query
+
+            raw_conn = self.engine.raw_connection()
+
+            try:
+                result = pd.read_sql_query(query_to_execute, raw_conn, params=params)
+            finally:
+                raw_conn.close()
+        else:
+            # For queries without parameters, use SQLAlchemy connection
+            with self.get_connection() as conn:
                 result = pd.read_sql_query(query, conn)
 
         return result

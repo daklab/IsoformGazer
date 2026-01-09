@@ -1,4 +1,3 @@
-import sqlite3
 import numpy as np
 import pandas as pd
 import plotly.graph_objs as go
@@ -11,6 +10,9 @@ import pickle
 import hashlib
 from datetime import datetime
 from pathlib import Path
+from sqlalchemy import text
+from src.isoformgazer.db_config import get_db_config
+from src.isoformgazer.gene_cache_redis import get_cached_default_gene_data, cache_gene_list, get_cached_gene_list, cache_default_gene_data
 
 
 def get_table_prefix(species="Human"):
@@ -22,84 +24,112 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
     """
     Query isoform data with pagination, sorting, and filtering.
     OPTIMIZED: Uses prepared statements and efficient indexing
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        table_name: Name of the table to query
+        page: Page number (0-indexed)
+        page_size: Number of rows per page
+        sort_by: List of (column, direction) tuples
+        filters: List of (column, operator, value) tuples
+        gene_filter: Gene name or ID to filter by
     """
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA optimize")
-    conn.execute("PRAGMA cache_size = 10000") 
+    db_config = get_db_config()
 
     # Select all columns for full data table functionality
-    query = f"SELECT * FROM {table_name}"
-    
+    query = f'SELECT * FROM "{table_name}"'
+
     where_clauses = []
-    params = []
-    
+    params = {}
+    param_count = 0
+
     if gene_filter:
-        where_clauses.append("(gene_name = ? OR gene_id LIKE ?)")
-        params.extend([gene_filter, f"{gene_filter}%"])
-    
+        where_clauses.append("(gene_name = :gene_name OR gene_id LIKE :gene_id)")
+        params['gene_name'] = gene_filter
+        params['gene_id'] = f"{gene_filter}%"
+
     if filters:
         for column, operator, value in filters:
+            param_name = f"param_{param_count}"
+            param_count += 1
+
             if operator == 'contains':
-                where_clauses.append(f"LOWER({column}) LIKE LOWER(?)")
-                params.append(f"%{value}%")
+                where_clauses.append(f'LOWER("{column}") LIKE LOWER(:{param_name})')
+                params[param_name] = f"%{value}%"
             elif operator == 'eq':
-                where_clauses.append(f"{column} = ?")
-                params.append(value)
+                where_clauses.append(f'"{column}" = :{param_name}')
+                params[param_name] = value
             elif operator == 'ne':
-                where_clauses.append(f"{column} != ?")
-                params.append(value)
+                where_clauses.append(f'"{column}" != :{param_name}')
+                params[param_name] = value
             elif operator == 'lt':
-                where_clauses.append(f"{column} < ?")
-                params.append(value)
+                where_clauses.append(f'"{column}" < :{param_name}')
+                params[param_name] = value
             elif operator == 'gt':
-                where_clauses.append(f"{column} > ?")
-                params.append(value)
+                where_clauses.append(f'"{column}" > :{param_name}')
+                params[param_name] = value
             elif operator == 'le':
-                where_clauses.append(f"{column} <= ?")
-                params.append(value)
+                where_clauses.append(f'"{column}" <= :{param_name}')
+                params[param_name] = value
             elif operator == 'ge':
-                where_clauses.append(f"{column} >= ?")
-                params.append(value)
-    
+                where_clauses.append(f'"{column}" >= :{param_name}')
+                params[param_name] = value
+
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
 
     if sort_by:
         order_clauses = []
         for col, direction in sort_by:
-            order_clauses.append(f"{col} {'ASC' if direction == 'asc' else 'DESC'}")
+            order_clauses.append(f'"{col}" {'ASC' if direction == 'asc' else 'DESC'}')
         if order_clauses:
             query += " ORDER BY " + ", ".join(order_clauses)
     else:
         # Default sort order: isoforms by isoform_average_tpm DESC, junctions by junction_average_psi DESC
-        if table_name.lower() == 'isoforms':
-            query += " ORDER BY isoform_average_tpm DESC NULLS LAST"
-        elif table_name.lower() == 'junctions':
-            query += " ORDER BY junction_average_psi DESC NULLS LAST"
-    
+        if table_name.lower() == 'isoforms' or table_name.lower() == 'mouse_isoforms':
+            query += ' ORDER BY "isoform_average_tpm" DESC NULLS LAST'
+        elif table_name.lower() == 'junctions' or table_name.lower() == 'mouse_junctions':
+            query += ' ORDER BY "junction_average_psi" DESC NULLS LAST'
+
     if where_clauses:
         count_where = " WHERE " + " AND ".join(where_clauses)
     else:
         count_where = ""
-    
-    count_query = f"SELECT COUNT(*) FROM {table_name}{count_where}"
-    total_count = pd.read_sql_query(count_query, conn, params=params).iloc[0, 0]
-    
+
+    count_query = f'SELECT COUNT(*) FROM "{table_name}"{count_where}'
+    total_count_df = db_config.execute_query(count_query, params=params)
+    total_count = int(total_count_df.iloc[0, 0])
+
     if page_size > 0:
         query += f" LIMIT {page_size} OFFSET {page * page_size}"
-    
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-    
+
+    df = db_config.execute_query(query, params=params)
+
     return df.to_dict('records'), total_count
 
 
 def get_all_gene_options(db_path, species="Human"):
-    """Loads all gene options from database at startup for fast client-side filtering"""
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA cache_size = 10000")
+    """Loads all gene options from database at startup for fast client-side filtering
 
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        species: Species name ("Human" or "Mouse") to determine table prefix
+
+    Returns:
+        List of gene option dicts with Redis caching for improved performance
+    """
+    try:
+        cached_genes = get_cached_gene_list(species=species)
+        if cached_genes:
+            return cached_genes
+    except Exception:
+        # Redis unavailable, continue with database query
+        pass
+
+    # Cache miss or Redis unavailable - query database
+    db_config = get_db_config()
     table_prefix = get_table_prefix(species)
+
     query = f"""
     SELECT DISTINCT
         CASE
@@ -107,12 +137,11 @@ def get_all_gene_options(db_path, species="Human"):
             ELSE gene_name
         END as gene_name,
         gene_id
-    FROM {table_prefix}isoforms
+    FROM "{table_prefix}isoforms"
     WHERE gene_id IS NOT NULL
     ORDER BY gene_name
     """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    df = db_config.execute_query(query)
 
     options = []
     for _, row in df.iterrows():
@@ -126,15 +155,28 @@ def get_all_gene_options(db_path, species="Human"):
                 'search': f"{gene_name.lower()} {gene_id.lower()}"
             })
 
+    # Cache for future requests
+    try:
+        cache_gene_list(options, species=species)
+    except Exception:
+        # Redis unavailable, no caching
+        pass
+
     return options
 
 
 def get_gene_options(db_path, search_term=None, limit=10, species="Human"):
-    """Get gene options for dropdown from database"""
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA cache_size = 10000")
+    """Get gene options for dropdown from database
 
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        search_term: Optional search term to filter genes
+        limit: Maximum number of results to return
+        species: Species name ("Human" or "Mouse") to determine table prefix
+    """
+    db_config = get_db_config()
     table_prefix = get_table_prefix(species)
+
     if search_term:
         query = f"""
         SELECT DISTINCT
@@ -143,17 +185,24 @@ def get_gene_options(db_path, search_term=None, limit=10, species="Human"):
                 ELSE gene_name
             END as gene_name,
             gene_id
-        FROM {table_prefix}isoforms
+        FROM "{table_prefix}isoforms"
         WHERE gene_id IS NOT NULL
         AND (
-            (gene_name IS NOT NULL AND gene_name LIKE ?)
-            OR gene_id LIKE ?
-            OR (gene_name IS NULL AND 'Unknown' LIKE ?)
+            (gene_name IS NOT NULL AND gene_name LIKE :search1)
+            OR gene_id LIKE :search2
+            OR (gene_name IS NULL AND 'Unknown' LIKE :search3)
         )
         ORDER BY gene_name
-        LIMIT ?
+        LIMIT :limit
         """
-        df = pd.read_sql_query(query, conn, params=[f"%{search_term}%", f"%{search_term}%", f"%{search_term}%", limit])
+        params = {
+            'search1': f"%{search_term}%",
+            'search2': f"%{search_term}%",
+            'search3': f"%{search_term}%",
+            'limit': limit
+        }
+        df = db_config.execute_query(query, params=params)
+
     else:
         query = f"""
         SELECT DISTINCT
@@ -162,14 +211,12 @@ def get_gene_options(db_path, search_term=None, limit=10, species="Human"):
                 ELSE gene_name
             END as gene_name,
             gene_id
-        FROM {table_prefix}isoforms
+        FROM "{table_prefix}isoforms"
         WHERE gene_id IS NOT NULL
         ORDER BY gene_name
-        LIMIT ?
+        LIMIT :limit
         """
-        df = pd.read_sql_query(query, conn, params=[limit])
-
-    conn.close()
+        df = db_config.execute_query(query, params={'limit': limit})
 
     options = []
     for _, row in df.iterrows():
@@ -187,44 +234,104 @@ def get_gene_options(db_path, search_term=None, limit=10, species="Human"):
 
 
 def get_master_table_columns(db_path: str, table_name: str) -> list:
-    """Get columns for DataTables with index handling"""
-    conn = sqlite3.connect(db_path)
+    """Get columns for DataTables with index handling
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        table_name: Name of the table
+    """
+    db_config = get_db_config()
+
     columns = [{
         'name': 'id',
         'id': 'id',
         'type': 'numeric'
     }]
-    
-    cursor = conn.execute(f"PRAGMA table_info({table_name})")
-    cols = cursor.fetchall()
-    
-    for col in cols:
-        if col[1] == 'id':
-            continue
-            
-        columns.append({
-            'name': col[1].replace('_', ' ').title(),
-            'id': col[1],
-            'type': 'numeric' if col[2] in ['REAL', 'INTEGER'] else 'text'
-        })
-    
-    conn.close()
+
+    # Query table schema using information_schema for PostgreSQL (PRAGMA for SQLite)
+    if db_config.is_postgresql():
+        query = """
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = :table_name
+        ORDER BY ordinal_position
+        """
+        df = db_config.execute_query(query, params={'table_name': table_name})
+
+        for _, row in df.iterrows():
+            col_name = row['column_name']
+            col_type = row['data_type'].upper()
+
+            if col_name == 'id':
+                continue
+
+            columns.append({
+                'name': col_name.replace('_', ' ').title(),
+                'id': col_name,
+                'type': 'numeric' if col_type in ['INTEGER', 'DOUBLE PRECISION', 'NUMERIC', 'REAL', 'BIGINT', 'SMALLINT'] else 'text'
+            })
+
+    # SQLite fallback
+    else:
+        query = f'PRAGMA table_info("{table_name}")'
+        df = db_config.execute_query(query)
+
+        for _, row in df.iterrows():
+            col_name = row['name']
+            col_type = row['type'].upper()
+
+            if col_name == 'id':
+                continue
+
+            columns.append({
+                'name': col_name.replace('_', ' ').title(),
+                'id': col_name,
+                'type': 'numeric' if col_type in ['REAL', 'INTEGER', 'NUMERIC'] else 'text'
+            })
+
     return columns
 
 
 def get_column_types(db_path, table_name):
-    """Get data types for columns in a table"""
-    conn = sqlite3.connect(db_path)
-    
-    query = f"PRAGMA table_info({table_name})"
-    columns_info = pd.read_sql_query(query, conn)
-    conn.close()
-    
+    """Get data types for columns in a table
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        table_name: Name of the table
+    """
+    db_config = get_db_config()
+
     # Dictionary of column name -> data type
     column_types = {}
-    for _, row in columns_info.iterrows():
-        column_types[row['name']] = row['type'].lower()
-        
+
+    if db_config.is_postgresql():
+        query = """
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = :table_name
+        """
+        columns_info = db_config.execute_query(query, params={'table_name': table_name})
+
+        # Map PostgreSQL types to simpler categories
+        for _, row in columns_info.iterrows():
+            col_type = row['data_type'].lower()
+            if col_type in ['integer', 'bigint', 'smallint']:
+                col_type = 'integer'
+            elif col_type in ['double precision', 'real', 'numeric']:
+                col_type = 'numeric'
+            elif col_type in ['character varying', 'text', 'varchar', 'char']:
+                col_type = 'string'
+
+            column_types[row['column_name']] = col_type
+
+    # SQLite fallback
+    else:
+        query = f'PRAGMA table_info("{table_name}")'
+        columns_info = db_config.execute_query(query)
+
+        for _, row in columns_info.iterrows():
+            column_types[row['name']] = row['type'].lower()
+
     return column_types
 
 
@@ -617,7 +724,19 @@ def is_cache_valid(base_dir, db_path):
 
 
 def load_default_gene_cache(base_dir):
-    """Load cached data and plots for default gene (AACS)"""
+    """Load cached data and plots for default gene (AACS)
+
+    Uses Redis cache if available, falls back to file-based cache
+    """
+    try:
+        cache_data = get_cached_default_gene_data()
+        if cache_data:
+            return cache_data
+    except Exception:
+        # Redis unavailable, try file cache
+        pass
+
+    # Fall back to file-based cache
     cache_path = get_default_gene_cache_path(base_dir)
 
     if not Path(cache_path).exists():
@@ -633,7 +752,17 @@ def load_default_gene_cache(base_dir):
 
 
 def save_default_gene_cache(base_dir, db_path, cache_data):
-    """Save cached data and plots for default gene (AACS)"""
+    """Save cached data and plots for default gene (AACS)
+
+    Uses Redis cache if available, also saves to file as backup
+    """
+    try:
+        cache_default_gene_data(cache_data)
+    except Exception:
+        # Redis unavailable, continue with file cache
+        pass
+
+    # Also save to file-based cache as backup
     cache_path = get_default_gene_cache_path(base_dir)
     metadata_path = get_cache_metadata_path(base_dir)
 
@@ -674,6 +803,11 @@ def generate_default_gene_cache(db_path, gene_name='AACS', species="Human"):
     Generate cache for default gene data and plots.
     This function queries all necessary data for the default gene to populate
     the initial stores with pre-computed results.
+
+    Args:
+        db_path: Legacy parameter (kept for backward compatibility, but now uses db_config)
+        gene_name: Gene name to cache (default: 'AACS')
+        species: Species name ("Human" or "Mouse") to determine table prefix
 
     Returns a dictionary with cached data structures.
     """
