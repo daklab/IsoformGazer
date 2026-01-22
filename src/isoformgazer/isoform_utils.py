@@ -2187,8 +2187,10 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> dict:
             if (transcript_data['transcript_start'] == first_exon_start and
                 transcript_data['transcript_end'] == last_exon_end):
 
-                tstarts = [exon[0] for exon in exons]
-                blocksizes = [exon[1] - exon[0] for exon in exons]
+                # Fix for congruence with application data: GTF is 1-indexed, PSL is 0-indexed. 
+                # We now subtract 1 from the start coords to ensure we match PSL-based coordinates.
+                tstarts = [exon[0] - 1 for exon in exons]
+                blocksizes = [exon[1] - (exon[0] - 1) for exon in exons]
 
                 try:
                     hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
@@ -2302,9 +2304,12 @@ def generate_annotated_gtf(gtf_content: str) -> str:
             if (transcript_data['transcript_start'] == first_exon_start and
                 transcript_data['transcript_end'] == last_exon_end):
 
-                tstarts = [exon['start'] for exon in exons]
-                blocksizes = [exon['end'] - exon['start'] for exon in exons]
-
+                # GTF is 1-indexed, PSL is 0-indexed. Convert to PSL coordinates.
+                # Subtract 1 from both start and end, then calculate blocksize
+                tstarts = [exon['start'] - 1 for exon in exons]
+                psl_ends = [exon['end'] for exon in exons]
+                blocksizes = [end - start for start, end in zip(tstarts, psl_ends)]
+    
                 try:
                     hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
                     transcript_data['hash_id'] = hash_id
