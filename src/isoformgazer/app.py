@@ -4101,16 +4101,17 @@ def download_hash_results(download_clicks, stored_data):
             hash_id = result['hash_id']
 
             # Look up gencode_transcript_id from gencode_gtf table...
-            # Note: this is version-agnostic matching! (e.g., ENSG00000223972.5 matches ENSG00000223972.6)
-            gene_base = gene_id.split('.')[0] if '.' in gene_id else gene_id
+            # Match by transcript_id, version-agnostic (e.g., ENST00000456328.2 matches ENST00000456328.1)...
+            # For novel transcripts (e.g., ENSG00000100320.24.novel10), there won't be a match, so we output 'N/A'.
+            transcript_base = transcript_id.split('.')[0] if '.' in transcript_id else transcript_id
 
             gencode_query = """
                 SELECT DISTINCT transcript_id FROM gencode_gtf
-                WHERE gene_id LIKE :gene_id
+                WHERE transcript_id LIKE :transcript_id
                 ORDER BY transcript_id
                 LIMIT 1
             """
-            gencode_result = db_config.execute_query(gencode_query, params={'gene_id': f"{gene_base}.%"})
+            gencode_result = db_config.execute_query(gencode_query, params={'transcript_id': f"{transcript_base}.%"})
 
             gencode_transcript_id = gencode_result.iloc[0]['transcript_id'] if not gencode_result.empty else "N/A"
 
