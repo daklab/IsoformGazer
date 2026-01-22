@@ -2173,8 +2173,10 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> dict:
             if (transcript_data['transcript_start'] == first_exon_start and
                 transcript_data['transcript_end'] == last_exon_end):
 
-                tstarts = [exon[0] for exon in exons]
-                blocksizes = [exon[1] - exon[0] for exon in exons]
+                # Fix for congruence with application data: GTF is 1-indexed, PSL is 0-indexed. 
+                # We now subtract 1 from the start coords to ensure we match PSL-based coordinates.
+                tstarts = [exon[0] - 1 for exon in exons]
+                blocksizes = [exon[1] - (exon[0] - 1) for exon in exons]
 
                 try:
                     hash_id = calculate_single_isoform_hash(tstarts, blocksizes)
