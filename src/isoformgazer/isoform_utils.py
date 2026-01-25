@@ -202,7 +202,7 @@ def calculate_unified_plot_height(transcript_data: pd.DataFrame, gene_data: dict
     return min(calculated_height, 1600)
 
 
-def calculate_clustergram_min_height(num_rows: int, base_height: int = 600) -> int:
+def calculate_clustergram_min_height(num_rows: int, base_height: int = 750) -> int:
     """
     Calculate minimum height needed for clustergram to prevent label overlap.
 
@@ -1090,8 +1090,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     transcript_names_abbreviated = abbreviate_transcript_names(transcript_names)
     num_transcripts = len(transcript_names)
 
-    if height <= 700:
-        min_required_height = calculate_clustergram_min_height(num_transcripts, base_height=600)
+    if height <= 875:
+        min_required_height = calculate_clustergram_min_height(num_transcripts, base_height=750)
         height = max(height, min_required_height)
 
     if collapse_mode == 'tissue':
@@ -1152,24 +1152,18 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
     else:
         clustergram_data = heatmap_data
     
-    num_tissues = len(clean_tissue_names)
-    # Hide tissue labels for mouse data by default due to many cell types
-    hide_tissue_labels = (num_tissues > 30) or (show_tables == 'show') or (species == 'Mouse')
-    #left_margin = min(40, int(height * 0.1))
-    if not show_labels or (num_transcripts > 30): 
-        left_margin = 2  # Minimum left margin, just enough to prevent figure overflow
-    else:
-        # Calculate pixel width for longest label
-        max_label_len = max((len(str(name)) for name in transcript_names_abbreviated), default=10)
-        # Approximate: 7px per character, add 10px for a buffer
-        left_margin = min(70, max(20, 7 * max_label_len + 10))
-    
+    # Hide tissue labels based only on toggle state
+    hide_tissue_labels = not show_labels
+    left_margin = 2
+
     if hide_tissue_labels:
-        bottom_margin = 50
-        actual_clustergram_height = height
+        actual_clustergram_height = height + 400
+        base_bottom_margin = max(200, int(height * 0.35))
+        bottom_margin = max(0, base_bottom_margin - 400)
     else:
-        bottom_margin = max(200, int(height * 0.35))
-        actual_clustergram_height = height - 80
+        actual_clustergram_height = height + 200
+        base_bottom_margin = max(200, int(height * 0.35))
+        bottom_margin = max(0, base_bottom_margin - 150)
 
     clustergram_data_processed = pd.DataFrame(clustergram_data).copy()
 
@@ -1223,7 +1217,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             height=actual_clustergram_height,
             color_threshold={'row': 0.7, 'col': 0.7},
             hidden_labels='col' if hide_tissue_labels else None,
-            cluster='col', 
+            cluster='col',
             color_list={
                 'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
                 'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
@@ -1324,7 +1318,13 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             unique_organs.append(organ)
             unique_colors.append(color)
 
-    if show_labels and not (num_transcripts > 30):
+    # Sort organs alphabetically
+    organ_color_pairs = list(zip(unique_organs, unique_colors))
+    organ_color_pairs.sort(key=lambda x: x[0].lower())
+    unique_organs = [pair[0] for pair in organ_color_pairs]
+    unique_colors = [pair[1] for pair in organ_color_pairs]
+
+    if not hide_tissue_labels and not (num_transcripts > 30):
         # Calculate approximate width needed for y-axis labels (transcript names)
         max_transcript_label_len = max((len(str(name)) for name in transcript_names_abbreviated), default=10)
         yaxis_label_width_approx = max_transcript_label_len * 7
@@ -1408,7 +1408,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                 l=min(20, left_margin + 50),
                 r=350,
                 t=90,
-                b=calculate_bottom_margin(show_labels, transcript_names_abbreviated, hide_tissue_labels)
+                b=bottom_margin
         ),
         autosize=True,
         width=None,
@@ -1423,13 +1423,13 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             gridwidth=1
         ),
         xaxis=dict(
-            automargin=True,
-            tickangle=90 if show_labels else 0,
+            automargin=False,
+            tickangle=90 if not hide_tissue_labels else 0,
             tickfont=dict(
-                size=8 if show_labels else 1,
-                color='rgba(0,0,0,0)' if not show_labels else None
+                size=8 if not hide_tissue_labels else 1,
+                color='rgba(0,0,0,0)' if hide_tissue_labels else None
             ),
-            showticklabels=show_labels,
+            showticklabels=not hide_tissue_labels,
             showgrid=True,
             gridcolor='white',
             gridwidth=1
@@ -1782,30 +1782,30 @@ def get_tissue_to_organ_mapping(species='human'):
 def get_organ_colors():
     """Get organ color mapping based on R code"""
     organ_colors = {
-        'blood': '#FF6B6B',        # coral
-        'brain': '#4ECDC4',        # blue
-        'cartilage': '#45B7D1',    # green
-        'embryo': '#96CEB4',       # purple
-        'epithelial': '#FFEAA7',   # burlywood
-        'adrenal gland': '#DDA0DD', # pink
-        'heart': '#FF7675',        # red
-        'colon': '#A0522D',        # brown
-        'kidney': '#00CED1',       # cyan
-        'liver': '#FFD700',        # gold
-        'lung': '#87CEEB',         # lightblue
-        'muscle': '#00008B',       # darkblue
-        'ovary': '#800000',        # maroon
-        'iPS': '#808080',          # grey
-        'adipose': '#FFA500',      # orange
-        'bone': '#F5F5DC',         # beige
-        'breast': '#EE82EE',       # violet
-        'pancreas': '#90EE90',     # lightgreen
-        'prostate': '#FFFF00',     # yellow
-        'vessels': '#D2691E',      # chocolate
-        'cell line': '#A9A9A9',    # gray
+        'blood': '#FF6B6B',             # coral
+        'brain': '#4ECDC4',             # blue
+        'cartilage': '#45B7D1',         # green
+        'embryo': '#96CEB4',            # purple
+        'epithelial': '#FFEAA7',        # burlywood
+        'adrenal gland': '#DDA0DD',     # pink
+        'heart': '#FF7675',             # red
+        'colon': '#A0522D',             # brown
+        'kidney': '#00CED1',            # cyan
+        'liver': '#FFD700',             # gold
+        'lung': '#87CEEB',              # lightblue
+        'muscle': '#00008B',            # darkblue
+        'ovary': '#800000',             # maroon
+        'iPS': '#808080',               # grey
+        'adipose': '#FFA500',           # orange
+        'bone': '#F5F5DC',              # beige
+        'breast': '#EE82EE',            # violet
+        'pancreas': '#90EE90',          # lightgreen
+        'prostate': '#FFFF00',          # yellow
+        'vessels': '#D2691E',           # chocolate
+        'cell line': '#A9A9A9',         # gray
         'muscle cell line': '#A9A9A9',  # gray
-        'limb': '#DEB887',         # light orange
-        'unknown': '#CCCCCC'       # light gray for unmapped tissues
+        'limb': '#DEB887',              # light orange
+        'unknown': '#CCCCCC'            # light gray for unmapped tissues
     }
     return organ_colors
 

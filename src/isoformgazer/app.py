@@ -1297,11 +1297,11 @@ app.layout = html.Div(className='app-layout', children=[
                             dcc.Slider(
                                 id='clustergram-height-slider',
                                 className='control-slider',
-                                min=600,
-                                max=1600,
-                                step=100,
-                                value=710,
-                                marks={600: '600', 700: '', 800: '800', 900: '', 1000: '1000', 1100: '', 1200: '1200', 1300: '', 1400: '1400', 1500: '', 1600: '1600'}
+                                min=750,
+                                max=2000,
+                                step=125,
+                                value=1012,
+                                marks={750: '750', 875: '', 1000: '1000', 1125: '', 1250: '1250', 1375: '', 1500: '1500', 1625: '', 1750: '1750', 1875: '', 2000: '2000'}
                             ),
                             html.Div(className='app-controls-desc', children='Adjust the height of the clustergrams')
                         ]),
@@ -1358,7 +1358,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 html.Div('Cell Type Labels', className='app-controls-name toggle-switch-label-narrow-plus'),
                                 daq.ToggleSwitch(
                                     id='show-celltype-labels-toggle',
-                                    value=True,
+                                    value=False,
                                     label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
                                     className='toggle-switch-inline'
@@ -3131,7 +3131,7 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
 def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filtered_junction_ids, clustergram_height, species, current_height):
     """Calculate unified height for both plots and update slider and panels when gene changes"""
     if not selected_gene:
-        panel_height = max(clustergram_height + 50, 760)
+        panel_height = max(clustergram_height + 108, 1075)
         left_panel_style = {'height': f'{panel_height}px', 'minHeight': f'{panel_height}px', 'flex': '1'}
         right_panel_style = {'height': f'{panel_height}px', 'minHeight': f'{panel_height}px', 'flex': '1.2'}
         container_style = {'height': f'{clustergram_height}px', 'minHeight': f'{clustergram_height}px'}
@@ -3151,15 +3151,15 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
         num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
         num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
 
-        min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=600) if num_transcripts > 0 else 600
-        min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=600) if num_junctions > 0 else 600
+        min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=750) if num_transcripts > 0 else 750
+        min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=750) if num_junctions > 0 else 750
         min_clustergram_height = max(min_isoform_height, min_junction_height)
 
         actual_clustergram_height = max(clustergram_height, min_clustergram_height)
 
         # Panel height = clustergram height + margins
-        panel_height = actual_clustergram_height + 50
-        panel_height = max(panel_height, 760)
+        panel_height = actual_clustergram_height + 108
+        panel_height = max(panel_height, 860)
 
         left_panel_style = {
             'height': f'{panel_height}px',
@@ -3182,10 +3182,10 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
 
     except Exception as e:
         print(f"Error calculating dynamic height: {e}")
-        panel_height = max(clustergram_height + 50, 760) if clustergram_height else 760
+        panel_height = max(clustergram_height + 108, 1075) if clustergram_height else 860
         left_panel_style = {'height': f'{panel_height}px', 'minHeight': f'{panel_height}px', 'flex': '1'}
         right_panel_style = {'height': f'{panel_height}px', 'minHeight': f'{panel_height}px', 'flex': '1.2'}
-        container_style = {'height': f'{clustergram_height}px', 'minHeight': f'{clustergram_height}px'} if clustergram_height else {'height': '710px', 'minHeight': '710px'}
+        container_style = {'height': f'{clustergram_height}px', 'minHeight': f'{clustergram_height}px'} if clustergram_height else {'height': '1012px', 'minHeight': '1012px'}
 
         return current_height, left_panel_style, right_panel_style, container_style, container_style
 
@@ -3209,8 +3209,8 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
     """Adjust panel heights based on clustergram height slider and gene data"""
 
     if not selected_gene:
-        panel_height = clustergram_height + 50
-        panel_height = max(panel_height, 760)
+        panel_height = clustergram_height + 108
+        panel_height = max(panel_height, 860)
         container_height = clustergram_height
     else:
         try:
@@ -3221,21 +3221,21 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
 
-            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=600) if num_transcripts > 0 else 600
-            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=600) if num_junctions > 0 else 600
+            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=750) if num_transcripts > 0 else 750
+            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=750) if num_junctions > 0 else 750
 
             min_clustergram_height = max(min_isoform_height, min_junction_height)
             actual_clustergram_height = max(clustergram_height, min_clustergram_height)
 
             # panel height = clustergram height + margins
-            panel_height = actual_clustergram_height + 50
-            panel_height = max(panel_height, 760)
+            panel_height = actual_clustergram_height + 108
+            panel_height = max(panel_height, 1075)
 
             container_height = actual_clustergram_height
 
         except Exception as e:
             print(f"Error calculating panel height: {e}")
-            panel_height = max(clustergram_height + 50, 760)
+            panel_height = max(clustergram_height + 108, 1075)
             container_height = clustergram_height
 
     left_panel_style = {
@@ -3289,8 +3289,8 @@ def update_junction_clustergram(selected_gene, colorscale,
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
 
-            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=600) if num_transcripts > 0 else 600
-            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=600) if num_junctions > 0 else 600
+            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=750) if num_transcripts > 0 else 750
+            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=750) if num_junctions > 0 else 750
 
             min_clustergram_height = max(min_isoform_height, min_junction_height)
             heatmap_height = max(clustergram_height, min_clustergram_height)
@@ -3464,8 +3464,8 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
 
-            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=600) if num_transcripts > 0 else 600
-            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=600) if num_junctions > 0 else 600
+            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=750) if num_transcripts > 0 else 750
+            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=750) if num_junctions > 0 else 750
 
             min_clustergram_height = max(min_isoform_height, min_junction_height)
             heatmap_height = max(clustergram_height, min_clustergram_height)
