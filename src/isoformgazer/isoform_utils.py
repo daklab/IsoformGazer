@@ -2098,13 +2098,103 @@ def calculate_single_isoform_hash(tstarts: list, blocksizes: list) -> str:
     return f"{s_id}:{e_id}"
 
 
+def sort_GTF(gtf_content: str) -> str:
+    """
+    Sorts GTF content so that each transcript feature is immediately followed by its exon features,
+    grouped by transcript_id in sorted order. 
+    
+    This ensures the GTF is in the proper format expected by parse_gtf_and_calculate_hashes().
+
+    Algorithm: 
+    1. Set aside header lines (assumed to start with '##' and occur at beginning of file) 
+    2. Group feature lines by transcript_id
+    3. Sort transcript groups by transcript_id
+    4. Within each group, order the transcript feature first, followed by all exon features
+    5. Gene features are placed after headers, but before transcripts
+
+    Parameters:
+        gtf_content (str): GTF file content as string
+
+    Returns:
+        str: Sorted GTF content with transcripts and their exons grouped
+    """
+    lines = gtf_content.strip().split('\n')
+    header_lines = []
+    gene_lines = []
+    transcript_groups = {}  # Maps transcript_id -> {'transcript': line, 'exons': [lines]}
+
+    # 1) Collect all lines and group by transcript_id
+    for line in lines:
+        if line.startswith('##'):
+            header_lines.append(line)
+            continue
+
+        if not line.strip():
+            continue
+
+        fields = line.split('\t')
+        if len(fields) < 9:
+            continue
+
+        feature_type = fields[2]
+
+        if feature_type == 'gene':
+            gene_lines.append(line)
+            continue
+
+        if feature_type not in ['transcript', 'exon']:
+            continue
+
+        # Extract transcript_id from attributes
+        attributes = fields[8]
+        transcript_id = None
+        for attr in attributes.split(';'):
+            attr = attr.strip()
+            if not attr:
+                continue
+            if attr.startswith('transcript_id'):
+                try:
+                    transcript_id = extract_gtf_attr_val(attr)
+                    break
+                except (ValueError, IndexError):
+                    continue
+
+        if not transcript_id:
+            continue
+
+        # Initialize group if needed
+        if transcript_id not in transcript_groups:
+            transcript_groups[transcript_id] = {'transcript': None, 'exons': []}
+
+        if feature_type == 'transcript':
+            transcript_groups[transcript_id]['transcript'] = line
+
+        elif feature_type == 'exon':
+            transcript_groups[transcript_id]['exons'].append(line)
+
+    # 2) Reconstruct GTF in sorted order
+    sorted_lines = []
+    sorted_lines.extend(header_lines)
+    sorted_lines.extend(gene_lines)
+
+    for transcript_id in sorted(transcript_groups.keys()):
+        group = transcript_groups[transcript_id]
+
+        if group['transcript']:
+            sorted_lines.append(group['transcript'])
+
+        sorted_lines.extend(group['exons'])
+
+    return '\n'.join(sorted_lines)
+
+
 def parse_gtf_and_calculate_hashes(gtf_content: str) -> dict:
     """
     Parse GTF content and calculate hash IDs for all isoforms.
     Uses sequential parsing logic, i.e. assumes that exons contained
     within a transcript follow that transcript feature line.
 
-    Transcripts with identical splice junctions (same internal structure) 
+    Transcripts with identical splice junctions (same internal structure)
     are collapsed and share the same hash_id, but may have different TSS and TES.
 
     Parameters:
@@ -2117,6 +2207,9 @@ def parse_gtf_and_calculate_hashes(gtf_content: str) -> dict:
             'has_merges': Boolean indicating if any merges occurred
         }
     """
+    # Always ensure GTF is sorted first before proceeding
+    gtf_content = sort_GTF(gtf_content)
+
     results = []
     transcripts = []
     current_transcript = None
