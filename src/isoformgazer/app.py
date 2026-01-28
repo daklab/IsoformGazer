@@ -4204,7 +4204,7 @@ def download_hash_results(download_clicks, stored_data):
 
             gencode_query = """
                 SELECT DISTINCT transcript_id FROM gencode_gtf
-                WHERE transcript_id LIKE :transcript_base
+                WHERE transcript_id LIKE :transcript_id
                 ORDER BY transcript_id
                 LIMIT 1
             """
