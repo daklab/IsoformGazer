@@ -4374,18 +4374,18 @@ def download_junction_psi(n_clicks, full_data, selected_gene, species):
             raise PreventUpdate
 
         junction_ids = table_df['junction_id'].unique().tolist()
-        conn = sqlite3.connect(db_path)
+        db_config = get_db_config()
         table_prefix = get_table_prefix(species)
 
-        placeholders = ','.join(['?'] * len(junction_ids))
+        placeholders = ','.join([f':jid_{i}' for i in range(len(junction_ids))])
         query = f"""
         SELECT junction_id, junction_id_index, cell_type, n_cells, psi, atse_count, junction_count
         FROM {table_prefix}junction_psis
         WHERE junction_id IN ({placeholders})
         ORDER BY junction_id, cell_type
         """
-        psi_data = pd.read_sql_query(query, conn, params=junction_ids)
-        conn.close()
+        params = {f'jid_{i}': junction_ids[i] for i in range(len(junction_ids))}
+        psi_data = db_config.execute_query(query, params=params)
 
         if psi_data.empty:
             raise PreventUpdate

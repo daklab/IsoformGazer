@@ -216,7 +216,7 @@ def get_unique_organs_from_junctions(db_path: str, species: str = 'Human') -> tu
     Returns:
         Tuple of (unique_organs, unique_colors) - lists of unique organ names and their colors
     """
-    conn = sqlite3.connect(db_path)
+    db_config = get_db_config()
     table_prefix = get_table_prefix(species)
 
     # Query to get unique cell types from junction_psis table
@@ -227,8 +227,7 @@ def get_unique_organs_from_junctions(db_path: str, species: str = 'Human') -> tu
     ORDER BY cell_type
     """
 
-    result = pd.read_sql_query(query, conn)
-    conn.close()
+    result = db_config.execute_query(query)
 
     if result.empty:
         return [], []
