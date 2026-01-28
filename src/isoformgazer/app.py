@@ -1932,14 +1932,23 @@ app.layout = html.Div(className='app-layout', children=[
                         ]),
                         html.Div(children=[
                             dbc.Button(
-                                "Download CSV",
+                                "Download Expression Data",
+                                id='download-left-expression-button',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                style={'marginRight': '8px'}
+                            ),
+                            dcc.Download(id='download-left-expression'),
+                            dbc.Button(
+                                "Download Master Table CSV",
                                 id='download-left-table-button',
                                 color="secondary",
                                 size="sm",
                                 className="clear-filters-btn"
                             ),
                             dcc.Download(id='download-left-table')
-                        ], style={'marginLeft': 'auto'})
+                        ], style={'marginLeft': 'auto', 'display': 'flex', 'gap': '8px'})
                     ]),
                     # Isoform table filter error popup
                     html.Div(
@@ -1970,14 +1979,23 @@ app.layout = html.Div(className='app-layout', children=[
                         ]),
                         html.Div(children=[
                             dbc.Button(
-                                "Download CSV",
+                                "Download PSI Data",
+                                id='download-right-psi-button',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                style={'marginRight': '8px'}
+                            ),
+                            dcc.Download(id='download-right-psi'),
+                            dbc.Button(
+                                "Download Master Table CSV",
                                 id='download-right-table-button',
                                 color="secondary",
                                 size="sm",
                                 className="clear-filters-btn"
                             ),
                             dcc.Download(id='download-right-table')
-                        ], style={'marginLeft': 'auto'})
+                        ], style={'marginLeft': 'auto', 'display': 'flex', 'gap': '8px'})
                     ]),
                     # Junction table filter error popup
                     html.Div(
@@ -4218,6 +4236,108 @@ def download_junction_table(n_clicks, full_data, selected_gene):
 
     except Exception as e:
         print(f"Error downloading junction table: {e}")
+        raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('download-left-expression', 'data'),
+    dash.dependencies.Input('download-left-expression-button', 'n_clicks'),
+    dash.dependencies.State('isoform-full-data-store', 'data'),
+    dash.dependencies.State('gene-search-dropdown', 'value'),
+    dash.dependencies.State('isoform-data-type-switch', 'value'),
+    dash.dependencies.State('species-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def download_isoform_expression(n_clicks, full_data, selected_gene, data_type_selection, species):
+    """Download expression data (TPM, logTPM, or ratio) for current isoform table view"""
+    if not n_clicks or not full_data or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        if data_type_selection == 'ratio':
+            data_type = 'ratio'
+            data_label = 'ratio'
+
+        elif data_type_selection == 'log_tpm':
+            data_type = 'log_tpm'
+            data_label = 'logTPM'
+
+        else:
+            data_type = 'tpm'
+            data_label = 'TPM'
+
+        expression_data = load_expression_data(
+            db_path=db_path,
+            gene_name=selected_gene,
+            data_type=data_type,
+            species=species
+        )
+
+        if expression_data.empty:
+            raise PreventUpdate
+
+        table_df = pd.DataFrame(full_data)
+        if 'id' not in table_df.columns:
+            raise PreventUpdate
+
+        filtered_expression = expression_data[expression_data['id'].isin(table_df['id'])].copy()
+        if 'transcript' in table_df.columns:
+            id_to_transcript = dict(zip(table_df['id'], table_df['transcript']))
+            filtered_expression.insert(0, 'transcript_id', filtered_expression['id'].map(id_to_transcript))
+
+        # Remove trans_id col from export (duplicate of transcript_id)
+        if 'trans_id' in filtered_expression.columns:
+            filtered_expression = filtered_expression.drop(columns=['trans_id'])
+
+        filename = f"{selected_gene}_isoforms_{data_label}_expression.csv"
+        return dcc.send_data_frame(filtered_expression.to_csv, filename, index=False)
+
+    except Exception as e:
+        print(f"Error downloading isoform expression data: {e}")
+        raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('download-right-psi', 'data'),
+    dash.dependencies.Input('download-right-psi-button', 'n_clicks'),
+    dash.dependencies.State('junction-full-data-store', 'data'),
+    dash.dependencies.State('gene-search-dropdown', 'value'),
+    dash.dependencies.State('species-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def download_junction_psi(n_clicks, full_data, selected_gene, species):
+    """Download PSI data for current junction table view"""
+    if not n_clicks or not full_data or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        # Get the junction IDs from the current table view only
+        table_df = pd.DataFrame(full_data)
+        if 'junction_id' not in table_df.columns:
+            raise PreventUpdate
+
+        junction_ids = table_df['junction_id'].unique().tolist()
+        conn = sqlite3.connect(db_path)
+        table_prefix = get_table_prefix(species)
+
+        placeholders = ','.join(['?'] * len(junction_ids))
+        query = f"""
+        SELECT junction_id, junction_id_index, cell_type, n_cells, psi, atse_count, junction_count
+        FROM {table_prefix}junction_psis
+        WHERE junction_id IN ({placeholders})
+        ORDER BY junction_id, cell_type
+        """
+        psi_data = pd.read_sql_query(query, conn, params=junction_ids)
+        conn.close()
+
+        if psi_data.empty:
+            raise PreventUpdate
+
+        filename = f"{selected_gene}_junctions_psi_data.csv"
+        return dcc.send_data_frame(psi_data.to_csv, filename, index=False)
+
+    except Exception as e:
+        print(f"Error downloading junction PSI data: {e}")
         raise PreventUpdate
 
 
