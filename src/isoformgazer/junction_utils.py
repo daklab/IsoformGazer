@@ -218,10 +218,10 @@ def get_unique_organs_from_junctions(db_path: str, species: str = 'Human') -> tu
     conn = sqlite3.connect(db_path)
     table_prefix = get_table_prefix(species)
 
-    # Query to get unique cell types
+    # Query to get unique cell types from junction_psis table
     query = f"""
     SELECT DISTINCT cell_type
-    FROM {table_prefix}junctions
+    FROM {table_prefix}junction_psis
     WHERE cell_type IS NOT NULL
     ORDER BY cell_type
     """
@@ -261,9 +261,10 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     """Create summary-level clustergram across all cell types and top junctions"""
     conn = sqlite3.connect(db_path)
     table_prefix = get_table_prefix(species)
+    # Query junction_psis table for PSI values per junction-cell_type
     query = f"""
     SELECT cell_type, junction_id, AVG(psi) as avg_psi, COUNT(*) as n_observations
-    FROM {table_prefix}junctions
+    FROM {table_prefix}junction_psis
     WHERE psi IS NOT NULL
     GROUP BY cell_type, junction_id
     HAVING n_observations >= 5
@@ -513,20 +514,24 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         conn.close()
         return create_empty_clustergram_message(f"No gene_id found for gene: {gene_name}")
 
+    # Join junctions master table with junction_psis table to get PSI values per cell type
     query = f"""
-    SELECT cell_type, junction_id, psi, n_cells, event_id, gene_name, junction_average_psi
-    FROM {table_prefix}junctions
-    WHERE gene_id LIKE ? AND psi IS NOT NULL
+    SELECT jp.cell_type, jp.junction_id, jp.psi, jp.n_cells,
+           jp.atse_count, jp.junction_count,
+           j.event_id, j.gene_name, j.junction_average_psi
+    FROM {table_prefix}junction_psis jp
+    JOIN {table_prefix}junctions j ON jp.junction_id = j.junction_id
+    WHERE j.gene_id LIKE ? AND jp.psi IS NOT NULL
     """
     if filtered_junction_ids:
         filtered_ids_str = [str(jid) for jid in filtered_junction_ids]
         placeholders = ','.join(['?'] * len(filtered_ids_str))
-        query += f" AND junction_id IN ({placeholders})"
+        query += f" AND jp.junction_id IN ({placeholders})"
         params = [f"{gene_id}%"] + filtered_ids_str
     else:
         params = [f"{gene_id}%"]
 
-    query += " ORDER BY junction_average_psi DESC NULLS LAST, junction_id"
+    query += " ORDER BY j.junction_average_psi DESC NULLS LAST, jp.junction_id"
     gene_vals = pd.read_sql_query(query, conn, params=params)
     conn.close()
 

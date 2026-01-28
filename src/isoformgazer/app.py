@@ -334,19 +334,27 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
         junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_aligned_20260105_170740_withmappings.csv")
     if species_name == "Mouse":
         junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_20260105_171037_withmappings.csv")
-    
+
     # Need to count total lines (minus header) to estimate progress
     with open(junction_file, 'r') as f:
-        total_lines = sum(1 for _ in f) - 1 
-    
+        total_lines = sum(1 for _ in f) - 1
+
     chunk_size = 100000
     estimated_chunks = (total_lines // chunk_size) + 1
 
     print(f"Loading {total_lines:,} rows of {species_name} junction data in groupings of {chunk_size:,} rows...")
+
+    # Create separate tables for junction master data and PSI data
+    junctions_table = f"{table_prefix}junctions"
+    junction_psis_table = f"{table_prefix}junction_psis"
+
+    # Temporary table to hold all raw data
+    temp_table = f"{table_prefix}junctions_temp"
+
     first_chunk = True
     row_count = 0
 
-    column_order = [
+    master_column_order = [
         'gene_symbol',
         'gene_id',
         'event_id',
@@ -354,15 +362,19 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
         'junction_id_index',
         'atse_count',
         'junction_count',
-        'cell_type',
-        'n_cells',
-        'psi',
         'junction_average_psi',
         'matched_transcript_ids'
     ]
 
-    junctions_table = f"{table_prefix}junctions"
-    with tqdm(desc=f"Writing {species_name} junction master table data to local database",
+    psi_column_order = [
+        'junction_id',
+        'junction_id_index',
+        'cell_type',
+        'n_cells',
+        'psi'
+    ]
+
+    with tqdm(desc=f"Writing {species_name} junction data to temporary table",
               unit="chunk",
               total=estimated_chunks) as chunk_pbar:
 
@@ -372,17 +384,11 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
             if 'gene_symbol' in chunk.columns:
                 chunk['gene_symbol'] = chunk['gene_symbol'].astype(str).str.upper()
 
-            available_columns = [col for col in column_order if col in chunk.columns]
-            remaining_columns = [col for col in chunk.columns if col not in column_order]
-
-            final_column_order = available_columns + remaining_columns
-            chunk = chunk[final_column_order]
-
             if first_chunk:
-                chunk.to_sql(junctions_table, conn, if_exists='replace', index=False)
+                chunk.to_sql(temp_table, conn, if_exists='replace', index=False)
                 first_chunk = False
             else:
-                chunk.to_sql(junctions_table, conn, if_exists='append', index=False)
+                chunk.to_sql(temp_table, conn, if_exists='append', index=False)
 
             row_count += len(chunk)
             chunk_pbar.update(1)
@@ -392,9 +398,73 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
                 'chunk': f"{i+1}/{estimated_chunks}"
             })
 
-    print(f" Processed all {row_count:,} rows from {species_name} junction master table!")
-    # rename 'gene_symbol' to 'gene_name' for more consistency in junctions table (match isoforms table)
-    conn.execute(f"ALTER TABLE {junctions_table} RENAME COLUMN gene_symbol TO gene_name")
+    print(f" Loaded all {row_count:,} rows from {species_name} junction file into temporary table!")
+
+    # Rename gene_symbol to gene_name
+    conn.execute(f"ALTER TABLE {temp_table} RENAME COLUMN gene_symbol TO gene_name")
+
+    # Create junction master table (one row per junction)
+    print(f"Creating {species_name} junction master table...")
+    conn.execute(f"""
+        CREATE TABLE {junctions_table} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gene_name TEXT,
+            gene_id TEXT,
+            event_id TEXT,
+            junction_id TEXT,
+            junction_id_index INTEGER,
+            junction_average_psi REAL,
+            matched_transcript_ids TEXT
+        )
+    """)
+
+    conn.execute(f"""
+        INSERT INTO {junctions_table} (
+            gene_name,
+            gene_id,
+            event_id,
+            junction_id,
+            junction_id_index,
+            junction_average_psi,
+            matched_transcript_ids
+        )
+        SELECT DISTINCT
+            gene_name,
+            gene_id,
+            event_id,
+            junction_id,
+            junction_id_index,
+            junction_average_psi,
+            matched_transcript_ids
+        FROM {temp_table}
+    """)
+
+    master_count = conn.execute(f"SELECT COUNT(*) FROM {junctions_table}").fetchone()[0]
+    print(f" Created junction master table with {master_count:,} unique junctions")
+
+    # Create junction PSI table (one row per junction-cell_type pair)
+    print(f"Creating {species_name} junction PSI table...")
+    conn.execute(f"""
+        CREATE TABLE {junction_psis_table} AS
+        SELECT
+            junction_id,
+            junction_id_index,
+            cell_type,
+            n_cells,
+            psi,
+            atse_count,
+            junction_count
+        FROM {temp_table}
+        WHERE cell_type IS NOT NULL
+    """)
+
+    psi_count = conn.execute(f"SELECT COUNT(*) FROM {junction_psis_table}").fetchone()[0]
+    print(f" Created junction PSI table with {psi_count:,} junction-cell_type pairs")
+
+    # Drop temporary table
+    conn.execute(f"DROP TABLE {temp_table}")
+
+    print(f" Processed all data from {species_name} junction file!")
     print()
 
     ########################################################
@@ -620,16 +690,25 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
 
     print(f"Creating optimized {species_name} database indices...")
     indices = [
+        # Junction master table indexes
         (f"{table_prefix}idx_junctions_gene", junctions_table, "(gene_name, gene_id)"),
         (f"{table_prefix}idx_junctions_gene_name", junctions_table, "(gene_name)"),
+        (f"{table_prefix}idx_junctions_gene_id", junctions_table, "(gene_id)"),
+        (f"{table_prefix}idx_junctions_junction_id", junctions_table, "(junction_id)"),
+        (f"{table_prefix}idx_junctions_avg_psi", junctions_table, "(junction_average_psi)"),
+        # Junction PSI table indexes
+        (f"{table_prefix}idx_junction_psis_junction_id", junction_psis_table, "(junction_id)"),
+        (f"{table_prefix}idx_junction_psis_cell_type", junction_psis_table, "(cell_type)"),
+        (f"{table_prefix}idx_junction_psis_psi", junction_psis_table, "(psi)"),
+        (f"{table_prefix}idx_junction_psis_junction_cell", junction_psis_table, "(junction_id, cell_type)"),
+        # Isoform table indexes
         (f"{table_prefix}idx_isoforms_gene", isoforms_table, "(gene_name, gene_id)"),
         (f"{table_prefix}idx_isoforms_gene_name", isoforms_table, "(gene_name)"),
         (f"{table_prefix}idx_isoforms_id", isoforms_table, "(id)"),
+        # PSL table indexes
         (f"{table_prefix}idx_psl_gene", psl_table, "(gene_id, id)"),
         (f"{table_prefix}idx_psl_id", psl_table, "(id)"),
-        (f"{table_prefix}idx_junctions_junction_id", junctions_table, "(junction_id)"),
-        (f"{table_prefix}idx_junctions_psi", junctions_table, "(gene_name, psi)"),
-        (f"{table_prefix}idx_junctions_cell_type", junctions_table, "(cell_type)"),
+        # TPM and ratio table indexes
         (f"{table_prefix}idx_tpm_id", tpm_table, "(id)"),
         (f"{table_prefix}idx_ratio_id", ratio_table, "(id)")
     ]
@@ -893,7 +972,7 @@ left_data_table = dash_table.DataTable(
 right_data_table = dash_table.DataTable(
     id='right_data_table',
     columns=get_master_table_columns(db_path, table_name='junctions'),
-    hidden_columns=['id', 'matched_transcript_ids', 'junction_average_psi'],
+    hidden_columns=['id', 'matched_transcript_ids'],
     data=[],
     editable=False,
     filter_action="custom",
