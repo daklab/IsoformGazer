@@ -16,7 +16,7 @@ from src.isoformgazer.db_config import get_db_config
 from src.isoformgazer.data_utils import apply_distance_preprocessing, get_matplotlib_colormap, get_table_prefix
 from src.isoformgazer.isoform_utils import (load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name,
                            calculate_dynamic_structure_plot_height, calculate_clustergram_min_height,
-                           get_tissue_tpm_for_isoforms, get_organ_tpm_for_isoforms)
+                           get_tissue_tpm_for_isoforms, get_organ_tpm_for_isoforms, get_organ_colors)
 from src.isoformgazer.performance_utils import cached, cached_transcript_structure_processing, plot_optimizer
 
 ###################################################################
@@ -65,15 +65,207 @@ def wrap_colorbar_title(name_text, label_text, char_limit=15):
     return '<br>'.join(lines)
 
 ###################################################################
+# ORGAN EXTRACTION AND ANNOTATION UTILITIES FOR JUNCTIONS
+###################################################################
+def get_junction_organ_colors():
+    """
+    Get organ color mapping for junction data.
+    Uses the same colors as isoform clustergram where organs overlap,
+    and adds new distinct colors for junction-specific organs.
+    """
+    # Get base organ colors from isoform_utils
+    base_colors = get_organ_colors()
+
+    # Junction-specific organ color mapping
+    # Organs that match isoform organs use the same color
+    junction_organ_colors = {
+        # Human & Mouse shared organs (using isoform clustergram mapped colors where available)
+        'bladder': base_colors.get('bladder', '#9370DB'),  # Medium purple
+        'blood': base_colors.get('blood', '#FF6B6B'),      # coral
+        'brain': base_colors.get('brain', '#4ECDC4'),      # blue
+        'heart': base_colors.get('heart', '#FF7675'),      # red
+        'kidney': base_colors.get('kidney', '#00CED1'),    # cyan
+        'liver': base_colors.get('liver', '#FFD700'),      # gold
+        'lung': base_colors.get('lung', '#87CEEB'),        # lightblue
+        'marrow': base_colors.get('bone', '#F5F5DC'),      # beige (marrow related to bone)
+        'skin': '#FFB6C1',                                  # light pink
+        'spleen': '#DC143C',                                # crimson
+        'thymus': '#8A2BE2',                                # blue violet
+        'tongue': '#FF69B4',                                # hot pink
+        'trachea': '#20B2AA',                               # light sea green
+
+        # Human-specific organs
+        'eye': '#00BFFF',                                   # deep sky blue
+        'fat': base_colors.get('adipose', '#FFA500'),      # orange
+        'large intestine': '#D2691E',                       # chocolate
+        'limb muscle': base_colors.get('muscle', '#00008B'), # dark blue
+        'lymph node': '#BA55D3',                            # medium orchid
+        'mammary': base_colors.get('breast', '#EE82EE'),   # violet
+        'muscle': base_colors.get('muscle', '#00008B'),    # dark blue
+        'prostate': base_colors.get('prostate', '#FFFF00'), # yellow
+        'salivary gland': '#DDA0DD',                        # plum
+        'small intestine': '#90EE90',                       # light green
+        'uterus': '#FF1493',                                # deep pink
+        'vasculature': base_colors.get('vessels', '#D2691E'), # chocolate
+        # Mouse-specific organs
+        'aorta': base_colors.get('vessels', '#D2691E'),    # chocolate (vessels)
+        'bat': '#FF8C00',                                   # dark orange (brown adipose tissue)
+        'diaphragm': '#4682B4',                             # steel blue
+        'gat': '#FFA500',                                   # orange (gonadal adipose tissue)
+        'limb': base_colors.get('muscle', '#00008B'),      # dark blue (limb muscle)
+        'mat': '#FF7F50',                                   # coral (mesenteric adipose tissue)
+        'mammary gland': base_colors.get('breast', '#EE82EE'), # violet
+        'pancreas': base_colors.get('pancreas', '#90EE90'), # light green
+        'scat': '#FFD700',                                  # gold (subcutaneous adipose tissue)
+        # Unknown/unmapped
+        'unknown': '#CCCCCC'                                # light gray
+    }
+
+    return junction_organ_colors
+
+
+def extract_organ_from_cell_type(cell_type):
+    """
+    Extract organ name from cell_type column.
+    Cell_Type format: "Organ_CellType" (e.g., "Skin_T_Cell", "Large_Intestine_B_Cell")
+    Handles multi-word organ names like "Large Intestine", "Limb Muscle", etc.
+    Returns the organ name in lowercase with spaces (e.g., "large intestine", "limb muscle")
+    """
+    if pd.isna(cell_type) or not cell_type or cell_type == '':
+        return 'unknown'
+
+    # Convert to string and split by underscore
+    parts = str(cell_type).split('_')
+
+    if len(parts) < 2:
+        return 'unknown'
+
+    # Multi-word organ names to check for (in order of length, longest first)
+    # This ensures "Large_Intestine" is matched before just "Large"
+    multi_word_organs = [
+        'large_intestine',
+        'small_intestine',
+        'limb_muscle',
+        'lymph_node',
+        'salivary_gland',
+        'mammary_gland'
+    ]
+    cell_type_lower = cell_type.lower()
+    for multi_organ in multi_word_organs:
+        if cell_type_lower.startswith(multi_organ + '_'):
+            return multi_organ.replace('_', ' ')
+
+    # Special case: handle typo "lympha" -> map to "lymph node"
+    if cell_type_lower.startswith('lympha_node_'):
+        return 'lymph node'
+    #elif cell_type_lower.startswith('BAT'):
+    #    return 'brown adipose tissue'
+    #elif cell_type_lower.startswith('GAT'):
+    #    return 'gonadal adipose tissue'
+    #elif cell_type_lower.startswith('SCAT'):
+    #    return ''
+
+    # Single word organ: just take the first part
+    organ = parts[0].strip().lower()
+    # handle typo "lympha" (single word) -> "lymph node"
+    if organ == 'lympha':
+        return 'lymph node'
+    # abbreviation "si" -> "small intestine"
+    if organ == 'si':
+        return 'small intestine'
+
+    return organ
+
+
+def create_junction_organ_annotation_bar(cell_type_cols, species='Human'):
+    """
+    Create organ color annotation bar for junction clustergram.
+    Similar to create_organ_annotation_bar in isoform_utils but for junction cell types.
+
+    Args:
+        cell_type_cols: List of cell type column names (format: "Organ_CellType")
+        species: 'Human' or 'Mouse'
+
+    Returns:
+        Tuple of (organ_list, color_list) where each list corresponds to the input cell_type_cols
+    """
+    organ_colors = get_junction_organ_colors()
+
+    organ_list = []
+    color_list = []
+
+    for cell_type in cell_type_cols:
+        organ = extract_organ_from_cell_type(cell_type)
+        color = organ_colors.get(organ, '#CCCCCC')  # Default to light gray for unknown organs
+        organ_list.append(organ)
+        color_list.append(color)
+
+    return organ_list, color_list
+
+
+@cached(cache_timeout=300)
+def get_unique_organs_from_junctions(db_path: str, species: str = 'Human') -> tuple:
+    """
+    Get unique organs and their colors from the junctions table.
+    Cached to avoid repeated database queries.
+
+    Args:
+        db_path: Path to the database
+        species: 'Human' or 'Mouse'
+
+    Returns:
+        Tuple of (unique_organs, unique_colors) - lists of unique organ names and their colors
+    """
+    conn = sqlite3.connect(db_path)
+    table_prefix = get_table_prefix(species)
+
+    # Query to get unique cell types from junction_psis table
+    query = f"""
+    SELECT DISTINCT cell_type
+    FROM {table_prefix}junction_psis
+    WHERE cell_type IS NOT NULL
+    ORDER BY cell_type
+    """
+
+    result = pd.read_sql_query(query, conn)
+    conn.close()
+
+    if result.empty:
+        return [], []
+
+    cell_types = result['cell_type'].tolist()
+    organ_list, color_list = create_junction_organ_annotation_bar(cell_types, species=species)
+
+    # Get unique organs and their colors (preserve order of first appearance)
+    unique_organs = []
+    unique_colors = []
+    seen_organs = set()
+
+    for organ, color in zip(organ_list, color_list):
+        if organ not in seen_organs:
+            unique_organs.append(organ)
+            unique_colors.append(color)
+            seen_organs.add(organ)
+
+    # Sort organs alphabetically
+    organ_color_pairs = list(zip(unique_organs, unique_colors))
+    organ_color_pairs.sort(key=lambda x: x[0].lower())
+    unique_organs = [pair[0] for pair in organ_color_pairs]
+    unique_colors = [pair[1] for pair in organ_color_pairs]
+
+    return unique_organs, unique_colors
+
+###################################################################
 # VISUALIZATION METHODS
 ###################################################################
 def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_tables='show', show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete', show_gridlines=False, species="Human"):
     """Create summary-level clustergram across all cell types and top junctions"""
     db_config = get_db_config()
     table_prefix = get_table_prefix(species)
+    # Query junction_psis table for PSI values per junction-cell_type
     query = f"""
     SELECT cell_type, junction_id, AVG(psi) as avg_psi, COUNT(*) as n_observations
-    FROM {table_prefix}junctions
+    FROM {table_prefix}junction_psis
     WHERE psi IS NOT NULL
     GROUP BY cell_type, junction_id
     HAVING n_observations >= 5
@@ -115,20 +307,29 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     # Apply preprocessing based on distance metric
     if distance_metric in ['correlation', 'seuclidean', 'cosine']:
         psi_matrix_filtered = apply_distance_preprocessing(psi_matrix_filtered, distance_metric)
-    
-    left_margin = max(150, int(height * 0.25))
-    hide_junction_labels = (show_tables == 'show')
-    
+
+    # Get organ colors for column annotation
+    cell_type_labels = list(psi_matrix_filtered.columns)
+    organ_list, color_list = create_junction_organ_annotation_bar(cell_type_labels, species=species)
+
+    # Hide cell type labels based only on toggle state
+    hide_celltype_labels = not show_celltype_labels
+    if hide_celltype_labels:
+        actual_clustergram_height = height + 400
+    else:
+        actual_clustergram_height = height + 200
+
     clustergram = dash_bio.Clustergram(
         data=psi_matrix_filtered.values,
-        column_labels=list(psi_matrix_filtered.columns),
+        column_labels=cell_type_labels,
         row_labels=list(psi_matrix_filtered.index),
-        height=height,
+        column_colors=color_list,
+        height=actual_clustergram_height,
         color_threshold={
             'row': 0.5,
             'col': 0.5
         },
-        hidden_labels='col' if (hide_junction_labels or not show_celltype_labels) else None, 
+        hidden_labels='col' if hide_celltype_labels else None,
         cluster='all',
         color_list={
             'row': ['#636EFA', '#EF553B', '#00CC96'],
@@ -153,7 +354,10 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             heatmap_trace.xgap = 1
             heatmap_trace.ygap = 1
 
-    bottom_margin = 60 if hide_junction_labels else 120
+    if hide_celltype_labels:
+        bottom_margin = max(0, 120 - 400)
+    else:
+        bottom_margin = max(0, 120 - 150)
 
     clustergram.update_layout(
         title={
@@ -162,16 +366,34 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             'xanchor': 'center',
             'font': {'size': 16}
         },
-        margin=dict(l=MIN_MARGIN,
-                    r=MIN_MARGIN,
-                    t=MAX_MARGIN,
+        margin=dict(l=20,
+                    r=350,
+                    t=90,
                     b=bottom_margin),
         autosize=True,
         width=None,
         height=height,
-        plot_bgcolor='white',
-        yaxis=dict(automargin=True),
-        xaxis=dict(automargin=True)
+        uirevision='constant',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='white',
+        yaxis=dict(
+            automargin=True,
+            showgrid=True,
+            gridcolor='white',
+            gridwidth=1
+        ),
+        xaxis=dict(
+            automargin=False,
+            tickangle=90 if not hide_celltype_labels else 0,
+            tickfont=dict(
+                size=8 if not hide_celltype_labels else 1,
+                color='rgba(0,0,0,0)' if hide_celltype_labels else None
+            ),
+            showticklabels=not hide_celltype_labels,
+            showgrid=True,
+            gridcolor='white',
+            gridwidth=1
+        )
     )
 
     if len(clustergram.data) > 0:
@@ -193,6 +415,46 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             '<b>Cell Type</b>: %{x}<br>'
             '<b>PSI</b>: %{customdata}<br>'
             '<extra></extra>'
+        )
+
+    unique_organs, unique_colors = get_unique_organs_from_junctions(db_path, species=species)
+
+    colorbar_x_paper = 1.0
+    colorbar_pixel_offset = 150  
+    colorbar_y_position = 1.005
+    pixels_between_items = 25
+    vertical_offset_pixels = 7
+    base_spacing = 30
+    legend_pixel_offset = colorbar_pixel_offset + 20 + base_spacing
+
+    clustergram.add_annotation(
+        x=colorbar_x_paper,
+        y=colorbar_y_position,
+        xref='paper',
+        yref='paper',
+        xshift=legend_pixel_offset,
+        yshift=-vertical_offset_pixels,
+        text="Organ Legend",
+        showarrow=False,
+        xanchor="left",
+        yanchor="top",
+        font=dict(size=16, family="Open Sans, verdana, arial, sans-serif")
+    )
+
+    for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
+        organ_display = organ.lower()
+        clustergram.add_annotation(
+            x=colorbar_x_paper,
+            y=colorbar_y_position,
+            xref='paper',
+            yref='paper',
+            xshift=legend_pixel_offset,
+            yshift=-(vertical_offset_pixels + 30 + (i * pixels_between_items)), 
+            text=f'<span style="color:{color}; font-size:16px">&#9632;</span> {organ_display}',
+            showarrow=False,
+            xanchor='left',
+            yanchor='top',
+            font=dict(size=13)
         )
 
     return clustergram
@@ -255,20 +517,27 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     if not gene_id:
         return create_empty_clustergram_message(f"No gene_id found for gene: {gene_name}")
 
+    # Join junctions master table with junction_psis table to get PSI values per cell type
     query = f"""
-    SELECT cell_type, junction_id, psi, n_cells, event_id, gene_name, junction_average_psi
-    FROM {table_prefix}junctions
-    WHERE gene_id LIKE :gene_id AND psi IS NOT NULL
+    SELECT jp.cell_type, jp.junction_id, jp.psi, jp.n_cells, jp.atse_count, jp.junction_count, j.event_id, j.gene_name, j.junction_average_psi
+    FROM {table_prefix}junction_psis jp
+    JOIN {table_prefix}junctions j on jp.junction_id = j.junction_id
+    WHERE j.gene_id LIKE :gene_id AND jp.psi IS NOT NULL
     """
+    #query = f"""
+    #SELECT cell_type, junction_id, psi, n_cells, event_id, gene_name, junction_average_psi
+    #FROM {table_prefix}junctions
+    #WHERE gene_id LIKE :gene_id AND psi IS NOT NULL
+    #"""
     if filtered_junction_ids:
         filtered_ids_str = [str(jid) for jid in filtered_junction_ids]
         placeholders = ','.join([f':jid_{i}' for i in range(len(filtered_ids_str))])
-        query += f" AND junction_id IN ({placeholders})"
+        query += f" AND jp.junction_id IN ({placeholders})"
         params = {'gene_id': f"{gene_id}%", **{f'jid_{i}': filtered_ids_str[i] for i in range(len(filtered_ids_str))}}
     else:
         params = {'gene_id': f"{gene_id}%"}
 
-    query += " ORDER BY junction_average_psi DESC NULLS LAST, junction_id"
+    query += " ORDER BY j.junction_average_psi DESC NULLS LAST, jp.junction_id"
     gene_vals = db_config.execute_query(query, params=params)
 
     if len(gene_vals) == 0:
@@ -301,9 +570,9 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     if psi_matrix.empty:
         return create_empty_clustergram_message(f"No PSI data available for gene: {gene_name}")
 
-    if height <= 700:
+    if height <= 875:
         num_junctions = len(junction_labels)
-        min_required_height = calculate_clustergram_min_height(num_junctions, base_height=600)
+        min_required_height = calculate_clustergram_min_height(num_junctions, base_height=750)
         height = max(height, min_required_height)
     
     if len(gene_vals['junction_id'].unique()) == 1:
@@ -328,35 +597,48 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     # Apply preprocessing for problematic distance metrics
     if distance_metric in ['correlation', 'seuclidean', 'cosine']:
         psi_matrix_processed = apply_distance_preprocessing(psi_matrix_processed, distance_metric)
-    
-    num_junctions = len(junction_labels)
-    hide_junction_labels = (num_junctions > 30) or (show_tables == 'show')
-    left_margin = max(120, int(height * 0.2))
 
-    # If either junction labels (y-axis) or cell type labels (x-axis) are hidden, use full height
-    if hide_junction_labels or not show_celltype_labels:
-        bottom_margin = MAX_MARGIN
-        actual_clustergram_height = height
+    organ_list, color_list = create_junction_organ_annotation_bar(cell_type_labels, species=species)
+
+    num_junctions = len(junction_labels)
+    num_cell_types = len(cell_type_labels)
+    hide_junction_labels = (num_junctions > 30) or (show_tables == 'show')
+
+    # Hide cell type labels based only on toggle state
+    hide_celltype_labels = not show_celltype_labels
+
+    if (num_junctions > 30):
+        left_margin = 2  
     else:
-        bottom_margin = max(200, int(height * 0.35))
-        actual_clustergram_height = height - 80
-    
+        max_label_len = max((len(str(name)) for name in junction_labels), default=10)
+        left_margin = min(70, max(20, 7 * max_label_len + 10))
+
+    if hide_celltype_labels:
+        actual_clustergram_height = height + 400
+        base_bottom_margin = max(200, int(height * 0.35))
+        bottom_margin = max(0, base_bottom_margin - 400)
+    else:
+        actual_clustergram_height = height + 200
+        base_bottom_margin = max(200, int(height * 0.35))
+        bottom_margin = max(0, base_bottom_margin - 150)
+
     try:
         clustergram, computed_traces = dash_bio.Clustergram(
             data=psi_matrix_processed.values,
             row_labels=junction_labels,
             column_labels=cell_type_labels,
+            column_colors=color_list,
             height=actual_clustergram_height,
             color_threshold={'row': 0.7, 'col': 0.7},
-            hidden_labels='col' if not show_celltype_labels else None,
-            cluster='col',  
+            hidden_labels='col' if hide_celltype_labels else None,
+            cluster='col',
             color_list={
                 'row': ['#636EFA', '#EF553B', '#00CC96', '#AB63FA'],
                 'col': ['#FFA15A', '#19D3F3', '#FF6692', '#B6E880'],
                 'bg': '#506784'
             },
             line_width=2,
-            display_ratio=[0.12, 0.08] if not hide_junction_labels else [0.08, 0.05],
+            display_ratio=[0.12, 0.08] if not hide_celltype_labels else [0.08, 0.05],
             standardize='none',
             center_values=False,
             return_computed_traces=True,
@@ -413,7 +695,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
 
             if hasattr(heatmap_trace, 'colorbar'):
                 heatmap_trace.colorbar.x = 1.0
-                heatmap_trace.colorbar.xpad = 160
+                heatmap_trace.colorbar.xpad = 150
                 heatmap_trace.colorbar.y = 1.005
                 heatmap_trace.colorbar.yanchor = 'top'
                 heatmap_trace.colorbar.len = 0.3
@@ -424,34 +706,85 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     except Exception as e:
         print(f"Warning: Could not update colorbar position: {e}")
 
+    unique_organs, unique_colors = get_unique_organs_from_junctions(db_path, species=species)
+
+    colorbar_x_paper = 1.0
+    colorbar_pixel_offset = 150  
+    colorbar_y_position = 1.005
+    pixels_between_items = 25
+    vertical_offset_pixels = 7
+    base_spacing = 30
+    legend_pixel_offset = colorbar_pixel_offset + 20 + base_spacing
+
+    clustergram.add_annotation(
+        x=colorbar_x_paper,
+        y=colorbar_y_position,
+        xref='paper',
+        yref='paper',
+        xshift=legend_pixel_offset,
+        yshift=-vertical_offset_pixels,
+        text="Organ Legend",
+        showarrow=False,
+        xanchor="left",
+        yanchor="top",
+        font=dict(size=16, family="Open Sans, verdana, arial, sans-serif")
+    )
+
+    for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
+        organ_display = organ.lower()
+        clustergram.add_annotation(
+            x=colorbar_x_paper,
+            y=colorbar_y_position,
+            xref='paper',
+            yref='paper',
+            xshift=legend_pixel_offset,
+            yshift=-(vertical_offset_pixels + 30 + (i * pixels_between_items)),  # Title height (30px) + item spacing
+            text=f'<span style="color:{color}; font-size:16px">&#9632;</span> {organ_display}',
+            showarrow=False,
+            xanchor='left',
+            yanchor='top',
+            font=dict(size=13)
+        )
+
     clustergram.update_layout(
         title={
             'text': f"Splicing PSI Clustermap for {gene_name} ({len(junction_labels)} junctions)",
             'x': 0.5,
             'xanchor': 'center',
-            'font': {'size': 18 if hide_junction_labels else 20}
+            'font': {'size': 18 if hide_celltype_labels else 20}
         },
         margin=dict(
-            l=MIN_MARGIN,
-            r=MIN_MARGIN,
-            t=MAX_MARGIN,
+            l=min(20, left_margin + 50),
+            r=350,
+            t=90,
             b=bottom_margin
         ),
         autosize=True,
         width=None,
         height=height,
-        plot_bgcolor='white',
+        uirevision='constant',
         yaxis=dict(
             automargin=True,
             tickangle=0,
-            tickfont=dict(size=min(13, max(10, int(height/60)+2)))
+            tickfont=dict(size=min(13, max(10, int(height/60)+2))),
+            showgrid=True,
+            gridcolor='white',
+            gridwidth=1
         ),
         xaxis=dict(
             automargin=False,
-            tickangle=90,
-            tickfont=dict(size=10) if not hide_junction_labels else dict(size=12),
-            side='bottom'
-        )
+            tickangle=90 if not hide_celltype_labels else 0,
+            tickfont=dict(
+                size=8 if not hide_celltype_labels else 1,
+                color='rgba(0,0,0,0)' if hide_celltype_labels else None
+            ),
+            showticklabels=not hide_celltype_labels,
+            showgrid=True,
+            gridcolor='white',
+            gridwidth=1
+        ),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='white'
     )
     
     return clustergram

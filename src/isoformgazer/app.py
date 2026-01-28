@@ -345,19 +345,27 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
         junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_aligned_20260105_170740_withmappings.csv")
     if species_name == "Mouse":
         junction_file = os.path.join(species_data_dir, "pseudobulk_final_tissue_celltype_20260105_171037_withmappings.csv")
-    
+
     # Need to count total lines (minus header) to estimate progress
     with open(junction_file, 'r') as f:
-        total_lines = sum(1 for _ in f) - 1 
-    
+        total_lines = sum(1 for _ in f) - 1
+
     chunk_size = 100000
     estimated_chunks = (total_lines // chunk_size) + 1
 
     print(f"Loading {total_lines:,} rows of {species_name} junction data in groupings of {chunk_size:,} rows...")
+
+    # Create separate tables for junction master data and PSI data
+    junctions_table = f"{table_prefix}junctions"
+    junction_psis_table = f"{table_prefix}junction_psis"
+
+    # Temporary table to hold all raw data
+    temp_table = f"{table_prefix}junctions_temp"
+
     first_chunk = True
     row_count = 0
 
-    column_order = [
+    master_column_order = [
         'gene_symbol',
         'gene_id',
         'event_id',
@@ -365,15 +373,19 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
         'junction_id_index',
         'atse_count',
         'junction_count',
-        'cell_type',
-        'n_cells',
-        'psi',
         'junction_average_psi',
         'matched_transcript_ids'
     ]
 
-    junctions_table = f"{table_prefix}junctions"
-    with tqdm(desc=f"Writing {species_name} junction master table data to local database",
+    psi_column_order = [
+        'junction_id',
+        'junction_id_index',
+        'cell_type',
+        'n_cells',
+        'psi'
+    ]
+
+    with tqdm(desc=f"Writing {species_name} junction data to temporary table",
               unit="chunk",
               total=estimated_chunks) as chunk_pbar:
 
@@ -383,17 +395,11 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
             if 'gene_symbol' in chunk.columns:
                 chunk['gene_symbol'] = chunk['gene_symbol'].astype(str).str.upper()
 
-            available_columns = [col for col in column_order if col in chunk.columns]
-            remaining_columns = [col for col in chunk.columns if col not in column_order]
-
-            final_column_order = available_columns + remaining_columns
-            chunk = chunk[final_column_order]
-
             if first_chunk:
-                chunk.to_sql(junctions_table, conn, if_exists='replace', index=False)
+                chunk.to_sql(temp_table, conn, if_exists='replace', index=False)
                 first_chunk = False
             else:
-                chunk.to_sql(junctions_table, conn, if_exists='append', index=False)
+                chunk.to_sql(temp_table, conn, if_exists='append', index=False)
 
             row_count += len(chunk)
             chunk_pbar.update(1)
@@ -403,9 +409,73 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
                 'chunk': f"{i+1}/{estimated_chunks}"
             })
 
-    print(f" Processed all {row_count:,} rows from {species_name} junction master table!")
-    # rename 'gene_symbol' to 'gene_name' for more consistency in junctions table (match isoforms table)
-    conn.execute(f"ALTER TABLE {junctions_table} RENAME COLUMN gene_symbol TO gene_name")
+    print(f" Loaded all {row_count:,} rows from {species_name} junction file into temporary table!")
+
+    # Rename gene_symbol to gene_name
+    conn.execute(f"ALTER TABLE {temp_table} RENAME COLUMN gene_symbol TO gene_name")
+
+    # Create junction master table (one row per junction)
+    print(f"Creating {species_name} junction master table...")
+    conn.execute(f"""
+        CREATE TABLE {junctions_table} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gene_name TEXT,
+            gene_id TEXT,
+            event_id TEXT,
+            junction_id TEXT,
+            junction_id_index INTEGER,
+            junction_average_psi REAL,
+            matched_transcript_ids TEXT
+        )
+    """)
+
+    conn.execute(f"""
+        INSERT INTO {junctions_table} (
+            gene_name,
+            gene_id,
+            event_id,
+            junction_id,
+            junction_id_index,
+            junction_average_psi,
+            matched_transcript_ids
+        )
+        SELECT DISTINCT
+            gene_name,
+            gene_id,
+            event_id,
+            junction_id,
+            junction_id_index,
+            junction_average_psi,
+            matched_transcript_ids
+        FROM {temp_table}
+    """)
+
+    master_count = conn.execute(f"SELECT COUNT(*) FROM {junctions_table}").fetchone()[0]
+    print(f" Created junction master table with {master_count:,} unique junctions")
+
+    # Create junction PSI table (one row per junction-cell_type pair)
+    print(f"Creating {species_name} junction PSI table...")
+    conn.execute(f"""
+        CREATE TABLE {junction_psis_table} AS
+        SELECT
+            junction_id,
+            junction_id_index,
+            cell_type,
+            n_cells,
+            psi,
+            atse_count,
+            junction_count
+        FROM {temp_table}
+        WHERE cell_type IS NOT NULL
+    """)
+
+    psi_count = conn.execute(f"SELECT COUNT(*) FROM {junction_psis_table}").fetchone()[0]
+    print(f" Created junction PSI table with {psi_count:,} junction-cell_type pairs")
+
+    # Drop temporary table
+    conn.execute(f"DROP TABLE {temp_table}")
+
+    print(f" Processed all data from {species_name} junction file!")
     print()
 
     ########################################################
@@ -631,16 +701,25 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
 
     print(f"Creating optimized {species_name} database indices...")
     indices = [
+        # Junction master table indexes
         (f"{table_prefix}idx_junctions_gene", junctions_table, "(gene_name, gene_id)"),
         (f"{table_prefix}idx_junctions_gene_name", junctions_table, "(gene_name)"),
+        (f"{table_prefix}idx_junctions_gene_id", junctions_table, "(gene_id)"),
+        (f"{table_prefix}idx_junctions_junction_id", junctions_table, "(junction_id)"),
+        (f"{table_prefix}idx_junctions_avg_psi", junctions_table, "(junction_average_psi)"),
+        # Junction PSI table indexes
+        (f"{table_prefix}idx_junction_psis_junction_id", junction_psis_table, "(junction_id)"),
+        (f"{table_prefix}idx_junction_psis_cell_type", junction_psis_table, "(cell_type)"),
+        (f"{table_prefix}idx_junction_psis_psi", junction_psis_table, "(psi)"),
+        (f"{table_prefix}idx_junction_psis_junction_cell", junction_psis_table, "(junction_id, cell_type)"),
+        # Isoform table indexes
         (f"{table_prefix}idx_isoforms_gene", isoforms_table, "(gene_name, gene_id)"),
         (f"{table_prefix}idx_isoforms_gene_name", isoforms_table, "(gene_name)"),
         (f"{table_prefix}idx_isoforms_id", isoforms_table, "(id)"),
+        # PSL table indexes
         (f"{table_prefix}idx_psl_gene", psl_table, "(gene_id, id)"),
         (f"{table_prefix}idx_psl_id", psl_table, "(id)"),
-        (f"{table_prefix}idx_junctions_junction_id", junctions_table, "(junction_id)"),
-        (f"{table_prefix}idx_junctions_psi", junctions_table, "(gene_name, psi)"),
-        (f"{table_prefix}idx_junctions_cell_type", junctions_table, "(cell_type)"),
+        # TPM and ratio table indexes
         (f"{table_prefix}idx_tpm_id", tpm_table, "(id)"),
         (f"{table_prefix}idx_ratio_id", ratio_table, "(id)")
     ]
@@ -950,7 +1029,7 @@ left_data_table = dash_table.DataTable(
 right_data_table = dash_table.DataTable(
     id='right_data_table',
     columns=get_master_table_columns(db_path, table_name='junctions'),
-    hidden_columns=['id', 'matched_transcript_ids', 'junction_average_psi'],
+    hidden_columns=['id', 'matched_transcript_ids'],
     data=[],
     editable=False,
     filter_action="custom",
@@ -1354,11 +1433,11 @@ app.layout = html.Div(className='app-layout', children=[
                             dcc.Slider(
                                 id='clustergram-height-slider',
                                 className='control-slider',
-                                min=600,
-                                max=1600,
-                                step=100,
-                                value=710,
-                                marks={600: '600', 700: '', 800: '800', 900: '', 1000: '1000', 1100: '', 1200: '1200', 1300: '', 1400: '1400', 1500: '', 1600: '1600'}
+                                min=750,
+                                max=2000,
+                                step=125,
+                                value=1012,
+                                marks={750: '750', 875: '', 1000: '1000', 1125: '', 1250: '1250', 1375: '', 1500: '1500', 1625: '', 1750: '1750', 1875: '', 2000: '2000'}
                             ),
                             html.Div(className='app-controls-desc', children='Adjust the height of the clustergrams')
                         ]),
@@ -1415,7 +1494,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 html.Div('Cell Type Labels', className='app-controls-name toggle-switch-label-narrow-plus'),
                                 daq.ToggleSwitch(
                                     id='show-celltype-labels-toggle',
-                                    value=True,
+                                    value=False,
                                     label={'label': 'Hide / Show', 'style': {'fontSize': '12px', 'color': '#506784'}},
                                     labelPosition='left',
                                     className='toggle-switch-inline'
@@ -1910,14 +1989,23 @@ app.layout = html.Div(className='app-layout', children=[
                         ]),
                         html.Div(children=[
                             dbc.Button(
-                                "Download CSV",
+                                "Download Expression Data",
+                                id='download-left-expression-button',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                style={'marginRight': '8px'}
+                            ),
+                            dcc.Download(id='download-left-expression'),
+                            dbc.Button(
+                                "Download Master Table CSV",
                                 id='download-left-table-button',
                                 color="secondary",
                                 size="sm",
                                 className="clear-filters-btn"
                             ),
                             dcc.Download(id='download-left-table')
-                        ], style={'marginLeft': 'auto'})
+                        ], style={'marginLeft': 'auto', 'display': 'flex', 'gap': '8px'})
                     ]),
                     # Isoform table filter error popup
                     html.Div(
@@ -1948,14 +2036,23 @@ app.layout = html.Div(className='app-layout', children=[
                         ]),
                         html.Div(children=[
                             dbc.Button(
-                                "Download CSV",
+                                "Download PSI Data",
+                                id='download-right-psi-button',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                style={'marginRight': '8px'}
+                            ),
+                            dcc.Download(id='download-right-psi'),
+                            dbc.Button(
+                                "Download Master Table CSV",
                                 id='download-right-table-button',
                                 color="secondary",
                                 size="sm",
                                 className="clear-filters-btn"
                             ),
                             dcc.Download(id='download-right-table')
-                        ], style={'marginLeft': 'auto'})
+                        ], style={'marginLeft': 'auto', 'display': 'flex', 'gap': '8px'})
                     ]),
                     # Junction table filter error popup
                     html.Div(
@@ -3190,7 +3287,7 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
 def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filtered_junction_ids, clustergram_height, species, current_height):
     """Calculate unified height for both plots and update slider and panels when gene changes"""
     if not selected_gene:
-        panel_height = max(clustergram_height + 50, 760)
+        panel_height = max(clustergram_height + 108, 1075)
         left_panel_style = {'height': f'{panel_height}px', 'minHeight': f'{panel_height}px', 'flex': '1'}
         right_panel_style = {'height': f'{panel_height}px', 'minHeight': f'{panel_height}px', 'flex': '1.2'}
         container_style = {'height': f'{clustergram_height}px', 'minHeight': f'{clustergram_height}px'}
@@ -3210,15 +3307,15 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
         num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
         num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
 
-        min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=600) if num_transcripts > 0 else 600
-        min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=600) if num_junctions > 0 else 600
+        min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=750) if num_transcripts > 0 else 750
+        min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=750) if num_junctions > 0 else 750
         min_clustergram_height = max(min_isoform_height, min_junction_height)
 
         actual_clustergram_height = max(clustergram_height, min_clustergram_height)
 
         # Panel height = clustergram height + margins
-        panel_height = actual_clustergram_height + 50
-        panel_height = max(panel_height, 760)
+        panel_height = actual_clustergram_height + 108
+        panel_height = max(panel_height, 860)
 
         left_panel_style = {
             'height': f'{panel_height}px',
@@ -3241,10 +3338,10 @@ def update_dynamic_height_and_panels(selected_gene, filtered_isoform_ids, filter
 
     except Exception as e:
         print(f"Error calculating dynamic height: {e}")
-        panel_height = max(clustergram_height + 50, 760) if clustergram_height else 760
+        panel_height = max(clustergram_height + 108, 1075) if clustergram_height else 860
         left_panel_style = {'height': f'{panel_height}px', 'minHeight': f'{panel_height}px', 'flex': '1'}
         right_panel_style = {'height': f'{panel_height}px', 'minHeight': f'{panel_height}px', 'flex': '1.2'}
-        container_style = {'height': f'{clustergram_height}px', 'minHeight': f'{clustergram_height}px'} if clustergram_height else {'height': '710px', 'minHeight': '710px'}
+        container_style = {'height': f'{clustergram_height}px', 'minHeight': f'{clustergram_height}px'} if clustergram_height else {'height': '1012px', 'minHeight': '1012px'}
 
         return current_height, left_panel_style, right_panel_style, container_style, container_style
 
@@ -3268,8 +3365,8 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
     """Adjust panel heights based on clustergram height slider and gene data"""
 
     if not selected_gene:
-        panel_height = clustergram_height + 50
-        panel_height = max(panel_height, 760)
+        panel_height = clustergram_height + 108
+        panel_height = max(panel_height, 860)
         container_height = clustergram_height
     else:
         try:
@@ -3280,21 +3377,21 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
 
-            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=600) if num_transcripts > 0 else 600
-            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=600) if num_junctions > 0 else 600
+            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=750) if num_transcripts > 0 else 750
+            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=750) if num_junctions > 0 else 750
 
             min_clustergram_height = max(min_isoform_height, min_junction_height)
             actual_clustergram_height = max(clustergram_height, min_clustergram_height)
 
             # panel height = clustergram height + margins
-            panel_height = actual_clustergram_height + 50
-            panel_height = max(panel_height, 760)
+            panel_height = actual_clustergram_height + 108
+            panel_height = max(panel_height, 1075)
 
             container_height = actual_clustergram_height
 
         except Exception as e:
             print(f"Error calculating panel height: {e}")
-            panel_height = max(clustergram_height + 50, 760)
+            panel_height = max(clustergram_height + 108, 1075)
             container_height = clustergram_height
 
     left_panel_style = {
@@ -3348,8 +3445,8 @@ def update_junction_clustergram(selected_gene, colorscale,
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
 
-            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=600) if num_transcripts > 0 else 600
-            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=600) if num_junctions > 0 else 600
+            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=750) if num_transcripts > 0 else 750
+            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=750) if num_junctions > 0 else 750
 
             min_clustergram_height = max(min_isoform_height, min_junction_height)
             heatmap_height = max(clustergram_height, min_clustergram_height)
@@ -3523,8 +3620,8 @@ def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
             num_transcripts = transcript_data['id'].nunique() if not transcript_data.empty else 0
             num_junctions = len(gene_data.get('junctions', [])) if gene_data and not gene_data.get('error') else 0
 
-            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=600) if num_transcripts > 0 else 600
-            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=600) if num_junctions > 0 else 600
+            min_isoform_height = calculate_clustergram_min_height(num_transcripts, base_height=750) if num_transcripts > 0 else 750
+            min_junction_height = calculate_clustergram_min_height(num_junctions, base_height=750) if num_junctions > 0 else 750
 
             min_clustergram_height = max(min_isoform_height, min_junction_height)
             heatmap_height = max(clustergram_height, min_clustergram_height)
@@ -4101,16 +4198,17 @@ def download_hash_results(download_clicks, stored_data):
             hash_id = result['hash_id']
 
             # Look up gencode_transcript_id from gencode_gtf table...
-            # Note: this is version-agnostic matching! (e.g., ENSG00000223972.5 matches ENSG00000223972.6)
-            gene_base = gene_id.split('.')[0] if '.' in gene_id else gene_id
+            # Match by transcript_id, version-agnostic (e.g., ENST00000456328.2 matches ENST00000456328.1)...
+            # For novel transcripts (e.g., ENSG00000100320.24.novel10), there won't be a match, so we output 'N/A'.
+            transcript_base = transcript_id.split('.')[0] if '.' in transcript_id else transcript_id
 
             gencode_query = """
                 SELECT DISTINCT transcript_id FROM gencode_gtf
-                WHERE gene_id LIKE :gene_id
+                WHERE transcript_id LIKE :transcript_base
                 ORDER BY transcript_id
                 LIMIT 1
             """
-            gencode_result = db_config.execute_query(gencode_query, params={'gene_id': f"{gene_base}.%"})
+            gencode_result = db_config.execute_query(gencode_query, params={'transcript_id': f"{transcript_base}.%"})
 
             gencode_transcript_id = gencode_result.iloc[0]['transcript_id'] if not gencode_result.empty else "N/A"
 
@@ -4195,6 +4293,108 @@ def download_junction_table(n_clicks, full_data, selected_gene):
 
     except Exception as e:
         print(f"Error downloading junction table: {e}")
+        raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('download-left-expression', 'data'),
+    dash.dependencies.Input('download-left-expression-button', 'n_clicks'),
+    dash.dependencies.State('isoform-full-data-store', 'data'),
+    dash.dependencies.State('gene-search-dropdown', 'value'),
+    dash.dependencies.State('isoform-data-type-switch', 'value'),
+    dash.dependencies.State('species-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def download_isoform_expression(n_clicks, full_data, selected_gene, data_type_selection, species):
+    """Download expression data (TPM, logTPM, or ratio) for current isoform table view"""
+    if not n_clicks or not full_data or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        if data_type_selection == 'ratio':
+            data_type = 'ratio'
+            data_label = 'ratio'
+
+        elif data_type_selection == 'log_tpm':
+            data_type = 'log_tpm'
+            data_label = 'logTPM'
+
+        else:
+            data_type = 'tpm'
+            data_label = 'TPM'
+
+        expression_data = load_expression_data(
+            db_path=db_path,
+            gene_name=selected_gene,
+            data_type=data_type,
+            species=species
+        )
+
+        if expression_data.empty:
+            raise PreventUpdate
+
+        table_df = pd.DataFrame(full_data)
+        if 'id' not in table_df.columns:
+            raise PreventUpdate
+
+        filtered_expression = expression_data[expression_data['id'].isin(table_df['id'])].copy()
+        if 'transcript' in table_df.columns:
+            id_to_transcript = dict(zip(table_df['id'], table_df['transcript']))
+            filtered_expression.insert(0, 'transcript_id', filtered_expression['id'].map(id_to_transcript))
+
+        # Remove trans_id col from export (duplicate of transcript_id)
+        if 'trans_id' in filtered_expression.columns:
+            filtered_expression = filtered_expression.drop(columns=['trans_id'])
+
+        filename = f"{selected_gene}_isoforms_{data_label}_expression.csv"
+        return dcc.send_data_frame(filtered_expression.to_csv, filename, index=False)
+
+    except Exception as e:
+        print(f"Error downloading isoform expression data: {e}")
+        raise PreventUpdate
+
+
+@app.callback(
+    dash.dependencies.Output('download-right-psi', 'data'),
+    dash.dependencies.Input('download-right-psi-button', 'n_clicks'),
+    dash.dependencies.State('junction-full-data-store', 'data'),
+    dash.dependencies.State('gene-search-dropdown', 'value'),
+    dash.dependencies.State('species-dropdown', 'value'),
+    prevent_initial_call=True
+)
+def download_junction_psi(n_clicks, full_data, selected_gene, species):
+    """Download PSI data for current junction table view"""
+    if not n_clicks or not full_data or not selected_gene:
+        raise PreventUpdate
+
+    try:
+        # Get the junction IDs from the current table view only
+        table_df = pd.DataFrame(full_data)
+        if 'junction_id' not in table_df.columns:
+            raise PreventUpdate
+
+        junction_ids = table_df['junction_id'].unique().tolist()
+        conn = sqlite3.connect(db_path)
+        table_prefix = get_table_prefix(species)
+
+        placeholders = ','.join(['?'] * len(junction_ids))
+        query = f"""
+        SELECT junction_id, junction_id_index, cell_type, n_cells, psi, atse_count, junction_count
+        FROM {table_prefix}junction_psis
+        WHERE junction_id IN ({placeholders})
+        ORDER BY junction_id, cell_type
+        """
+        psi_data = pd.read_sql_query(query, conn, params=junction_ids)
+        conn.close()
+
+        if psi_data.empty:
+            raise PreventUpdate
+
+        filename = f"{selected_gene}_junctions_psi_data.csv"
+        return dcc.send_data_frame(psi_data.to_csv, filename, index=False)
+
+    except Exception as e:
+        print(f"Error downloading junction PSI data: {e}")
         raise PreventUpdate
 
 

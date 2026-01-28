@@ -86,9 +86,9 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
             query += " ORDER BY " + ", ".join(order_clauses)
     else:
         # Default sort order: isoforms by isoform_average_tpm DESC, junctions by junction_average_psi DESC
-        if table_name.lower() == 'isoforms' or table_name.lower() == 'mouse_isoforms':
+        if 'isoforms' in table_name.lower():
             query += ' ORDER BY "isoform_average_tpm" DESC NULLS LAST'
-        elif table_name.lower() == 'junctions' or table_name.lower() == 'mouse_junctions':
+        elif 'junctions' in table_name.lower():
             query += ' ORDER BY "junction_average_psi" DESC NULLS LAST'
 
     if where_clauses:
