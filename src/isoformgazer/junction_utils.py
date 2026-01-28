@@ -425,7 +425,7 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     unique_organs, unique_colors = get_unique_organs_from_junctions(db_path, species=species)
 
     colorbar_x_paper = 1.0
-    colorbar_pixel_offset = 150  
+    colorbar_pixel_offset = 166
     colorbar_y_position = 1.005
     pixels_between_items = 25
     vertical_offset_pixels = 7
@@ -700,7 +700,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
 
             if hasattr(heatmap_trace, 'colorbar'):
                 heatmap_trace.colorbar.x = 1.0
-                heatmap_trace.colorbar.xpad = 150
+                heatmap_trace.colorbar.xpad = 170
                 heatmap_trace.colorbar.y = 1.005
                 heatmap_trace.colorbar.yanchor = 'top'
                 heatmap_trace.colorbar.len = 0.3
@@ -714,7 +714,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     unique_organs, unique_colors = get_unique_organs_from_junctions(db_path, species=species)
 
     colorbar_x_paper = 1.0
-    colorbar_pixel_offset = 150  
+    colorbar_pixel_offset = 166
     colorbar_y_position = 1.005
     pixels_between_items = 25
     vertical_offset_pixels = 7
