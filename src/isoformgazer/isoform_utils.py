@@ -1096,8 +1096,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             if tissue_name in tissue_name_to_indices:
                 kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
 
-        # Average TPM and Ratio using only kept tissues, forcing the same output tissues
         tpm_heatmap_data, _, _ = average_lrs_by_tissue(tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
+        log_tpm_heatmap_data, _, _ = average_lrs_by_tissue(log_tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         ratio_heatmap_data, _, _ = average_lrs_by_tissue(ratio_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         tissue_cols_for_organs = tissue_display_names
 
@@ -1117,14 +1117,15 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             if tissue_name in tissue_name_to_indices:
                 kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
 
-        # Average TPM and Ratio using only the kept tissues, forcing the same output tissues
         tpm_heatmap_data, tpm_tissue_names, _ = average_lrs_by_replicates(tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
+        log_tpm_heatmap_data, log_tpm_tissue_names, _ = average_lrs_by_replicates(log_tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         ratio_heatmap_data, ratio_tissue_names, _ = average_lrs_by_replicates(ratio_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         tissue_cols_for_organs = tissue_display_names
 
     else:
         heatmap_data = expression_data[tissue_cols].values.T
         tpm_heatmap_data = tpm_data[tissue_cols].values.T
+        log_tpm_heatmap_data = log_tpm_data[tissue_cols].values.T
         ratio_heatmap_data = ratio_data[tissue_cols].values.T
         tissue_display_names, tissue_categories = process_individual_tissues(tissue_cols, species)
         tissue_cols_for_organs = tissue_cols
@@ -1232,13 +1233,10 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             tpm_clustered = tpm_heatmap_data[row_ids][:, column_ids]
             ratio_clustered = ratio_heatmap_data[row_ids][:, column_ids]
 
-        # Always get log10(TPM) data for tooltip, regardless of which data type is being displayed
-        log_tpm_clustered = None
-        if clustergram_data_with_nan is not None:
-            if clustergram_data_with_nan.shape[0] == len(tissue_cols_for_organs):
-                log_tpm_clustered = clustergram_data_with_nan.T.iloc[row_ids, :].iloc[:, column_ids].values
-            else:
-                log_tpm_clustered = clustergram_data_with_nan.iloc[row_ids, :].iloc[:, column_ids].values
+        if log_tpm_heatmap_data.shape[0] == len(tissue_cols_for_organs):
+            log_tpm_clustered = log_tpm_heatmap_data.T[row_ids][:, column_ids]
+        else:
+            log_tpm_clustered = log_tpm_heatmap_data[row_ids][:, column_ids]
 
         customdata = np.zeros((len(transcript_names), len(clean_tissue_names), 4), dtype=object)
         for i in range(len(transcript_names)):
@@ -1246,11 +1244,8 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
                 customdata[i, j, 0] = reordered_organ_list[j]
                 customdata[i, j, 1] = tpm_clustered[i, j]
                 # Format log10(TPM) to show NaN as 'NaN', otherwise format to 2 decimal places
-                if log_tpm_clustered is not None:
-                    log_val = log_tpm_clustered[i, j]
-                    customdata[i, j, 2] = 'NaN' if pd.isna(log_val) else f'{log_val:.2f}'
-                else:
-                    customdata[i, j, 2] = 'NaN'
+                log_val = log_tpm_clustered[i, j]
+                customdata[i, j, 2] = 'NaN' if pd.isna(log_val) else f'{log_val:.2f}'
                 customdata[i, j, 3] = ratio_clustered[i, j]
 
         heatmap_trace = clustergram.data[-1]
@@ -1380,7 +1375,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             showarrow=False,
             xanchor='left',
             yanchor='top',
-            font=dict(size=10)
+            font=dict(size=11)
         )
     
     clustergram.update_layout(
