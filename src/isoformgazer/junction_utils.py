@@ -92,7 +92,6 @@ def get_junction_organ_colors():
         'thymus': '#8A2BE2',                                # blue violet
         'tongue': '#FF69B4',                                # hot pink
         'trachea': '#20B2AA',                               # light sea green
-
         # Human-specific organs
         'eye': '#00BFFF',                                   # deep sky blue
         'fat': base_colors.get('adipose', '#FFA500'),      # orange
@@ -107,15 +106,15 @@ def get_junction_organ_colors():
         'uterus': '#FF1493',                                # deep pink
         'vasculature': base_colors.get('vessels', '#D2691E'), # chocolate
         # Mouse-specific organs
-        'aorta': base_colors.get('vessels', '#D2691E'),    # chocolate (vessels)
-        'bat': '#FF8C00',                                   # dark orange (brown adipose tissue)
+        'aorta': base_colors.get('vessels', '#D2691E'),     # chocolate (vessels)
+        'brown adipose tissue': '#FF8C00',                  # dark orange (brown adipose tissue)
         'diaphragm': '#4682B4',                             # steel blue
-        'gat': '#FFA500',                                   # orange (gonadal adipose tissue)
-        'limb': base_colors.get('muscle', '#00008B'),      # dark blue (limb muscle)
-        'mat': '#FF7F50',                                   # coral (mesenteric adipose tissue)
+        'gonadal adipose tissue': '#FFA500',                # orange (gonadal adipose tissue)
+        'limb': base_colors.get('muscle', '#00008B'),       # dark blue (limb muscle)
+        'mesenteric adipose tissue': '#FF7F50',             # coral (mesenteric adipose tissue)
         'mammary gland': base_colors.get('breast', '#EE82EE'), # violet
         'pancreas': base_colors.get('pancreas', '#90EE90'), # light green
-        'scat': '#FFD700',                                  # gold (subcutaneous adipose tissue)
+        'SC adipose tissue': '#FFD700',                     # gold (subcutaneous adipose tissue)
         # Unknown/unmapped
         'unknown': '#CCCCCC'                                # light gray
     }
@@ -170,8 +169,16 @@ def extract_organ_from_cell_type(cell_type):
     if organ == 'lympha':
         return 'lymph node'
     # abbreviation "si" -> "small intestine"
-    if organ == 'si':
+    elif organ == 'si':
         return 'small intestine'
+    elif organ == 'bat': 
+        return 'brown adipose tissue'
+    elif organ == 'gat':
+        return 'gonadal adipose tissue'
+    elif organ == 'mat':
+        return 'mesenteric adipose tissue'
+    elif organ == 'scat':
+        return 'SC adipose tissue'
 
     return organ
 
@@ -449,12 +456,12 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
             xref='paper',
             yref='paper',
             xshift=legend_pixel_offset,
-            yshift=-(vertical_offset_pixels + 30 + (i * pixels_between_items)), 
+            yshift=-(vertical_offset_pixels + 30 + (i * pixels_between_items)),
             text=f'<span style="color:{color}; font-size:16px">&#9632;</span> {organ_display}',
             showarrow=False,
             xanchor='left',
             yanchor='top',
-            font=dict(size=13)
+            font=dict(size=10)
         )
 
     return clustergram
@@ -738,7 +745,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
             showarrow=False,
             xanchor='left',
             yanchor='top',
-            font=dict(size=13)
+            font=dict(size=11)
         )
 
     clustergram.update_layout(

@@ -1389,7 +1389,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             showarrow=False,
             xanchor='left',
             yanchor='top',
-            font=dict(size=13)
+            font=dict(size=10)
         )
     
     clustergram.update_layout(
