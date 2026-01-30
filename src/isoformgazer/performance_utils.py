@@ -300,8 +300,8 @@ class SimpleCache:
         }
 
 try:
-    from redis_cache import get_cache as get_redis_cache
-    from redis_cache import cached as redis_cached
+    from src.isoformgazer.redis_cache import get_cache as get_redis_cache
+    from src.isoformgazer.redis_cache import cached as redis_cached
     cache = get_redis_cache()
     cached = redis_cached
     print("Using Redis cache!")
