@@ -2851,22 +2851,32 @@ def update_gene_options(search_value, species, current_value, all_gene_options):
         filtered = [opt for opt in all_gene_options if search_lower in opt.get('search', '')]
         options = filtered[:50]
 
-    # Handle current value preservation
+    # Bug fix for figures refreshing every time user interacts with gene dropdown: 
+    # - If species changed, preserve current value if it exists in new options
+    # - If user is just typing (search_value changed), don't update the value
+    ctx = dash.callback_context
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+
     if current_value is None:
         return options, 'AACS'
+    
+    if triggered_id == 'species-dropdown':
+        option_values = [opt['value'] for opt in options]
+        if current_value in option_values:
+            return options, current_value
+        else:
+            return options, 'AACS'
 
     option_values = [opt['value'] for opt in options]
 
     if current_value in option_values:
-        return options, current_value
-
+        return options, dash.no_update
     else:
         # Find the current value in all options and add it to the list
         current_option = next((opt for opt in all_gene_options if opt['value'] == current_value), None)
         if current_option:
             options = [current_option] + [opt for opt in options if opt['value'] != current_value]
-
-        return options, current_value
+        return options, dash.no_update
 
 
 @app.callback(
