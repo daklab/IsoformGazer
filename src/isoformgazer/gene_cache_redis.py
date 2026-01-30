@@ -6,19 +6,32 @@ from typing import List, Dict, Optional
 from src.isoformgazer.redis_cache import get_cache
 
 logger = logging.getLogger(__name__)
-GENE_LIST_KEY = "gene_list:all"
 DEFAULT_GENE_CACHE_KEY = "gene_cache:default"
 
 GENE_LIST_TTL = 604800
 DEFAULT_GENE_TTL = 604800
 
 
-def cache_gene_list(gene_options: List[Dict[str, str]]):
+def _get_gene_list_key(species: str = "Human") -> str:
+    """
+    Generate species-specific cache key for gene list.
+
+    Args:
+        species: Species name ("Human" or "Mouse")
+
+    Returns:
+        Cache key string
+    """
+    return f"gene_list:{species.lower()}"
+
+
+def cache_gene_list(gene_options: List[Dict[str, str]], species: str = "Human"):
     """
     Cache the full gene list for dropdown.
 
     Args:
         gene_options: List of dicts with 'label' and 'value' keys
+        species: Species name ("Human" or "Mouse")
 
     Example:
         gene_options = [
@@ -29,32 +42,37 @@ def cache_gene_list(gene_options: List[Dict[str, str]]):
     """
     try:
         cache = get_cache()
-        cache.set_value(GENE_LIST_KEY, gene_options, ttl=GENE_LIST_TTL)
-        logger.info(f"Cached {len(gene_options)} genes to Redis")
+        cache_key = _get_gene_list_key(species)
+        cache.set_value(cache_key, gene_options, ttl=GENE_LIST_TTL)
+        logger.info(f"Cached {len(gene_options)} {species} genes to Redis (key: {cache_key})")
     except Exception as e:
-        logger.error(f"Failed to cache gene list: {e}")
+        logger.error(f"Failed to cache gene list for {species}: {e}")
 
 
-def get_cached_gene_list() -> Optional[List[Dict[str, str]]]:
+def get_cached_gene_list(species: str = "Human") -> Optional[List[Dict[str, str]]]:
     """
     Get cached gene list for dropdown.
+
+    Args:
+        species: Species name ("Human" or "Mouse")
 
     Returns:
         List of gene options or None if not cached
     """
     try:
         cache = get_cache()
-        gene_options = cache.get_value(GENE_LIST_KEY)
+        cache_key = _get_gene_list_key(species)
+        gene_options = cache.get_value(cache_key)
 
         if gene_options:
-            logger.debug(f"Retrieved {len(gene_options)} genes from Redis cache")
+            logger.debug(f"Retrieved {len(gene_options)} {species} genes from Redis cache (key: {cache_key})")
             return gene_options
         else:
-            logger.debug("No gene list found in cache")
+            logger.debug(f"No gene list found in cache for {species} (key: {cache_key})")
             return None
 
     except Exception as e:
-        logger.error(f"Failed to get cached gene list: {e}")
+        logger.error(f"Failed to get cached gene list for {species}: {e}")
         return None
 
 
@@ -110,12 +128,25 @@ def get_cached_default_gene_data() -> Optional[Dict]:
         return None
 
 
-def invalidate_gene_list_cache():
-    """Invalidate gene list cache (e.g., after database update)"""
+def invalidate_gene_list_cache(species: str = None):
+    """
+    Invalidate gene list cache (e.g., after database update).
+
+    Args:
+        species: Species to invalidate ("Human", "Mouse", or None for all species)
+    """
     try:
         cache = get_cache()
-        cache.delete(GENE_LIST_KEY)
-        logger.info("Invalidated gene list cache")
+        if species is None:
+            # Invalidate both Human and Mouse caches
+            for sp in ["Human", "Mouse"]:
+                cache_key = _get_gene_list_key(sp)
+                cache.delete(cache_key)
+            logger.info("Invalidated gene list cache for all species")
+        else:
+            cache_key = _get_gene_list_key(species)
+            cache.delete(cache_key)
+            logger.info(f"Invalidated gene list cache for {species}")
     except Exception as e:
         logger.error(f"Failed to invalidate gene list cache: {e}")
 
@@ -145,10 +176,15 @@ def get_cache_stats() -> Dict:
     try:
         cache = get_cache()
         stats = cache.get_stats()
-        gene_list_cached = get_cached_gene_list() is not None
+
+        # Check both species-specific gene lists
+        human_genes_cached = get_cached_gene_list("Human") is not None
+        mouse_genes_cached = get_cached_gene_list("Mouse") is not None
         default_gene_cached = get_cached_default_gene_data() is not None
 
-        stats['gene_list_cached'] = gene_list_cached
+        stats['gene_list_cached'] = human_genes_cached or mouse_genes_cached
+        stats['human_genes_cached'] = human_genes_cached
+        stats['mouse_genes_cached'] = mouse_genes_cached
         stats['default_gene_cached'] = default_gene_cached
 
         return stats
@@ -158,5 +194,7 @@ def get_cache_stats() -> Dict:
         return {
             'error': str(e),
             'gene_list_cached': False,
+            'human_genes_cached': False,
+            'mouse_genes_cached': False,
             'default_gene_cached': False
         }
