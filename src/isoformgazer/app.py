@@ -24,6 +24,7 @@ from colorama import Fore, Style, init
 import traceback
 import logging
 logging.getLogger('dash.dash').setLevel(logging.WARNING)
+from src.isoformgazer.export_client import get_export_client
 from src.isoformgazer.db_config import initialize_database, get_db_config
 from src.isoformgazer.gene_cache_redis import get_cached_gene_list
 from src.isoformgazer.data_utils import (
@@ -851,8 +852,8 @@ else:
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 server = app.server
 
-# Cache for default gene A1BG-AS1
-DEFAULT_GENE = 'A1BG-AS1'
+# Cache for default gene AACS
+DEFAULT_GENE = 'AACS'
 default_gene_cache = None
 cache_loaded_from_disk = False
 
@@ -2011,6 +2012,7 @@ app.layout = html.Div(className='app-layout', children=[
                     html.Div(
                         id='left-table-error-popup',
                         className='filter-error-popup hidden',
+                        style={'display': 'none'},
                         children=[]
                     ),
                     dcc.Loading(
@@ -2058,6 +2060,7 @@ app.layout = html.Div(className='app-layout', children=[
                     html.Div(
                         id='right-table-error-popup',
                         className='filter-error-popup hidden',
+                        style={'display': 'none'},
                         children=[]
                     ),
                     dcc.Loading(
@@ -2648,7 +2651,8 @@ def update_progress_bar(progress):
     [dash.dependencies.Output('left-table-error-popup', 'style'),
      dash.dependencies.Output('left-table-error-popup', 'children'),
      dash.dependencies.Output('left-table-validation-store', 'data')],
-    [dash.dependencies.Input('left_data_table', 'filter_query')]
+    [dash.dependencies.Input('left_data_table', 'filter_query')],
+    prevent_initial_call=True
 )
 def validate_left_table_filters(current_filter_query):
     """Validate isoform table filters and store validation results"""
@@ -2675,7 +2679,8 @@ def validate_left_table_filters(current_filter_query):
     [dash.dependencies.Output('right-table-error-popup', 'style'),
      dash.dependencies.Output('right-table-error-popup', 'children'),
      dash.dependencies.Output('right-table-validation-store', 'data')],
-    [dash.dependencies.Input('right_data_table', 'filter_query')]
+    [dash.dependencies.Input('right_data_table', 'filter_query')],
+    prevent_initial_call=True
 )
 def validate_right_table_filters(current_filter_query):
     """Validate junction table filters and store validation results"""
@@ -3149,15 +3154,12 @@ def update_summary_blocks(selected_gene, species):
      dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise PreventUpdate
-
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
 
     # Check what triggered this callback: if only pagination changes, do not need to update full data store.
     # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
+    ctx = dash.callback_context
     triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
     pagination_only = triggered_prop in ['left_data_table.page_current', 'left_data_table.page_size']
 
@@ -3219,15 +3221,12 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
      dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise PreventUpdate
-
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
 
     # Check what triggered this callback: if only pagination changes, do not need to update full data store.
     # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
+    ctx = dash.callback_context
     triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
     pagination_only = triggered_prop in ['right_data_table.page_current', 'right_data_table.page_size']
 
@@ -4430,54 +4429,6 @@ def convert_dimensions(width, height, from_unit, to_unit='px', dpi=96):
 
 
 @app.callback(
-    [dash.dependencies.Output('export-status-message', 'style'),
-     dash.dependencies.Output('export-status-timer', 'disabled')],
-    [dash.dependencies.Input('export-unified-btn', 'n_clicks'),
-     dash.dependencies.Input('export-status-timer', 'n_intervals')],
-    [dash.dependencies.State('export-width-value', 'value'),
-     dash.dependencies.State('export-height-value', 'value'),
-     dash.dependencies.State('gene-search-dropdown', 'value')],
-    prevent_initial_call=True
-)
-def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
-    """Manage download status message display and timer"""
-    if not callback_context.triggered:
-        raise PreventUpdate
-
-    triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
-
-    if triggered_id == 'export-unified-btn':
-        if not n_clicks or not width or not height or not selected_gene:
-            raise PreventUpdate
-
-        return (
-            {
-                'marginTop': '15px',
-                'fontSize': '12px',
-                'color': '#301279',
-                'fontWeight': '600',
-                'display': 'block'
-            },
-            False
-        )
-
-    elif triggered_id == 'export-status-timer':
-        if not n_intervals:
-            raise PreventUpdate
-
-        return (
-            {
-                'marginTop': '15px',
-                'fontSize': '12px',
-                'color': '#301279',
-                'fontWeight': '600',
-                'display': 'none'
-            },
-            True
-        )
-
-
-@app.callback(
     [dash.dependencies.Output("download-structure-plot", "data"),
      dash.dependencies.Output("download-isoform-clustergram", "data"),
      dash.dependencies.Output("download-junction-clustergram", "data")],
@@ -4499,12 +4450,15 @@ def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
      dash.dependencies.State('tissue-abundance-dropdown', 'value'),
      dash.dependencies.State('organ-abundance-dropdown', 'value'),
      dash.dependencies.State('species-dropdown', 'value')],
-    prevent_initial_call=True
+     prevent_initial_call=True
 )
 def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, height, unit, title_legend_font_size, axis_labels_font_size, selected_gene, filtered_ids, exon_color, color_by_abundance, structure_colorscale, abundance_type, tissue_name, organ_name, species):
     """Export selected plot with custom dimensions as SVG"""
-    if not n_clicks or not width or not height or not selected_gene:
-        raise PreventUpdate
+    print(f"EXPORT CALLBACK TRIGGERED")
+    print(f"n_clicks={n_clicks} (type={type(n_clicks)}), plot_selection={plot_selection}, width={width}, height={height}, selected_gene={selected_gene}")
+    if not width or not height or not selected_gene:
+        print(f"ERROR: Missing required parameters - width={width}, height={height}, selected_gene={selected_gene}")
+        return None, None, None
 
     try:
         if unit == 'in':
@@ -4559,13 +4513,23 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
             fig.update_xaxes(tickfont={'size': axis_labels_font_size})
             fig.update_yaxes(tickfont={'size': axis_labels_font_size})
 
-        svg_bytes = fig.to_image(format='svg')
+        # export client call to generate image (supports remote service with fallback to local)
+        export_client = get_export_client()
+        print(f"Exporting {plot_selection} plot for {selected_gene}...")
+        svg_bytes = export_client.export_figure(fig, format='svg', width=int(width_px), height=int(height_px))
+
+        # TO DO: case where export fails: issue with how image bytes are being sent back to application VM?
+        if svg_bytes is None:
+            print("ERROR: Failed to export figure - export service returned None")
+            return None, None, None
+        print(f"Export successful! Received {len(svg_bytes)} bytes")
         svg_str = svg_bytes.decode('utf-8')
 
         download_data = dict(
             content=svg_str,
             filename=filename
         )
+        print(f"Returning download data: filename={filename}, content_length={len(svg_str)}")
 
         if plot_selection == 'structure':
             return download_data, None, None
@@ -4577,9 +4541,9 @@ def export_plot(n_clicks, plot_selection, isoform_fig, junction_fig, width, heig
             return None, None, download_data
 
     except Exception as e:
-        print(f"Error exporting plot: {e}")
+        print(f"ERROR: Exception during export: {e}")
         traceback.print_exc()
-        raise PreventUpdate
+        return None, None, None
 
 
 @app.callback(
