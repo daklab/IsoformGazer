@@ -1133,6 +1133,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
 
         # Average TPM and Ratio using only the kept tissues, forcing the same output tissues
         tpm_heatmap_data, tpm_tissue_names, _ = average_lrs_by_replicates(tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
+        log_tpm_heatmap_data, log_tpm_tissue_names, _ = average_lrs_by_replicates(log_tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         ratio_heatmap_data, ratio_tissue_names, _ = average_lrs_by_replicates(ratio_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         tissue_cols_for_organs = tissue_display_names
 
