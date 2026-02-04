@@ -519,7 +519,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
     gene_id = get_gene_id_from_atse(db_path, gene_name, species)
     if not gene_id:
         conn.close()
-        return create_empty_clustergram_message(f"No gene_id found for gene: {gene_name}")
+        return create_empty_clustergram_message(f"{gene_name} is not present in the short-read data.")
 
     # Join junctions master table with junction_psis table to get PSI values per cell type
     query = f"""

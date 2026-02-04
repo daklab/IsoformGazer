@@ -1954,6 +1954,7 @@ app.layout = html.Div(className='app-layout', children=[
                     html.Div(
                         id='left-table-error-popup',
                         className='filter-error-popup hidden',
+                        style={'display': 'none'},
                         children=[]
                     ),
                     dcc.Loading(
@@ -2001,6 +2002,7 @@ app.layout = html.Div(className='app-layout', children=[
                     html.Div(
                         id='right-table-error-popup',
                         className='filter-error-popup hidden',
+                        style={'display': 'none'},
                         children=[]
                     ),
                     dcc.Loading(
@@ -2591,7 +2593,8 @@ def update_progress_bar(progress):
     [dash.dependencies.Output('left-table-error-popup', 'style'),
      dash.dependencies.Output('left-table-error-popup', 'children'),
      dash.dependencies.Output('left-table-validation-store', 'data')],
-    [dash.dependencies.Input('left_data_table', 'filter_query')]
+    [dash.dependencies.Input('left_data_table', 'filter_query')],
+    prevent_initial_call=True
 )
 def validate_left_table_filters(current_filter_query):
     """Validate isoform table filters and store validation results"""
@@ -2618,7 +2621,8 @@ def validate_left_table_filters(current_filter_query):
     [dash.dependencies.Output('right-table-error-popup', 'style'),
      dash.dependencies.Output('right-table-error-popup', 'children'),
      dash.dependencies.Output('right-table-validation-store', 'data')],
-    [dash.dependencies.Input('right_data_table', 'filter_query')]
+    [dash.dependencies.Input('right_data_table', 'filter_query')],
+    prevent_initial_call=True
 )
 def validate_right_table_filters(current_filter_query):
     """Validate junction table filters and store validation results"""
@@ -3090,15 +3094,13 @@ def update_summary_blocks(selected_gene, species):
      dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise PreventUpdate
 
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
 
     # Check what triggered this callback: if only pagination changes, do not need to update full data store.
     # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
+    ctx = dash.callback_context
     triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
     pagination_only = triggered_prop in ['left_data_table.page_current', 'left_data_table.page_size']
 
@@ -3160,15 +3162,12 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
      dash.dependencies.Input('species-dropdown', 'value')]
 )
 def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
-    ctx = dash.callback_context
-    if not ctx.triggered:
-        raise PreventUpdate
-
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
 
     # Check what triggered this callback: if only pagination changes, do not need to update full data store.
     # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
+    ctx = dash.callback_context
     triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
     pagination_only = triggered_prop in ['right_data_table.page_current', 'right_data_table.page_size']
 
@@ -3705,6 +3704,58 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             filtered_junction_ids=filtered_junction_ids,
             species=species
         )
+
+        # If gene not found in junction data, check if it exists in isoform data
+        if 'error' in gene_data:
+            filtered_ids = [int(id) for id in actual_filtered_transcript_ids] if actual_filtered_transcript_ids else []
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+
+            # Case 1: gene exists in isoform data but not junction data - show transcript-only plot
+            if not transcript_data.empty:
+                
+                if plot_height == 600:
+                    height_to_use = None
+                else:
+                    height_to_use = plot_height
+
+                fig = create_transcript_structure_plot(
+                    db_path,
+                    transcript_data,
+                    gene_name=selected_gene,
+                    height=height_to_use,
+                    show_y_labels=True,
+                    exon_color=exon_color,
+                    color_by_abundance=color_by_abundance,
+                    colorscale=structure_colorscale,
+                    abundance_type=abundance_type,
+                    tissue_name=tissue_name,
+                    organ_name=organ_name,
+                    individual_transcript_colors=individual_transcript_colors,
+                    species=species
+                )
+
+                gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+                config = {
+                    'responsive': True,
+                    'displayModeBar': True,
+                    'scrollZoom': False,
+                    'toImageButtonOptions': {
+                        'format': 'svg',
+                        'filename': f'{gene_clean}_isoformgazer_structure_plot'
+                    }
+                }
+                return fig, config
+            
+            # Case 2: gene doesn't exist in either dataset
+            else:
+                empty_fig = create_empty_atse_message(gene_data['error'])
+                default_config = {
+                    'responsive': True,
+                    'displayModeBar': True,
+                    'scrollZoom': False,
+                    'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_plot'}
+                }
+                return empty_fig, default_config
 
         show_labels = False
 
