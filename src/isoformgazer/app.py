@@ -2950,12 +2950,31 @@ def update_gene_options(search_value, species, current_value, all_gene_options):
      dash.dependencies.Output('organ-abundance-dropdown', 'value', allow_duplicate=True),
      dash.dependencies.Output('gridlines-toggle', 'value')],
     [dash.dependencies.Input('gene-search-dropdown', 'value')],
+    [dash.dependencies.State('species-dropdown', 'value')],
     prevent_initial_call=True
 )
-def reset_custom_settings_on_gene_change(selected_gene):
+def reset_custom_settings_on_gene_change(selected_gene, species):
     """Reset all custom settings to defaults when a new gene is selected (except colorscales)"""
+    # Check if gene exists in junction data
+    hide_junctions_default = False  # Default: show junctions
+
+    if selected_gene:
+        # Use 'Human' as default if species is not set
+        species = species if species else 'Human'
+        try:
+            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids=None, species=species)
+            # If gene not found in junction data, default to hiding junctions (showing transcript-only plot)
+            if 'error' in gene_data:
+                hide_junctions_default = True
+                print(f"Gene {selected_gene} not found in junction data, defaulting to transcript-only view")
+        except Exception as e:
+            print(f"Error checking gene in junction data: {e}")
+            traceback.print_exc()
+            # On error, keep default as False (show junctions)
+            pass
+
     return (
-        False,      # hide-junctions-toggle: show junctions by default
+        hide_junctions_default,  # hide-junctions-toggle: auto-set based on junction data availability
         True,       # color-junctions-by-psi-toggle: on by default
         True,       # color-by-abundance-toggle: on by default
         'average',  # abundance-color-type-radio: average by default
@@ -3763,6 +3782,58 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
             filtered_junction_ids=filtered_junction_ids,
             species=species
         )
+
+        # If gene not found in junction data, check if it exists in isoform data
+        if 'error' in gene_data:
+            filtered_ids = [int(id) for id in actual_filtered_transcript_ids] if actual_filtered_transcript_ids else []
+            transcript_data = process_transcript_structure(db_path, selected_gene, filtered_ids, species)
+
+            # Case 1: gene exists in isoform data but not junction data - show transcript-only plot
+            if not transcript_data.empty:
+                
+                if plot_height == 600:
+                    height_to_use = None
+                else:
+                    height_to_use = plot_height
+
+                fig = create_transcript_structure_plot(
+                    db_path,
+                    transcript_data,
+                    gene_name=selected_gene,
+                    height=height_to_use,
+                    show_y_labels=True,
+                    exon_color=exon_color,
+                    color_by_abundance=color_by_abundance,
+                    colorscale=structure_colorscale,
+                    abundance_type=abundance_type,
+                    tissue_name=tissue_name,
+                    organ_name=organ_name,
+                    individual_transcript_colors=individual_transcript_colors,
+                    species=species
+                )
+
+                gene_clean = str(selected_gene).replace(' ', '_').replace('/', '_')
+                config = {
+                    'responsive': True,
+                    'displayModeBar': True,
+                    'scrollZoom': False,
+                    'toImageButtonOptions': {
+                        'format': 'svg',
+                        'filename': f'{gene_clean}_isoformgazer_structure_plot'
+                    }
+                }
+                return fig, config
+            
+            # Case 2: gene doesn't exist in either dataset
+            else:
+                empty_fig = create_empty_atse_message(gene_data['error'])
+                default_config = {
+                    'responsive': True,
+                    'displayModeBar': True,
+                    'scrollZoom': False,
+                    'toImageButtonOptions': {'format': 'svg', 'filename': 'isoformgazer_plot'}
+                }
+                return empty_fig, default_config
 
         show_labels = False
 
