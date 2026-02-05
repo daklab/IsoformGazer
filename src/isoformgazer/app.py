@@ -2892,11 +2892,11 @@ def reset_gene_on_species_change(species, current_gene):
     [dash.dependencies.Output('gene-search-dropdown', 'options'),
      dash.dependencies.Output('gene-search-dropdown', 'value')],
     [dash.dependencies.Input('gene-search-dropdown', 'search_value'),
-     dash.dependencies.Input('species-dropdown', 'value')],
-    [dash.dependencies.State('gene-search-dropdown', 'value'),
-     dash.dependencies.State('all-gene-options-store', 'data')]
+     dash.dependencies.Input('species-dropdown', 'value'),
+     dash.dependencies.Input('all-gene-options-store', 'data')],
+    [dash.dependencies.State('gene-search-dropdown', 'value')]
 )
-def update_gene_options(search_value, species, current_value, all_gene_options):
+def update_gene_options(search_value, species, all_gene_options, current_value):
     """Update gene options using client-side filtering from cached data"""
     # If no cached options available, fall back to database query (shouldn't happen)
     if not all_gene_options:
@@ -2913,15 +2913,16 @@ def update_gene_options(search_value, species, current_value, all_gene_options):
         filtered = [opt for opt in all_gene_options if search_lower in opt.get('search', '')]
         options = filtered[:50]
 
-    # Bug fix for figures refreshing every time user interacts with gene dropdown: 
-    # - If species changed, preserve current value if it exists in new options
+    # Bug fix for figures refreshing every time user interacts with gene dropdown:
+    # - If species changed (or gene store updated), preserve current value if it exists in new options
     # - If user is just typing (search_value changed), don't update the value
     ctx = dash.callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
     if current_value is None:
         return options, 'AACS'
-    
-    if triggered_id == 'species-dropdown':
+
+    # When species changes or gene store updates, reset if current gene not in new species
+    if triggered_id in ['species-dropdown', 'all-gene-options-store']:
         option_values = [opt['value'] for opt in options]
         if current_value in option_values:
             return options, current_value
