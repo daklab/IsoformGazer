@@ -1110,7 +1110,13 @@ app.layout = html.Div(className='app-layout', children=[
                         ]),
                         html.Div(className='about-content', children=[
                             html.P([
-                                'Isoform Gazer provides a unified view of RNA splicing across both short-read junction-level single-cell data and long-read transcript-level isoform data in GENCODEv46 (GRCh38.p14).'
+                                'Isoform Gazer provides a unified view of RNA splicing across both short-read junction-level single-cell data and long-read transcript-level isoform data in GENCODEv46 (GRCh38.p14). ',
+                                'Isoform Gazer is developed and maintained by the ',
+                                html.A('Knowles Lab',
+                                       href='https://daklab.github.io/',
+                                       target='_blank',
+                                       className='knowles-lab-link'),
+                                '.'
                             ]),
                             html.P([
                                 'Use the controls in the ',
