@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from isoformgazer._clustergram import Clustergram
 import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -326,7 +327,7 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     else:
         actual_clustergram_height = height + 200
 
-    clustergram = dash_bio.Clustergram(
+    clustergram = Clustergram(
         data=psi_matrix_filtered.values,
         column_labels=cell_type_labels,
         row_labels=list(psi_matrix_filtered.index),
@@ -625,7 +626,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         bottom_margin = max(0, base_bottom_margin - 150)
 
     try:
-        clustergram, computed_traces = dash_bio.Clustergram(
+        clustergram, computed_traces = Clustergram(
             data=psi_matrix_processed.values,
             row_labels=junction_labels,
             column_labels=cell_type_labels,

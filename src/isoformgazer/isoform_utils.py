@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 import dash_bio
 import matplotlib.pyplot as plt
+from isoformgazer._clustergram import Clustergram
 import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -1211,7 +1212,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         )
     
     try:
-        clustergram, computed_traces = dash_bio.Clustergram(
+        clustergram, computed_traces = Clustergram(
             data=clustergram_data_processed.values,
             column_labels=clean_tissue_names,
             row_labels=transcript_names_abbreviated,
