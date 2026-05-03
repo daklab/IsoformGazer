@@ -13,7 +13,7 @@ import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
-from data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap, get_table_prefix
+from data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap, get_table_prefix, get_plotly_colorscale
 from performance_utils import cached, memory_tracker, plot_optimizer
 # suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='Mean of empty slice')
@@ -539,6 +539,21 @@ def create_transcript_structure_plot(db_path: str,
     transcript_summary = transcript_summary.set_index('id').loc[ordered_transcript_ids].reset_index()
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
 
+    # Always fetch isoform_average_tpm to identify GENCODE-only transcripts
+    conn = sqlite3.connect(db_path)
+    try:
+        gene_id_for_tpm = get_gene_id_for_gene_name(db_path, gene_name, species)
+        if gene_id_for_tpm:
+            tpm_query = f"""
+            SELECT DISTINCT id, isoform_average_tpm
+            FROM {table_prefix}isoforms
+            WHERE gene_id LIKE ?
+            """
+            tpm_df = pd.read_sql_query(tpm_query, conn, params=[f"{gene_id_for_tpm}%"])
+            transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+    finally:
+        conn.close()
+
     if color_by_abundance:
         if abundance_type == 'tissue' and tissue_name:
             tissue_tpm_dict = get_tissue_tpm_for_isoforms(db_path, gene_name, tissue_name, species)
@@ -549,22 +564,7 @@ def create_transcript_structure_plot(db_path: str,
             transcript_summary['abundance_tpm'] = transcript_summary['id'].map(organ_tpm_dict).fillna(0)
 
         else:
-            conn = sqlite3.connect(db_path)
-            try:
-                # Get gene_id for gene_name
-                gene_id_for_tpm = get_gene_id_for_gene_name(db_path, gene_name, species)
-                if gene_id_for_tpm:
-                    tpm_query = f"""
-                    SELECT DISTINCT id, isoform_average_tpm
-                    FROM {table_prefix}isoforms
-                    WHERE gene_id LIKE ?
-                    """
-                    tpm_df = pd.read_sql_query(tpm_query, conn, params=[f"{gene_id_for_tpm}%"])
-                    transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
-                    transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
-
-            finally:
-                conn.close()
+            transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
 
     # Calculate dynamic height if not provided or if using default slider value
     if height is None or height == 600:
@@ -618,8 +618,17 @@ def create_transcript_structure_plot(db_path: str,
         trans_order = transcript['trans_order']
         trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
 
-        # Check for TPM color first (highest priority when enabled)
-        if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
+        # Check if this is a GENCODE-only transcript (has NULL/NaN isoform_average_tpm)
+        is_gencode_only = pd.isna(transcript.get('isoform_average_tpm'))
+        if is_gencode_only:
+            exon_fill_color = '#808080'
+
+        # Check for individual transcript color (second priority, convert to string for comparison)
+        elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
+            exon_fill_color = individual_transcript_colors[str(isoform_id)]
+
+        # Check for TPM color (third priority when enabled)
+        elif color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
             tpm = transcript.get('abundance_tpm', 0)
 
             if tpm_max > tpm_min:
@@ -630,10 +639,6 @@ def create_transcript_structure_plot(db_path: str,
 
             rgba = cmap(normalized)
             exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
-
-        # Check for individual transcript color (second priority, convert to string for comparison)
-        elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
-            exon_fill_color = individual_transcript_colors[str(isoform_id)]
 
         else:
             exon_fill_color = exon_color
@@ -692,9 +697,9 @@ def create_transcript_structure_plot(db_path: str,
 
     if color_by_abundance:
         if colorscale:
-            selected_colorscale = colorscale
+            selected_colorscale = get_plotly_colorscale(colorscale)
         else:
-            selected_colorscale = 'Viridis'
+            selected_colorscale = get_plotly_colorscale('Viridis')
 
         if not transcript_summary.empty and 'abundance_tpm' in transcript_summary.columns:
             tpm_values = transcript_summary['abundance_tpm'].dropna()
@@ -915,13 +920,13 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             ),
             row=1, col=1
         )
-        
+
         fig.add_trace(
             go.Heatmap(
                 z=heatmap_data,
                 y=tissue_display_names,
                 x=transcript_names_abbreviated,
-                colorscale=colorscale,
+                colorscale=get_plotly_colorscale(colorscale),
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
                 colorbar=dict(title=dict(text=data_type, font=dict(size=16)), x=1.02, tickfont=dict(size=10))
             ),
@@ -941,7 +946,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 z=heatmap_data,
                 y=tissue_display_names, 
                 x=transcript_names_abbreviated,
-                colorscale=colorscale,
+                colorscale=get_plotly_colorscale(colorscale),
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
                 colorbar=dict(title=dict(text=data_type, font=dict(size=16)), tickfont=dict(size=10))
             )
@@ -1455,7 +1460,7 @@ def create_single_transcript_heatmap(heatmap_data, tpm_heatmap_data, ratio_heatm
         z=heatmap_data,
         x=transcript_names,
         y=tissue_display_names,
-        colorscale=colorscale,
+        colorscale=get_plotly_colorscale(colorscale),
         colorbar=dict(title=dict(text=data_type, font=dict(size=16)), tickfont=dict(size=10)),
         customdata=customdata,
         hovertemplate='<b>Transcript:</b> %{x}<br><b>Tissue:</b> %{y}<br><b>TPM:</b> %{customdata[0]:.2f}<br><b>Ratio:</b> %{customdata[1]:.2f}<extra></extra>'
@@ -1477,7 +1482,7 @@ def apply_colorscale_to_clustergram(fig, colorscale, show_nan_as_black=False):
     try:
         if len(fig.data) > 0:
             heatmap_trace = fig.data[-1]
-            heatmap_trace.colorscale = colorscale
+            heatmap_trace.colorscale = get_plotly_colorscale(colorscale)
             heatmap_trace.showscale = True
     except Exception as e:
         pass

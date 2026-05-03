@@ -11,7 +11,7 @@ import pickle
 import hashlib
 from datetime import datetime
 from pathlib import Path
-
+from matplotlib.colors import LinearSegmentedColormap
 
 def get_table_prefix(species="Human"):
     """Convert species name to table prefix for database queries"""
@@ -583,12 +583,30 @@ def get_cache_metadata_path(base_dir):
 
 
 def get_database_hash(db_path):
-    """Generates hash of database file for cache invalidation"""
+    """
+    Generates identifier for database file for cache invalidation. For large databases (>1GB), 
+    uses file size + modification time instead of MD5 hash to avoid loading entire file into memory.
+    """
     try:
+        db_stat = os.stat(db_path)
+        file_size = db_stat.st_size
+
+        # For files larger than 1GB, use size + mtime as identifier
+        if file_size > 1_000_000_000:  # 1GB
+            mtime = db_stat.st_mtime
+            identifier = f"{file_size}_{int(mtime)}"
+            return hashlib.md5(identifier.encode()).hexdigest()
+
+        # For smaller files, compute actual MD5 hash using streaming
+        md5_hash = hashlib.md5()
         with open(db_path, 'rb') as f:
-            return hashlib.md5(f.read()).hexdigest()
+            # Read in 8MB chunks to avoid memory issues
+            for chunk in iter(lambda: f.read(8388608), b''):
+                md5_hash.update(chunk)
+        return md5_hash.hexdigest()
+
     except Exception as e:
-        print(f"Warning: Could not compute database hash: {e}")
+        print(f"Warning: Could not compute database identifier: {e}")
         return None
 
 
@@ -728,7 +746,14 @@ def extract_gtf_attr_val(attr_str):
 
 
 def get_matplotlib_colormap(colorscale_name: str):
-    """Convert a Plotly colorscale name to a matplotlib colormap"""
+    """
+    Convert a Plotly colorscale name to a matplotlib colormap.
+    Used for rendering exons/junctions in structure plots with matplotlib-based coloring.
+    """
+    # Custom 'Gazing' colorscale: go purple (#301279) -> gold (#f9c83b)
+    gazing_colors = ['#301279', '#f9c83b']
+    gazing_cmap = LinearSegmentedColormap.from_list('Gazing', gazing_colors)
+
     colormap_mapping = {
         'Viridis': plt.cm.viridis,
         'Plasma': plt.cm.plasma,
@@ -742,6 +767,43 @@ def get_matplotlib_colormap(colorscale_name: str):
         'Spectral': plt.cm.Spectral,
         'YlOrRd': plt.cm.YlOrRd,
         'Turbo': plt.cm.turbo,
+        'Gazing': gazing_cmap,
+        'BrBG': plt.cm.BrBG,
+        'PRGn': plt.cm.PRGn,
+        'PuOr': plt.cm.PuOr,
+        'RdGy': plt.cm.RdGy,
+        'delta': plt.cm.seismic,
+        'oxy': plt.cm.RdYlGn_r,
+        'curl': plt.cm.PiYG,
+        'Geyser': plt.cm.coolwarm
     }
 
     return colormap_mapping.get(colorscale_name, plt.cm.viridis)
+
+
+def get_plotly_colorscale(colorscale_name: str):
+    """
+    Convert colorscale name to Plotly-compatible format.
+    For custom colorscales, converts matplotlib colormap to Plotly format.
+    For standard Plotly colorscales, returns the name as-is.
+    """
+    standard_plotly_scales = {
+        'Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis',
+        'Blues', 'Reds', 'RdBu_r', 'RdYlBu', 'Spectral', 'YlOrRd', 'Turbo',
+        'BrBG', 'PRGn', 'PuOr', 'RdGy',
+        'delta', 'oxy', 'curl', 'Geyser'
+    }
+
+    if colorscale_name in standard_plotly_scales:
+        return colorscale_name
+
+    if colorscale_name == 'Gazing':
+        return [
+            [0.0, '#301279'],
+            [0.25, '#622e9d'],
+            [0.5, '#f9c83b'],
+            [1.0, "#fff2cc"]
+        ]
+
+    # Default to Viridis
+    return 'Viridis'

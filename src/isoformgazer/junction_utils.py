@@ -13,7 +13,7 @@ import base64
 from matplotlib.patches import Patch
 import dash_bio
 from dash import dcc
-from data_utils import apply_distance_preprocessing, get_matplotlib_colormap, get_table_prefix
+from data_utils import apply_distance_preprocessing, get_matplotlib_colormap, get_table_prefix, get_plotly_colorscale
 from isoform_utils import (load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name,
                            calculate_dynamic_structure_plot_height, calculate_clustergram_min_height,
                            get_tissue_tpm_for_isoforms, get_organ_tpm_for_isoforms, get_organ_colors)
@@ -480,7 +480,7 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
         z=heatmap_data.values,
         x=heatmap_data.columns.tolist(),
         y=heatmap_data.index.tolist(),
-        colorscale=colorscale,
+        colorscale=get_plotly_colorscale(colorscale),
         zmin=0,
         zmax=1,
         customdata=n_cells_data.values,
@@ -541,10 +541,25 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
 
     query += " ORDER BY j.junction_average_psi DESC NULLS LAST, jp.junction_id"
     gene_vals = pd.read_sql_query(query, conn, params=params)
-    conn.close()
 
+    # Check if there are ANY junctions (including GENCODE) when no expression data found
     if len(gene_vals) == 0:
-        return create_empty_clustergram_message(f"No junction data found for gene: {gene_name}")
+        # Check if gene has GENCODE junctions (with null PSI value)
+        gencode_check_query = f"""
+        SELECT COUNT(*) as count
+        FROM {table_prefix}junctions
+        WHERE gene_id LIKE ? AND junction_average_psi IS NULL
+        """
+        gencode_result = pd.read_sql_query(gencode_check_query, conn, params=[f"{gene_id}%"])
+        conn.close()
+
+        has_gencode_junctions = gencode_result.iloc[0]['count'] > 0
+        if has_gencode_junctions:
+            return create_empty_clustergram_message(f"No junction usage data found for gene {gene_name} in the short-read data.")
+        else:
+            return create_empty_clustergram_message(f"No junction data found for gene {gene_name}.")
+
+    conn.close()
 
     ordered_junction_ids = gene_vals['junction_id'].drop_duplicates().tolist()
     # note: have to again reverse the order same as for transcripts because Dash Bio clustergrams display the first row at the bottom...
@@ -819,7 +834,7 @@ def apply_colorscale_to_clustergram(fig, colorscale):
     try:
         if len(fig.data) > 0:
             heatmap_trace = fig.data[-1]
-            heatmap_trace.colorscale = colorscale
+            heatmap_trace.colorscale = get_plotly_colorscale(colorscale)
             heatmap_trace.showscale = True
 
     except Exception as e:
@@ -1026,15 +1041,37 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
     ORDER BY start, end
     """
     gene_atse = pd.read_sql_query(atse_query, conn, params=[gene_id_base, gene_name])
-    conn.close()
     #memory_tracker.measure(f"after_atse_query_{gene_name}")
-    
-    if gene_atse.empty:
-        return {'error': f"No ATSE data found for gene {gene_name}"}
 
-    gene_info = gene_atse.iloc[0]
-    strand = gene_info.get('event_strand', gene_info.get('strand', '+'))
-    chromosome = gene_info.get('chromosome', gene_info.get('chrom', 'chr1'))
+    # Get strand and chromosome info from ATSE data if available, otherwise from junctions
+    if not gene_atse.empty:
+        gene_info = gene_atse.iloc[0]
+        strand = gene_info.get('event_strand', gene_info.get('strand', '+'))
+        chromosome = gene_info.get('chromosome', gene_info.get('chrom', 'chr1'))
+    else:
+        # No ATSE data - try to get strand/chromosome from junction_id in junctions table
+        junction_info_query = f"""
+        SELECT junction_id FROM {table_prefix}junctions
+        WHERE gene_id LIKE ?
+        LIMIT 1
+        """
+        junction_info_df = pd.read_sql_query(junction_info_query, conn, params=[f"{gene_id_base}%"])
+
+        if not junction_info_df.empty:
+            # Parse junction_id format: chr10_100042573_100048758_-
+            junction_id_sample = junction_info_df.iloc[0]['junction_id']
+            parts = junction_id_sample.split('_')
+            if len(parts) >= 4:
+                chromosome = parts[0] 
+                strand = parts[-1]     
+            else:
+                chromosome = 'chr1'
+                strand = '+'
+        else:
+            conn.close()
+            return {'error': f"No junction or ATSE data found for gene {gene_name}"}
+
+    conn.close()
     
     junctions = []
     transcripts_set = set()
@@ -1128,7 +1165,55 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
             seen.add(key)
             unique_junctions.append(j)
 
+    # Query junctions table to add GENCODE junctions that aren't in ATSE data
     conn = sqlite3.connect(db_path)
+    junctions_table_query = f"""
+    SELECT DISTINCT junction_id, matched_transcript_ids, event_id
+    FROM {table_prefix}junctions
+    WHERE gene_id LIKE ?
+    """
+    junctions_table_df = pd.read_sql_query(junctions_table_query, conn, params=[f"{gene_id_base}%"])
+    for _, row in junctions_table_df.iterrows():
+        junction_id = row['junction_id']
+        if pd.notna(junction_id) and '_' in junction_id:
+            parts = junction_id.split('_')
+            if len(parts) >= 3:
+                try:
+                    start = int(parts[1])
+                    end = int(parts[2])
+                    key = (start, end)
+
+                    # Only add if not already present
+                    if key not in seen:
+                        seen.add(key)
+
+                        # Parse transcript IDs from matched_transcript_ids
+                        transcript_list = []
+                        if pd.notna(row['matched_transcript_ids']):
+                            transcript_str = str(row['matched_transcript_ids'])
+                            if '|' in transcript_str:
+                                transcript_list = [t.strip() for t in transcript_str.split('|') if t.strip()]
+                            elif ',' in transcript_str:
+                                transcript_list = [t.strip() for t in transcript_str.split(',') if t.strip()]
+                            else:
+                                transcript_list = [transcript_str.strip()] if transcript_str.strip() else []
+
+                        unique_junctions.append({
+                            'start': start,
+                            'end': end,
+                            'event_id': row.get('event_id', ''),
+                            'event_type': 'gencode_reference',
+                            'transcripts': transcript_list
+                        })
+
+                        # Add transcripts to global set
+                        for transcript in transcript_list:
+                            if transcript and transcript not in ('nan', 'None', ''):
+                                transcripts_set.add(transcript)
+
+                except (ValueError, IndexError):
+                    pass
+
     junction_psi_query = f"""
     SELECT DISTINCT junction_id, junction_average_psi
     FROM {table_prefix}junctions
@@ -1154,14 +1239,22 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
                     junction_psi_map[key] = avg_psi
 
                 else:
-                    junction_psi_map[key] = max(junction_psi_map[key], avg_psi)
+                    # Handle NaN/None values in max comparison
+                    existing_psi = junction_psi_map[key]
+                    if pd.isna(existing_psi):
+                        junction_psi_map[key] = avg_psi
+                    elif pd.notna(avg_psi):
+                        junction_psi_map[key] = max(existing_psi, avg_psi)
 
             except (ValueError, IndexError):
                 pass
 
+    # Sort junctions by PSI (descending), then by start coordinate and use positive infinity so they sort to the bottom
     unique_junctions.sort(
         key=lambda x: (
-            -junction_psi_map.get((x['start'], x['end']), 0),  # negative for descending
+            -junction_psi_map.get((x['start'], x['end']), 0)
+            if pd.notna(junction_psi_map.get((x['start'], x['end'])))
+            else float('inf'),
             x['start']
         )
     )
@@ -1317,7 +1410,8 @@ def create_junction_exon_visualization(gene_data: dict,
         transcript_summary = transcript_summary.sort_values('id', key=lambda x: x.map({vid: idx for idx, vid in enumerate(ordered_transcript_ids)})).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
 
-        if color_by_abundance and gene_id_base:
+        # Always fetch isoform_average_tpm to identify GENCODE-only transcripts
+        if gene_id_base:
             conn = sqlite3.connect(db_path)
             try:
                 tpm_query = f"""
@@ -1418,8 +1512,17 @@ def create_junction_exon_visualization(gene_data: dict,
 
             trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
 
-            # Check for TPM color first (highest priority when enabled)
-            if color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
+            # Check if this is a GENCODE-only transcript (null/nan isoform_average_tpm val)
+            is_gencode_only = pd.isna(transcript.get('isoform_average_tpm'))
+            if is_gencode_only:
+                exon_fill_color = '#808080'
+
+            # Check for individual transcript color (second priority, convert to string for comparison)
+            elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
+                exon_fill_color = individual_transcript_colors[str(isoform_id)]
+
+            # Check for TPM color (third priority when enabled)
+            elif color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
                 tpm = transcript_tpm_dict[isoform_id]
 
                 if tpm_max > tpm_min:
@@ -1431,10 +1534,6 @@ def create_junction_exon_visualization(gene_data: dict,
 
                 rgba = cmap(normalized)
                 exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
-
-            # Check for individual transcript color (second priority, convert to string for comparison)
-            elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
-                exon_fill_color = individual_transcript_colors[str(isoform_id)]
 
             else:
                 exon_fill_color = exon_color
@@ -1544,8 +1643,8 @@ def create_junction_exon_visualization(gene_data: dict,
         finally:
             conn.close()
 
-        # Calculate PSI min/max for normalization
-        psi_values = [v for v in junction_psi_data.values() if v is not None]
+        # Calculate PSI min/max for normalization, filtering out nan 
+        psi_values = [v for v in junction_psi_data.values() if v is not None and pd.notna(v)]
         if psi_values:
             psi_min = min(psi_values)
             psi_max = max(psi_values)
@@ -1596,7 +1695,8 @@ def create_junction_exon_visualization(gene_data: dict,
             # Color priority: Average PSI color > user selected individual junction color > global color
             if color_junctions_by_psi and (start, end) in junction_psi_data:
                 psi = junction_psi_data[(start, end)]
-                if psi is not None:
+                # only color if valid PSI value
+                if psi is not None and pd.notna(psi):
                     if psi_max > psi_min:
                         normalized = (psi - psi_min) / (psi_max - psi_min)
                     else:
@@ -1604,7 +1704,7 @@ def create_junction_exon_visualization(gene_data: dict,
                     rgba = cmap(normalized)
                     junction_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
                 else:
-                    # PSI coloring enabled but no PSI data: so use individual color if available, otherwise global color
+                    # if PSI is None or NaN, use individual color if available, otherwise global grey color
                     if individual_junction_colors and junction_id in individual_junction_colors:
                         junction_fill_color = individual_junction_colors[junction_id]
                     else:
@@ -1629,7 +1729,8 @@ def create_junction_exon_visualization(gene_data: dict,
             hover_text = f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}'
             if (start, end) in junction_psi_data:
                 psi = junction_psi_data[(start, end)]
-                if psi is not None:
+                # Only show PSI if it's a valid number (not None / nan)
+                if psi is not None and pd.notna(psi):
                     hover_text += f"<br>Average PSI: {psi:.2f}"
 
             # Add conserved junction information if available
@@ -1683,11 +1784,10 @@ def create_junction_exon_visualization(gene_data: dict,
             connectgaps=False
         ))
 
-    # Setup colorscale (needed for both junction and transcript colorbars)
     if colorscale:
-        selected_colorscale = colorscale
+        selected_colorscale = get_plotly_colorscale(colorscale)
     else:
-        selected_colorscale = 'Viridis'
+        selected_colorscale = get_plotly_colorscale('Viridis')
 
     # Create PSI colorbar for junctions (independent of transcript coloring)
     if junctions and color_junctions_by_psi and 'psi_min' in locals() and 'psi_max' in locals():

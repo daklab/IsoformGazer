@@ -66,13 +66,14 @@ def check_database_status():
     return False
 
 
-def setup_local_database(data_dir=None, force_rebuild=False):
+def setup_local_database(data_dir=None, force_rebuild=False, include_mouse=True):
     """
-    Sets up SQLite database from data files for both human and mouse data.
+    Sets up SQLite database from data files for human and optionally mouse data.
 
     Args:
         data_dir: Optional path to data directory. Defaults to src/isoformgazer/data
         force_rebuild: If True, rebuild the database even if it exists
+        include_mouse: If True, load mouse data; if False, only load human data (default: True)
     """
     if data_dir is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -86,43 +87,64 @@ def setup_local_database(data_dir=None, force_rebuild=False):
 
     print()
     print(f"Creating new database at {db_path}.")
+    if not include_mouse:
+        print("NOTE: Mouse data will be excluded from this build.")
     print()
 
     if Path(db_path).exists():
         os.remove(db_path)
 
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA cache_size = 50000")
-    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA journal_mode = OFF")  
+    conn.execute("PRAGMA synchronous = OFF")  
+    conn.execute("PRAGMA cache_size = -200000")  # 200MB cache (negative = KB)
+    conn.execute("PRAGMA temp_store = MEMORY") 
+    conn.execute("PRAGMA locking_mode = EXCLUSIVE") 
+    conn.execute("PRAGMA page_size = 4096")  # Smaller page size for less waste
 
     human_data_dir = os.path.join(data_dir, "human")
     load_species_data(conn, human_data_dir, table_prefix="", species_name="Human")
 
-    mouse_data_dir = os.path.join(data_dir, "mouse")
-    load_species_data(conn, mouse_data_dir, table_prefix="mouse_", species_name="Mouse")
+    if include_mouse:
+        mouse_data_dir = os.path.join(data_dir, "mouse")
+        load_species_data(conn, mouse_data_dir, table_prefix="mouse_", species_name="Mouse")
+    else:
+        print("\n" + "="*80)
+        print("Skipping mouse data (include_mouse=False)")
+        print("="*80 + "\n")
 
     ######################################################################
     # Load human-mouse high-confidence conserved junctions mapping table
     ######################################################################
-    print(f"\n================================================================================")
-    print(f"Loading human-mouse conserved junctions mapping")
-    print(f"================================================================================\n")
-    conserved_junctions_file = os.path.join(mouse_data_dir, "junction_mapping_mouse_human_with_annotations.csv")
+    if include_mouse:
+        print(f"\n================================================================================")
+        print(f"Loading human-mouse conserved junctions mapping")
+        print(f"================================================================================\n")
+        conserved_junctions_file = os.path.join(mouse_data_dir, "junction_mapping_mouse_human_with_annotations.csv")
 
-    with tqdm(desc="Loading conserved junctions mapping data", unit=" rows") as pbar:
-        df_conserved = pd.read_csv(conserved_junctions_file)
-        pbar.update(len(df_conserved))
+        with tqdm(desc="Loading conserved junctions mapping data", unit=" rows") as pbar:
+            df_conserved = pd.read_csv(conserved_junctions_file)
+            pbar.update(len(df_conserved))
 
-    with tqdm(desc="Writing conserved junctions mapping to local database", unit="rows", total=len(df_conserved)) as pbar:
-        df_conserved.to_sql('human_mouse_conserved_junctions', conn, if_exists='replace', index=False)
-        pbar.update(len(df_conserved))
+        with tqdm(desc="Writing conserved junctions mapping to local database", unit="rows", total=len(df_conserved)) as pbar:
+            df_conserved.to_sql('human_mouse_conserved_junctions', conn, if_exists='replace', index=False)
+            pbar.update(len(df_conserved))
 
-    print(f" Processed all {len(df_conserved):,} rows from conserved junctions mapping!")
-    print()
+        print(f" Processed all {len(df_conserved):,} rows from conserved junctions mapping!")
+        print()
+    else:
+        print("\nSkipping human-mouse conserved junctions mapping (mouse data not included)")
+        print()
 
+    print("\nFinalizing database...")
     conn.commit()
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.commit()
+
+    print("Optimizing database. This may take a few minutes.")
+    conn.execute("VACUUM")
+
     conn.close()
 
     print("Database setup complete!")
@@ -328,6 +350,148 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
     conn.commit()
 
     ########################################################
+    # Append GENCODE-only transcripts (not detected in expression data)
+    ########################################################
+    if species_name == "Human":
+        gencode_csv = os.path.join(species_data_dir, "expected_transcripts_human_v46_gencode.csv")
+        gencode_psl = os.path.join(species_data_dir, "expected_transcripts_human_v46_gencode_psl.tsv")
+    elif species_name == "Mouse":
+        gencode_csv = os.path.join(species_data_dir, "expected_transcripts_mouse_m25_gencode.csv")
+        gencode_psl = os.path.join(species_data_dir, "expected_transcripts_mouse_m25_gencode_psl.tsv")
+    else:
+        gencode_csv = None
+        gencode_psl = None
+
+    if gencode_csv and gencode_psl and os.path.exists(gencode_csv) and os.path.exists(gencode_psl):
+        print(f"\nAppending {species_name} GENCODE-only transcripts (not in expression data)...")
+        with tqdm(desc=f"Loading {species_name} GENCODE transcripts", unit=" rows") as pbar:
+            df_gencode_isoforms = pd.read_csv(gencode_csv)
+            pbar.update(len(df_gencode_isoforms))
+
+        # Get list of genes that already exist in the expression data (isoforms table): 
+        # we only add reference non-detected transcripts for these currently
+        existing_genes_query = f"SELECT DISTINCT gene_name FROM {isoforms_table}"
+        existing_genes_df = pd.read_sql_query(existing_genes_query, conn)
+        existing_genes = set(existing_genes_df['gene_name'].str.upper())
+
+        print(f"  Found {len(existing_genes):,} genes in expression data")
+        # Ensure gene_name is uppercase for matching
+        if 'gene_name' in df_gencode_isoforms.columns:
+            df_gencode_isoforms['gene_name'] = df_gencode_isoforms['gene_name'].astype(str).str.upper()
+        original_count = len(df_gencode_isoforms)
+        df_gencode_isoforms = df_gencode_isoforms[df_gencode_isoforms['gene_name'].isin(existing_genes)]
+        filtered_count = len(df_gencode_isoforms)
+        print(f"  Filtered GENCODE transcripts: {original_count:,} -> {filtered_count:,} (kept only genes with expression data)")
+
+        # Get current max ID from isoforms table to continue numbering, assign sequential IDs starting after the last existing ID
+        max_id_result = conn.execute(f"SELECT MAX(id) FROM {isoforms_table}").fetchone()
+        max_id = max_id_result[0] if max_id_result[0] is not None else 0
+        df_gencode_isoforms['id'] = range(max_id + 1, max_id + 1 + len(df_gencode_isoforms))
+
+        # Ensure gene_id column exists (no version number)
+        if 'gene_id' in df_gencode_isoforms.columns:
+            df_gencode_isoforms['gene_id'] = df_gencode_isoforms['gene_id'].str.split('.').str[0]
+
+        cursor = conn.execute(f"PRAGMA table_info({isoforms_table})")
+        table_columns = {row[1] for row in cursor.fetchall()}  # row[1] is column name
+        gencode_columns = set(df_gencode_isoforms.columns)
+        columns_to_drop = gencode_columns - table_columns
+        if columns_to_drop:
+            df_gencode_isoforms = df_gencode_isoforms.drop(columns=list(columns_to_drop))
+            print(f"  Dropped {len(columns_to_drop)} incompatible columns: {', '.join(sorted(columns_to_drop))}")
+
+        # Verify all required table columns are present (fill with NaN if missing)
+        for col in table_columns:
+            if col not in df_gencode_isoforms.columns:
+                df_gencode_isoforms[col] = None
+
+        # Append to isoforms table
+        with tqdm(desc=f"Writing {species_name} GENCODE transcripts to database", unit="rows", total=len(df_gencode_isoforms)) as pbar:
+            df_gencode_isoforms.to_sql(isoforms_table, conn, if_exists='append', index=False)
+            pbar.update(len(df_gencode_isoforms))
+
+        print(f" Appended {len(df_gencode_isoforms):,} GENCODE-only transcripts to isoform table!")
+        print(f"Loading {species_name} GENCODE PSL structures...")
+        with tqdm(desc=f"Loading {species_name} GENCODE PSL data", unit=" rows") as pbar:
+            df_gencode_psl = pd.read_csv(gencode_psl, sep='\t')
+            pbar.update(len(df_gencode_psl))
+
+        # Assign same IDs as the isoform table (matching by transcript ID), create mapping from transcript ID to the assigned database ID
+        transcript_id_map = dict(zip(df_gencode_isoforms['transcript'], df_gencode_isoforms['id']))
+        df_gencode_psl['id'] = df_gencode_psl['trans_id'].map(transcript_id_map)
+
+        # Filter out PSL rows that don't have a matching transcript ID (gene was filtered out)
+        psl_original_count = len(df_gencode_psl)
+        df_gencode_psl = df_gencode_psl[df_gencode_psl['id'].notna()]
+        psl_filtered_count = len(df_gencode_psl)
+        print(f"  Filtered GENCODE PSL data: {psl_original_count:,} -> {psl_filtered_count:,} (kept only transcripts with expression data genes)")
+
+        df_gencode_psl['gene_id'] = df_gencode_psl['gene_id'].str.split('.').str[0]
+
+        # Add transcript_length column (sum of blockSizes)
+        def calculate_transcript_length(block_sizes_str):
+            if pd.isna(block_sizes_str):
+                return 0
+            sizes = [int(s) for s in str(block_sizes_str).rstrip(',').split(',') if s]
+            return sum(sizes)
+
+        df_gencode_psl['transcript_length'] = df_gencode_psl['blockSizes'].apply(calculate_transcript_length)
+
+        # Convert relative tStarts to absolute genomic coordinates
+        def convert_relative_to_absolute_starts(row):
+            """Convert relative tStarts (0-based from transcript start) to absolute genomic coordinates"""
+            if pd.isna(row['tStarts']) or pd.isna(row['tStart']):
+                return row['tStarts']
+            relative_starts = row['tStarts'].rstrip(',').split(',')
+            absolute_starts = [str(int(start) + int(row['tStart'])) for start in relative_starts if start]
+            return ', '.join(absolute_starts) + ','
+
+        df_gencode_psl['tStarts_absolute'] = df_gencode_psl.apply(convert_relative_to_absolute_starts, axis=1)
+
+        df_psl_to_append = pd.DataFrame()
+        df_psl_to_append['id'] = df_gencode_psl['id']
+        df_psl_to_append['qName'] = df_gencode_psl['trans_id']
+        df_psl_to_append['tName'] = df_gencode_psl['tName']
+        df_psl_to_append['strand'] = df_gencode_psl['strand']
+        df_psl_to_append['tStart'] = df_gencode_psl['tStart']
+        df_psl_to_append['tEnd'] = df_gencode_psl['tEnd']
+        df_psl_to_append['qSize'] = df_gencode_psl['transcript_length']
+        df_psl_to_append['blockCount'] = df_gencode_psl['blockCount']
+        df_psl_to_append['blockSizes'] = df_gencode_psl['blockSizes']
+        df_psl_to_append['tStarts'] = df_gencode_psl['tStarts_absolute']
+        df_psl_to_append['gene_id'] = df_gencode_psl['gene_id']
+        df_psl_to_append['trans_id'] = df_gencode_psl['trans_id']
+        df_psl_to_append['transcript_length'] = df_gencode_psl['transcript_length']
+        df_psl_to_append['matches'] = 0
+        df_psl_to_append['misMatches'] = 0
+        df_psl_to_append['repMatches'] = 0
+        df_psl_to_append['nCount'] = 0
+        df_psl_to_append['qNumInsert'] = 0
+        df_psl_to_append['qBaseInsert'] = 0
+        df_psl_to_append['tNumInsert'] = df_gencode_psl['blockCount'] - 1  # Number of introns
+        df_psl_to_append['tBaseInsert'] = 0
+        df_psl_to_append['qStart'] = 0
+        df_psl_to_append['qEnd'] = df_gencode_psl['transcript_length']
+        df_psl_to_append['tSize'] = 0
+        df_psl_to_append['qStarts'] = '0,'
+
+        with tqdm(desc=f"Writing {species_name} GENCODE PSL data to database", unit="rows", total=len(df_psl_to_append)) as pbar:
+            df_psl_to_append.to_sql(psl_table, conn, if_exists='append', index=False)
+            pbar.update(len(df_psl_to_append))
+
+        print(f" Appended {len(df_psl_to_append):,} GENCODE PSL structures to PSL table!")
+        print()
+
+    else:
+        if gencode_csv and not os.path.exists(gencode_csv):
+            print(f"\nNote: GENCODE transcript file not found at {gencode_csv}")
+            print(f"Skipping GENCODE-only transcript append for {species_name}")
+        if gencode_psl and not os.path.exists(gencode_psl):
+            print(f"\nNote: GENCODE PSL file not found at {gencode_psl}")
+            print(f"Skipping GENCODE PSL structure append for {species_name}")
+        print()
+
+    ########################################################
     # Load junction master table data
     ########################################################
     if species_name == "Human":
@@ -390,6 +554,10 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
             else:
                 chunk.to_sql(temp_table, conn, if_exists='append', index=False)
 
+            # Commit every 10 chunks to free up memory and reduce temp filesize
+            if i % 10 == 0 and i > 0:
+                conn.commit()
+
             row_count += len(chunk)
             chunk_pbar.update(1)
 
@@ -399,6 +567,64 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
             })
 
     print(f" Loaded all {row_count:,} rows from {species_name} junction file into temporary table!")
+
+    ########################################################
+    # Append GENCODE junctions (non-expressed junctions for structure plot)
+    ########################################################
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(species_data_dir))))
+    gencode_dir = os.path.join(repo_root, "adding_GENCODE_junctions")
+    if species_name == "Human":
+        gencode_junction_file = os.path.join(gencode_dir, "expected_junctions_human_043026.csv")
+    elif species_name == "Mouse":
+        gencode_junction_file = os.path.join(gencode_dir, "expected_junctions_mouse_043026.csv")
+    else:
+        gencode_junction_file = None
+
+    if gencode_junction_file and os.path.exists(gencode_junction_file):
+        print(f"\nAppending {species_name} GENCODE junctions to temporary table...")
+
+        # Count total GENCODE junction rows for progress tracking
+        with open(gencode_junction_file, 'r') as f:
+            gencode_total_lines = sum(1 for _ in f) - 1
+
+        gencode_chunk_size = 100000
+        gencode_estimated_chunks = (gencode_total_lines // gencode_chunk_size) + 1
+        gencode_row_count = 0
+
+        print(f"Loading {gencode_total_lines:,} GENCODE junction rows in chunks of {gencode_chunk_size:,}...")
+
+        with tqdm(desc=f"Appending {species_name} GENCODE junctions",
+                  unit="chunk",
+                  total=gencode_estimated_chunks) as gencode_pbar:
+
+            for i, gencode_chunk in enumerate(pd.read_csv(gencode_junction_file,
+                                                          chunksize=gencode_chunk_size,
+                                                          low_memory=False)):
+                if 'gene_symbol' in gencode_chunk.columns:
+                    gencode_chunk['gene_symbol'] = gencode_chunk['gene_symbol'].astype(str).str.upper()
+
+                gencode_chunk.to_sql(temp_table, conn, if_exists='append', index=False)
+
+                # Commit every 10 chunks to free up memory and reduce temp file size
+                if i % 10 == 0:
+                    conn.commit()
+
+                gencode_row_count += len(gencode_chunk)
+                gencode_pbar.update(1)
+
+                gencode_pbar.set_postfix({
+                    'rows': f"{gencode_row_count:,}",
+                    'chunk': f"{i+1}/{gencode_estimated_chunks}"
+                })
+
+        row_count += gencode_row_count
+        print(f" Appended all {gencode_row_count:,} GENCODE junction rows!")
+        print(f" Total rows in temporary table: {row_count:,}")
+        
+    else:
+        if gencode_junction_file:
+            print(f"\nWarning: GENCODE junction file not found at {gencode_junction_file}")
+            print(f"Skipping GENCODE junction append for {species_name}")
 
     # Rename gene_symbol to gene_name
     conn.execute(f"ALTER TABLE {temp_table} RENAME COLUMN gene_symbol TO gene_name")
@@ -1364,7 +1590,16 @@ app.layout = html.Div(className='app-layout', children=[
                                         {'label': 'YlOrRd', 'value': 'YlOrRd'},
                                         {'label': 'RdYlBu', 'value': 'RdYlBu'},
                                         {'label': 'Inferno', 'value': 'Inferno'},
-                                        {'label': 'Magma', 'value': 'Magma'}
+                                        {'label': 'Magma', 'value': 'Magma'},
+                                        {'label': 'Gazing', 'value': 'Gazing'},
+                                        {'label': 'BrBG', 'value': 'BrBG'},
+                                        {'label': 'PRGn', 'value': 'PRGn'},
+                                        {'label': 'PuOr', 'value': 'PuOr'},
+                                        {'label': 'RdGy', 'value': 'RdGy'},
+                                        {'label': 'Delta', 'value': 'delta'},
+                                        {'label': 'Oxy', 'value': 'oxy'},
+                                        {'label': 'Curl', 'value': 'curl'},
+                                        {'label': 'Geyser', 'value': 'Geyser'}
                                     ],
                                     value='Viridis',
                                     clearable=False
@@ -1468,7 +1703,16 @@ app.layout = html.Div(className='app-layout', children=[
                                     {'label': 'YlOrRd', 'value': 'YlOrRd'},
                                     {'label': 'RdYlBu', 'value': 'RdYlBu'},
                                     {'label': 'Inferno', 'value': 'Inferno'},
-                                    {'label': 'Magma', 'value': 'Magma'}
+                                    {'label': 'Magma', 'value': 'Magma'},
+                                    {'label': 'Gazing', 'value': 'Gazing'},
+                                    {'label': 'BrBG', 'value': 'BrBG'},
+                                    {'label': 'PRGn', 'value': 'PRGn'},
+                                    {'label': 'PuOr', 'value': 'PuOr'},
+                                    {'label': 'RdGy', 'value': 'RdGy'},
+                                    {'label': 'Delta', 'value': 'delta'},
+                                    {'label': 'Oxy', 'value': 'oxy'},
+                                    {'label': 'Curl', 'value': 'curl'},
+                                    {'label': 'Geyser', 'value': 'Geyser'}
                                 ],
                                 value='Viridis',
                                 clearable=False
