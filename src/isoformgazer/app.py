@@ -2957,16 +2957,23 @@ def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_
             filtered_junction_ids = [row.get('junction_id', '') for row in junction_full_data if row.get('junction_id')]
 
         # Handle bidirectional filtering between transcripts and junctions when filters are applied
-        if has_isoform_filters or has_junction_filters:
-            transcript_based_junction_ids = []
-            junction_based_transcript_ids = []
+        # Start with the filtered IDs from the full data stores, apply bidirectional filtering (intersection of filters focusing on coords)
+        final_transcript_ids = filtered_transcript_ids
+        final_junction_ids = filtered_junction_ids
 
+        if has_isoform_filters or has_junction_filters:
             # Isoform filtering → Junction filtering
             if selected_gene and has_isoform_filters and filtered_transcript_ids:
                 try:
                     transcript_based_junction_ids = filter_junctions_by_transcripts(
                         db_path, selected_gene, filtered_transcript_ids, species
                     )
+                    # If we also have junction filters, intersect them
+                    if has_junction_filters and transcript_based_junction_ids:
+                        final_junction_ids = list(set(filtered_junction_ids) & set(transcript_based_junction_ids))
+                    elif transcript_based_junction_ids:
+                        # Only isoform filter active
+                        final_junction_ids = transcript_based_junction_ids
                 except Exception as e:
                     print(f"Error in transcript-based junction filtering: {e}")
 
@@ -2976,28 +2983,17 @@ def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_
                     junction_based_transcript_ids = filter_transcripts_by_junctions(
                         db_path, filtered_junction_ids, species
                     )
+                    # If we also have isoform filters, intersect them
+                    if has_isoform_filters and junction_based_transcript_ids:
+                        final_transcript_ids = list(set(filtered_transcript_ids) & set(junction_based_transcript_ids))
+                    elif junction_based_transcript_ids:
+                        # Only junction filter active
+                        final_transcript_ids = junction_based_transcript_ids
                 except Exception as e:
                     print(f"Error in junction-based transcript filtering: {e}")
-            
-            # Intersect filters from both master tables for joint filtering
-            if has_isoform_filters and has_junction_filters:
-                final_transcript_ids = list(set(filtered_transcript_ids) & set(junction_based_transcript_ids)) if junction_based_transcript_ids else filtered_transcript_ids
-                final_junction_ids = list(set(filtered_junction_ids) & set(transcript_based_junction_ids)) if transcript_based_junction_ids else filtered_junction_ids
 
-            elif has_isoform_filters:
-                final_transcript_ids = filtered_transcript_ids
-                final_junction_ids = transcript_based_junction_ids
-
-            elif has_junction_filters:
-                final_transcript_ids = junction_based_transcript_ids
-                final_junction_ids = filtered_junction_ids
-
-            else:
-                final_transcript_ids = filtered_transcript_ids
-                final_junction_ids = filtered_junction_ids
-            
-            filtered_transcript_ids = final_transcript_ids
-            filtered_junction_ids = final_junction_ids
+        filtered_transcript_ids = final_transcript_ids
+        filtered_junction_ids = final_junction_ids
         
         return filtered_transcript_ids, filtered_junction_ids
     
@@ -3331,34 +3327,25 @@ def update_summary_blocks(selected_gene, species):
 ######################################################################
 # SQLLITE MASTER TABLE PROCESSING CALLBACKS
 ######################################################################
+# Callback 1: Update isoform-full-data-store (does NOT depend on filtered stores)
 @app.callback(
-    [dash.dependencies.Output('left_data_table', 'data'),
-     dash.dependencies.Output('left_data_table', 'page_count'),
-     dash.dependencies.Output('isoform-full-data-store', 'data')],
-    [dash.dependencies.Input('left_data_table', 'page_current'),
-     dash.dependencies.Input('left_data_table', 'page_size'),
-     dash.dependencies.Input('left_data_table', 'sort_by'),
+    dash.dependencies.Output('isoform-full-data-store', 'data'),
+    [dash.dependencies.Input('left_data_table', 'sort_by'),
      dash.dependencies.Input('left_data_table', 'filter_query'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('left-table-validation-store', 'data'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
-
+def update_isoform_full_data_store(sort_by, filter_query, selected_gene, validation_data, species):
+    """Query database and store full isoform data (filtered by user's filter_query only)"""
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
-
-    # Check what triggered this callback: if only pagination changes, do not need to update full data store.
-    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
-    ctx = dash.callback_context
-    triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
-    pagination_only = triggered_prop in ['left_data_table.page_current', 'left_data_table.page_size']
 
     table_prefix = get_table_prefix(species)
     table_name = f'{table_prefix}isoforms'
     filters = parse_filter_query(db_path, filter_query, table_name=table_name)
 
-    # Convert gene_name to gene_id for filtering to get all transcripts (including those with gene_name='NAN')
+    # Convert gene_name to gene_id for filtering
     gene_filter = selected_gene
     if selected_gene:
         gene_id = get_gene_id_for_gene_name(db_path, selected_gene, species)
@@ -3385,6 +3372,37 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
         gene_filter=gene_filter
     )
 
+    return full_data
+
+
+# Callback 2: Update table display (depends on both stores, applies bidirectional filtering)
+@app.callback(
+    [dash.dependencies.Output('left_data_table', 'data'),
+     dash.dependencies.Output('left_data_table', 'page_count')],
+    [dash.dependencies.Input('left_data_table', 'page_current'),
+     dash.dependencies.Input('left_data_table', 'page_size'),
+     dash.dependencies.Input('isoform-full-data-store', 'data'),
+     dash.dependencies.Input('filtered-isoform-store', 'data')],
+    [dash.dependencies.State('right_data_table', 'filter_query')]
+)
+def update_isoform_table_display(page_current, page_size, isoform_full_data, filtered_isoform_ids, junction_filter_query):
+    """Display paginated isoform data with bidirectional filtering applied"""
+    if not isoform_full_data:
+        return [], 0
+
+    full_data = list(isoform_full_data)  # Make a copy
+
+    # Apply bidirectional filtering: use filtered_isoform_ids if it represents a filtered subset
+    if filtered_isoform_ids and isinstance(filtered_isoform_ids, list) and len(filtered_isoform_ids) > 0:
+        # Get all IDs from full data
+        all_ids_in_full_data = set(row.get('id') for row in full_data if row.get('id'))
+        filtered_ids_set = set(filtered_isoform_ids)
+
+        # Apply filtering if filtered set is different from full set
+        if filtered_ids_set != all_ids_in_full_data:
+            full_data = [row for row in full_data if row.get('id') in filtered_ids_set]
+
+    total_count = len(full_data)
     page_current = page_current or 0
     page_size = page_size or 10
 
@@ -3393,39 +3411,28 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
     paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
 
-    if pagination_only:
-        return paginated_data, page_count, no_update
-
-    return paginated_data, page_count, full_data
+    return paginated_data, page_count
 
 
+# Callback 3: Update junction-full-data-store (does NOT depend on filtered stores)
 @app.callback(
-    [dash.dependencies.Output('right_data_table', 'data'),
-     dash.dependencies.Output('right_data_table', 'page_count'),
-     dash.dependencies.Output('junction-full-data-store', 'data')],
-    [dash.dependencies.Input('right_data_table', 'page_current'),
-     dash.dependencies.Input('right_data_table', 'page_size'),
-     dash.dependencies.Input('right_data_table', 'sort_by'),
+    dash.dependencies.Output('junction-full-data-store', 'data'),
+    [dash.dependencies.Input('right_data_table', 'sort_by'),
      dash.dependencies.Input('right_data_table', 'filter_query'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('right-table-validation-store', 'data'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
+def update_junction_full_data_store(sort_by, filter_query, selected_gene, validation_data, species):
+    """Query database and store full junction data (filtered by user's filter_query only)"""
     if filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
-
-    # Check what triggered this callback: if only pagination changes, do not need to update full data store.
-    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
-    ctx = dash.callback_context
-    triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
-    pagination_only = triggered_prop in ['right_data_table.page_current', 'right_data_table.page_size']
 
     table_prefix = get_table_prefix(species)
     table_name = f'{table_prefix}junctions'
     filters = parse_filter_query(db_path, filter_query, table_name=table_name)
 
-    # Convert gene_name to gene_id for filtering to get all junctions (including those for transcripts with gene_name='NAN')
+    # Convert gene_name to gene_id for filtering
     gene_filter = selected_gene
     if selected_gene:
         gene_id = get_gene_id_from_atse(db_path, selected_gene, species)
@@ -3452,6 +3459,37 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
         gene_filter=gene_filter
     )
 
+    return full_data
+
+
+# Callback 4: Update table display (depends on both stores, applies bidirectional filtering)
+@app.callback(
+    [dash.dependencies.Output('right_data_table', 'data'),
+     dash.dependencies.Output('right_data_table', 'page_count')],
+    [dash.dependencies.Input('right_data_table', 'page_current'),
+     dash.dependencies.Input('right_data_table', 'page_size'),
+     dash.dependencies.Input('junction-full-data-store', 'data'),
+     dash.dependencies.Input('filtered-junction-store', 'data')],
+    [dash.dependencies.State('left_data_table', 'filter_query')]
+)
+def update_junction_table_display(page_current, page_size, junction_full_data, filtered_junction_ids, isoform_filter_query):
+    """Display paginated junction data with bidirectional filtering applied"""
+    if not junction_full_data:
+        return [], 0
+
+    full_data = list(junction_full_data)  # Make a copy
+
+    # Apply bidirectional filtering: use filtered_junction_ids if it represents a filtered subset
+    if filtered_junction_ids and isinstance(filtered_junction_ids, list) and len(filtered_junction_ids) > 0:
+        # Get all IDs from full data
+        all_ids_in_full_data = set(row.get('junction_id') for row in full_data if row.get('junction_id'))
+        filtered_ids_set = set(filtered_junction_ids)
+
+        # Apply filtering if filtered set is different from full set
+        if filtered_ids_set != all_ids_in_full_data:
+            full_data = [row for row in full_data if row.get('junction_id') in filtered_ids_set]
+
+    total_count = len(full_data)
     page_current = page_current or 0
     page_size = page_size or 10
 
@@ -3460,10 +3498,7 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
     paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
 
-    if pagination_only:
-        return paginated_data, page_count, no_update
-
-    return paginated_data, page_count, full_data
+    return paginated_data, page_count
 
 
 
@@ -3934,8 +3969,26 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
 
-    has_isoform_filter = bool(isoform_filter_query and isoform_filter_query.strip())
-    actual_filtered_transcript_ids = filtered_transcript_ids if has_isoform_filter else None
+    # Determine if actual filtering is happening by checking if filtered IDs is a subset: both direct isoform filtering AND bidirectional filtering from junctions
+    actual_filtered_transcript_ids = None
+    if filtered_transcript_ids and isinstance(filtered_transcript_ids, list) and len(filtered_transcript_ids) > 0 and selected_gene:
+        try:
+            # Get total transcript count for this gene
+            conn = sqlite3.connect(db_path)
+            table_prefix = '' if species == "Human" else 'mouse_'
+            count_query = f"SELECT COUNT(*) FROM {table_prefix}isoforms WHERE gene_name = ?"
+            total_count = conn.execute(count_query, [selected_gene]).fetchone()[0]
+            conn.close()
+
+            # Only apply filtering if filtered list is smaller than total (actual filtering is happening)
+            if len(filtered_transcript_ids) < total_count:
+                actual_filtered_transcript_ids = filtered_transcript_ids
+            # If filtered_transcript_ids has same count as total, pass None (no filtering)
+            else:
+                actual_filtered_transcript_ids = None
+        except Exception as e:
+            print(f"Error checking filter status: {e}")
+            actual_filtered_transcript_ids = None
 
     if not selected_gene:
         empty_fig = create_empty_atse_message("Select a gene to view splice junctions and exons")

@@ -508,24 +508,7 @@ def create_transcript_structure_plot(db_path: str,
 
     transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
 
-    # Query database for transcript IDs in correct TPM order (like junction_utils.py does)
-    conn = sqlite3.connect(db_path)
-    # Get gene_id for gene_name
-    gene_id = get_gene_id_for_gene_name(db_path, gene_name, species)
-    if gene_id:
-        transcript_ids_query = f"""
-        SELECT DISTINCT id FROM {table_prefix}isoforms
-        WHERE gene_id LIKE ?
-        ORDER BY isoform_average_tpm DESC NULLS LAST
-        """
-        ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=[f"{gene_id}%"])
-    else:
-        ordered_ids_df = pd.DataFrame()
-    conn.close()
-    ordered_transcript_ids = ordered_ids_df['id'].tolist() if not ordered_ids_df.empty else []
-    # Reverse because transcripts are displayed from top to bottom
-    ordered_transcript_ids = ordered_transcript_ids[::-1]
-
+    # First get transcript_summary from the data
     transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
         'trans_id': 'first',
         'transcript_start': 'min',
@@ -535,8 +518,30 @@ def create_transcript_structure_plot(db_path: str,
         transcript_summary['transcript_end'] - transcript_summary['transcript_start']
     )
 
+    conn = sqlite3.connect(db_path)
+    transcript_names = transcript_summary['trans_id'].tolist()
+    if transcript_names:
+        placeholders = ','.join(['?'] * len(transcript_names))
+        transcript_ids_query = f"""
+        SELECT DISTINCT transcript, id FROM {table_prefix}isoforms
+        WHERE transcript IN ({placeholders})
+        ORDER BY isoform_average_tpm DESC NULLS LAST
+        """
+        ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=transcript_names)
+        # Map back to the PSL table IDs using transcript name
+        ordered_transcript_ids = [int(transcript_summary[transcript_summary['trans_id'] == trans_name]['id'].iloc[0])
+                                 for trans_name in ordered_ids_df['transcript']
+                                 if trans_name in transcript_summary['trans_id'].values]
+    else:
+        ordered_transcript_ids = []
+    conn.close()
+    # Reverse because transcripts are displayed from top to bottom
+    ordered_transcript_ids = ordered_transcript_ids[::-1]
+
     # Reindex transcript_summary to match the original sorted order from database
-    transcript_summary = transcript_summary.set_index('id').loc[ordered_transcript_ids].reset_index()
+    transcript_summary_id_set = set(int(x) for x in transcript_summary['id'].values)
+    valid_ordered_ids = [tid for tid in ordered_transcript_ids if tid in transcript_summary_id_set]
+    transcript_summary = transcript_summary.set_index('id').loc[valid_ordered_ids].reset_index()
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
 
     # Always fetch isoform_average_tpm to identify GENCODE-only transcripts
@@ -545,12 +550,16 @@ def create_transcript_structure_plot(db_path: str,
         gene_id_for_tpm = get_gene_id_for_gene_name(db_path, gene_name, species)
         if gene_id_for_tpm:
             tpm_query = f"""
-            SELECT DISTINCT id, isoform_average_tpm
+            SELECT DISTINCT transcript, isoform_average_tpm
             FROM {table_prefix}isoforms
             WHERE gene_id LIKE ?
             """
             tpm_df = pd.read_sql_query(tpm_query, conn, params=[f"{gene_id_for_tpm}%"])
-            transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+            # Rename 'transcript' column to 'trans_id' to match transcript_summary
+            tpm_df = tpm_df.rename(columns={'transcript': 'trans_id'})
+            transcript_summary = transcript_summary.merge(tpm_df[['trans_id', 'isoform_average_tpm']], on='trans_id', how='left')
+            # Fill NaN values with 0 for transcripts that don't exist in isoforms table (GENCODE/reference only datapoints)
+            transcript_summary['isoform_average_tpm'] = transcript_summary['isoform_average_tpm'].fillna(0)
     finally:
         conn.close()
 
@@ -565,6 +574,10 @@ def create_transcript_structure_plot(db_path: str,
 
         else:
             transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
+            if transcript_summary['abundance_tpm'].isna().all():
+                print(f"WARNING: All abundance_tpm values are NaN for gene {gene_name}")
+                print(f"isoform_average_tpm values: {transcript_summary['isoform_average_tpm'].tolist()}")
+                print(f"transcript_summary IDs: {transcript_summary['id'].tolist()}")
 
     # Calculate dynamic height if not provided or if using default slider value
     if height is None or height == 600:

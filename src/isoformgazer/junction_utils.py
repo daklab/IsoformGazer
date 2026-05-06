@@ -1381,33 +1381,39 @@ def create_junction_exon_visualization(gene_data: dict,
     if not transcript_data.empty:
         transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
         conn = sqlite3.connect(db_path)
-        # Get gene_id from gene_data
         gene_id_with_version = gene_data.get('gene_id', '')
         gene_id_base = gene_id_with_version.split('.')[0] if gene_id_with_version else ''
-
-        if gene_id_base:
-            transcript_ids_query = f"""
-            SELECT DISTINCT id FROM {table_prefix}isoforms
-            WHERE gene_id LIKE ?
-            ORDER BY isoform_average_tpm DESC NULLS LAST
-            """
-            ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=[f"{gene_id_base}%"])
-        else:
-            ordered_ids_df = pd.DataFrame()
-        conn.close()
-        ordered_transcript_ids = ordered_ids_df['id'].tolist() if not ordered_ids_df.empty else []
-        # Reverse because transcripts are displayed from top to bottom
-        ordered_transcript_ids = ordered_transcript_ids[::-1]
-
         transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
             'trans_id': 'first',
             'transcript_start': 'min',
             'transcript_end': 'max'
         })
-
         transcript_summary['transcript_length'] = transcript_summary['transcript_end'] - transcript_summary['transcript_start']
+
+        # Query order using transcript names
+        transcript_names = transcript_summary['trans_id'].tolist()
+        if transcript_names:
+            placeholders = ','.join(['?'] * len(transcript_names))
+            transcript_ids_query = f"""
+            SELECT DISTINCT transcript, id FROM {table_prefix}isoforms
+            WHERE transcript IN ({placeholders})
+            ORDER BY isoform_average_tpm DESC NULLS LAST
+            """
+            ordered_ids_df = pd.read_sql_query(transcript_ids_query, conn, params=transcript_names)
+            # Map back to the PSL table IDs using transcript name
+            ordered_transcript_ids = [int(transcript_summary[transcript_summary['trans_id'] == trans_name]['id'].iloc[0])
+                                     for trans_name in ordered_ids_df['transcript']
+                                     if trans_name in transcript_summary['trans_id'].values]
+        else:
+            ordered_transcript_ids = []
+        conn.close()
+        # Reverse because transcripts are displayed from top to bottom
+        ordered_transcript_ids = ordered_transcript_ids[::-1]
+
         # Reindex transcript_summary to match the original sorted order from database and sort by isoform_average_tpm descending
-        transcript_summary = transcript_summary.sort_values('id', key=lambda x: x.map({vid: idx for idx, vid in enumerate(ordered_transcript_ids)})).reset_index(drop=True)
+        transcript_summary_id_set = set(int(x) for x in transcript_summary['id'].values)
+        valid_ordered_ids = [tid for tid in ordered_transcript_ids if tid in transcript_summary_id_set]
+        transcript_summary = transcript_summary.sort_values('id', key=lambda x: x.map({vid: idx for idx, vid in enumerate(valid_ordered_ids)})).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
 
         # Always fetch isoform_average_tpm to identify GENCODE-only transcripts
@@ -1415,12 +1421,17 @@ def create_junction_exon_visualization(gene_data: dict,
             conn = sqlite3.connect(db_path)
             try:
                 tpm_query = f"""
-                SELECT DISTINCT id, isoform_average_tpm
+                SELECT DISTINCT transcript, isoform_average_tpm, id
                 FROM {table_prefix}isoforms
                 WHERE gene_id LIKE ?
                 """
                 tpm_df = pd.read_sql_query(tpm_query, conn, params=[f"{gene_id_base}%"])
-                transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+                # Rename 'transcript' column to 'trans_id' to match transcript_summary
+                tpm_df = tpm_df.rename(columns={'transcript': 'trans_id'})
+                # Merge by transcript name: transcripts not in isoforms table will have NaN isoform_average_tpm
+                transcript_summary = transcript_summary.merge(tpm_df[['trans_id', 'isoform_average_tpm']], on='trans_id', how='left')
+                # Fill NaN values with 0 for transcripts that don't exist in isoforms table (GENCODE/reference only)
+                transcript_summary['isoform_average_tpm'] = transcript_summary['isoform_average_tpm'].fillna(0)
             finally:
                 conn.close()
         
