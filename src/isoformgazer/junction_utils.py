@@ -3,17 +3,18 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from isoformgazer._clustergram import Clustergram
 import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import io
 import base64
 from matplotlib.patches import Patch
-import dash_bio
-from dash import dcc
 from sqlalchemy import text
 from src.isoformgazer.db_config import get_db_config
-from src.isoformgazer.data_utils import apply_distance_preprocessing, get_matplotlib_colormap, get_table_prefix
+import dash_bio
+from dash import dcc
+from src.isoformgazer.data_utils import apply_distance_preprocessing, get_matplotlib_colormap, get_table_prefix, get_plotly_colorscale
 from src.isoformgazer.isoform_utils import (load_psl_data, get_gene_id_for_gene_name, abbreviate_transcript_name,
                            calculate_dynamic_structure_plot_height, calculate_clustergram_min_height,
                            get_tissue_tpm_for_isoforms, get_organ_tpm_for_isoforms, get_organ_colors)
@@ -169,6 +170,7 @@ def extract_organ_from_cell_type(cell_type):
     # handle typo "lympha" (single word) -> "lymph node"
     if organ == 'lympha':
         return 'lymph node'
+    # abbreviation "si" -> "small intestine"
     elif organ == 'si':
         return 'small intestine'
     elif organ == 'bat': 
@@ -228,7 +230,7 @@ def get_unique_organs_from_junctions(db_path: str, species: str = 'Human') -> tu
     # Query to get unique cell types from junction_psis table
     query = f"""
     SELECT DISTINCT cell_type
-    FROM {table_prefix}junction_psis
+    FROM "{table_prefix}junction_psis"
     WHERE cell_type IS NOT NULL
     ORDER BY cell_type
     """
@@ -270,7 +272,7 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     # Query junction_psis table for PSI values per junction-cell_type
     query = f"""
     SELECT cell_type, junction_id, AVG(psi) as avg_psi, COUNT(*) as n_observations
-    FROM {table_prefix}junction_psis
+    FROM "{table_prefix}junction_psis"
     WHERE psi IS NOT NULL
     GROUP BY cell_type, junction_id
     HAVING n_observations >= 5
@@ -324,7 +326,7 @@ def create_summary_clustergram(db_path, height=600, colorscale='Viridis', show_t
     else:
         actual_clustergram_height = height + 200
 
-    clustergram = dash_bio.Clustergram(
+    clustergram = Clustergram(
         data=psi_matrix_filtered.values,
         column_labels=cell_type_labels,
         row_labels=list(psi_matrix_filtered.index),
@@ -477,7 +479,7 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
         z=heatmap_data.values,
         x=heatmap_data.columns.tolist(),
         y=heatmap_data.index.tolist(),
-        colorscale=colorscale,
+        colorscale=get_plotly_colorscale(colorscale),
         zmin=0,
         zmax=1,
         customdata=n_cells_data.values,
@@ -511,42 +513,49 @@ def create_single_junction_heatmap(gene_vals, gene_name, height, colorscale):
 
 def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis', show_tables='show', filtered_junction_ids=None, show_celltype_labels=False, distance_metric='euclidean', linkage_method='complete', show_gridlines=False, species="Human"):
     """Create ATSE-level clustergram with junctions ordered by average PSI (descending)"""
-    # For mouse data, always hide cell type labels due to many cell types
-    if species == 'Mouse':
-        show_celltype_labels = False
-
     db_config = get_db_config()
     table_prefix = get_table_prefix(species)
     # Get gene_id for gene_name
     gene_id = get_gene_id_from_atse(db_path, gene_name, species)
     if not gene_id:
-        return create_empty_clustergram_message(f"Data for {gene_name} is not present in the short-read data.")
+        return create_empty_clustergram_message(f"{gene_name} is not present in the short-read data.")
 
     # Join junctions master table with junction_psis table to get PSI values per cell type
     query = f"""
-    SELECT jp.cell_type, jp.junction_id, jp.psi, jp.n_cells, jp.atse_count, jp.junction_count, j.event_id, j.gene_name, j.junction_average_psi
-    FROM {table_prefix}junction_psis jp
-    JOIN {table_prefix}junctions j on jp.junction_id = j.junction_id
-    WHERE j.gene_id LIKE :gene_id AND jp.psi IS NOT NULL
+    SELECT jp.cell_type, jp.junction_id, jp.psi, jp.n_cells,
+           jp.atse_count, jp.junction_count,
+           j.event_id, j.gene_name, j.junction_average_psi
+    FROM "{table_prefix}junction_psis" jp
+    JOIN "{table_prefix}junctions" j ON jp.junction_id = j.junction_id
+    WHERE j.gene_id LIKE :gene_id_pattern AND jp.psi IS NOT NULL
     """
-    #query = f"""
-    #SELECT cell_type, junction_id, psi, n_cells, event_id, gene_name, junction_average_psi
-    #FROM {table_prefix}junctions
-    #WHERE gene_id LIKE :gene_id AND psi IS NOT NULL
-    #"""
     if filtered_junction_ids:
         filtered_ids_str = [str(jid) for jid in filtered_junction_ids]
-        placeholders = ','.join([f':jid_{i}' for i in range(len(filtered_ids_str))])
+        placeholders = ','.join([f':id_{i}' for i in range(len(filtered_ids_str))])
         query += f" AND jp.junction_id IN ({placeholders})"
-        params = {'gene_id': f"{gene_id}%", **{f'jid_{i}': filtered_ids_str[i] for i in range(len(filtered_ids_str))}}
+        params = {"gene_id_pattern": f"{gene_id}%"}
+        params.update({f'id_{i}': filtered_ids_str[i] for i in range(len(filtered_ids_str))})
     else:
-        params = {'gene_id': f"{gene_id}%"}
+        params = {"gene_id_pattern": f"{gene_id}%"}
 
     query += " ORDER BY j.junction_average_psi DESC NULLS LAST, jp.junction_id"
     gene_vals = db_config.execute_query(query, params=params)
 
+    # Check if there are ANY junctions (including GENCODE) when no expression data found
     if len(gene_vals) == 0:
-        return create_empty_clustergram_message(f"No junction data found for gene: {gene_name}")
+        # Check if gene has GENCODE junctions (with null PSI value)
+        gencode_check_query = f"""
+        SELECT COUNT(*) as count
+        FROM "{table_prefix}junctions"
+        WHERE gene_id LIKE :gene_id_pattern AND junction_average_psi IS NULL
+        """
+        gencode_result = db_config.execute_query(gencode_check_query, params={"gene_id_pattern": f"{gene_id}%"})
+
+        has_gencode_junctions = gencode_result.iloc[0]['count'] > 0
+        if has_gencode_junctions:
+            return create_empty_clustergram_message(f"No junction usage data found for gene {gene_name} in the short-read data.")
+        else:
+            return create_empty_clustergram_message(f"No junction data found for gene {gene_name}.")
 
     ordered_junction_ids = gene_vals['junction_id'].drop_duplicates().tolist()
     # note: have to again reverse the order same as for transcripts because Dash Bio clustergrams display the first row at the bottom...
@@ -628,7 +637,7 @@ def create_gene_clustergram(db_path, gene_name, height=600, colorscale='Viridis'
         bottom_margin = max(0, base_bottom_margin - 150)
 
     try:
-        clustergram, computed_traces = dash_bio.Clustergram(
+        clustergram, computed_traces = Clustergram(
             data=psi_matrix_processed.values,
             row_labels=junction_labels,
             column_labels=cell_type_labels,
@@ -821,7 +830,7 @@ def apply_colorscale_to_clustergram(fig, colorscale):
     try:
         if len(fig.data) > 0:
             heatmap_trace = fig.data[-1]
-            heatmap_trace.colorscale = colorscale
+            heatmap_trace.colorscale = get_plotly_colorscale(colorscale)
             heatmap_trace.showscale = True
 
     except Exception as e:
@@ -844,8 +853,8 @@ def get_gene_id_from_atse(db_path: str, gene_name: str, species="Human") -> str:
     """Get gene_id for a given gene_name from the database"""
     db_config = get_db_config()
     table_prefix = get_table_prefix(species)
-    query = f"SELECT DISTINCT gene_id FROM {table_prefix}junctions WHERE gene_name = :gene_name LIMIT 1"
-    result = db_config.execute_query(query, params={'gene_name': gene_name})
+    query = f"SELECT DISTINCT gene_id FROM ""{table_prefix}junctions"" WHERE gene_name = :gene_name LIMIT 1"
+    result = db_config.execute_query(query, params={"gene_name": gene_name})
 
     if len(result) > 0:
         # Remove version number
@@ -863,13 +872,14 @@ def filter_junctions_by_transcripts(db_path: str, gene_name: str, filtered_trans
 
     db_config = get_db_config()
     table_prefix = get_table_prefix(species)
-    transcript_id_placeholders = ','.join(['?'] * len(filtered_transcript_ids))
+    transcript_id_placeholders = ','.join([f':tid_{i}' for i in range(len(filtered_transcript_ids))])
     transcript_query = f"""
     SELECT DISTINCT transcript
-    FROM {table_prefix}isoforms
+    FROM "{table_prefix}isoforms"
     WHERE id IN ({transcript_id_placeholders})
     """
-    transcript_result = db_config.execute_query(transcript_query, params=filtered_transcript_ids)
+    params = {f'tid_{i}': filtered_transcript_ids[i] for i in range(len(filtered_transcript_ids))}
+    transcript_result = db_config.execute_query(transcript_query, params=params)
 
     if transcript_result.empty:
         return []
@@ -885,11 +895,11 @@ def filter_junctions_by_transcripts(db_path: str, gene_name: str, filtered_trans
     # Query junctions table for junctions that have these transcripts in matched_transcript_ids
     junction_query = f"""
     SELECT DISTINCT junction_id, matched_transcript_ids
-    FROM {table_prefix}junctions
+    FROM "{table_prefix}junctions"
     WHERE gene_name = :gene_name
     AND matched_transcript_ids IS NOT NULL
     """
-    junction_result = db_config.execute_query(junction_query, params={'gene_name': gene_name})
+    junction_result = db_config.execute_query(junction_query, params={"gene_name": gene_name})
 
     if junction_result.empty:
         return []
@@ -910,54 +920,175 @@ def filter_junctions_by_transcripts(db_path: str, gene_name: str, filtered_trans
     return matching_junction_ids
 
 
+def _get_transcripts_from_gencode(conn, junction_id, gene_name, table_prefix, coord_tolerance=5):
+    """
+    Helper to get transcripts from GENCODE GTF data when matched_transcript_ids is empty.
+    Parses junction coordinates and finds matching transcripts in gencode_gtf table.
+    """
+    parts = junction_id.rsplit('_', 1)
+    if len(parts) != 2:
+        return set()
+
+    coord_part, strand = parts[0], parts[1]
+    coord_parts = coord_part.split('_')
+    if len(coord_parts) < 3:
+        return set()
+
+    try:
+        chrom = '_'.join(coord_parts[:-2])
+        target_start = int(coord_parts[-2])
+        target_end = int(coord_parts[-1])
+    except (ValueError, IndexError):
+        return set()
+
+    gencode_table = f"{table_prefix}gencode_gtf" if table_prefix else "gencode_gtf"
+    gencode_query = (
+        f'SELECT transcript_id, chromosome, exon_start, exon_end, strand '
+        f'FROM "{gencode_table}" WHERE gene_name = :gene_name ORDER BY transcript_id, exon_start'
+    )
+
+    try:
+        db_config = get_db_config()
+        gencode_data = db_config.execute_query(gencode_query, params={"gene_name": gene_name})
+    except:
+        return set()
+
+    matching_transcripts = set()
+    for transcript_id, group in gencode_data.groupby('transcript_id'):
+        exons = group.sort_values('exon_start')
+        if exons.iloc[0]['strand'] != strand or exons.iloc[0]['chromosome'] != chrom:
+            continue
+
+        for i in range(len(exons) - 1):
+            junction_start = int(exons.iloc[i]['exon_end'])
+            junction_end = int(exons.iloc[i + 1]['exon_start'])
+
+            if (abs(junction_start - target_start) <= coord_tolerance and
+                abs(junction_end - target_end) <= coord_tolerance):
+                transcript_no_version = transcript_id.split('.')[0] if '.' in transcript_id else transcript_id
+                matching_transcripts.add(transcript_no_version)
+                break
+
+    return matching_transcripts
+
+
 def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list, species="Human") -> list:
     """
     Filter transcript IDs based on junction overlap using matched_transcript_ids column.
-    Returns a list of transcript IDs (from isoforms table) that align with the filtered junctions.
+    Returns a list of transcript IDs (from isoforms table) that contain ALL the filtered junctions (INTERSECTION).
+
+    For multiple junctions, only transcripts that contain ALL of them are returned.
+    Only returns expressed transcripts (with non-NULL TPM values).
+    Falls back to GENCODE GTF data for junctions with empty matched_transcript_ids.
     """
     if not filtered_junction_ids:
         return []
 
     db_config = get_db_config()
     table_prefix = get_table_prefix(species)
-    junction_id_placeholders = ','.join(['?'] * len(filtered_junction_ids))
-    junction_query = f"""
-    SELECT DISTINCT matched_transcript_ids
-    FROM {table_prefix}junctions
+    junction_id_placeholders = ','.join([f':jid_{i}' for i in range(len(filtered_junction_ids))])
+
+    # First, get the gene name from the junctions
+    gene_query = f"""
+    SELECT DISTINCT gene_name
+    FROM "{table_prefix}junctions"
     WHERE junction_id IN ({junction_id_placeholders})
-    AND matched_transcript_ids IS NOT NULL
+    LIMIT 1
     """
-    junction_result = db_config.execute_query(junction_query, params=filtered_junction_ids)
+    params = {f'jid_{i}': filtered_junction_ids[i] for i in range(len(filtered_junction_ids))}
+    gene_result = db_config.execute_query(gene_query, params=params)
+
+    if gene_result.empty:
+        return []
+
+    gene_name = gene_result.iloc[0]['gene_name']
+
+    # Get all expressed transcripts for this gene (exclude GENCODE-only transcripts with NULL TPM)
+    expressed_query = f"""
+    SELECT DISTINCT transcript
+    FROM "{table_prefix}isoforms"
+    WHERE gene_name = :gene_name AND isoform_average_tpm IS NOT NULL
+    """
+    expressed_result = db_config.execute_query(expressed_query, params={"gene_name": gene_name})
+    expressed_transcripts = set()
+    for _, row in expressed_result.iterrows():
+        transcript_no_version = row['transcript'].split('.')[0] if '.' in row['transcript'] else row['transcript']
+        expressed_transcripts.add(transcript_no_version)
+
+    if not expressed_transcripts:
+        return []
+
+    # Query junctions table to get matched_transcript_ids for each junction
+    junction_query = f"""
+    SELECT junction_id, matched_transcript_ids
+    FROM "{table_prefix}junctions"
+    WHERE junction_id IN ({junction_id_placeholders})
+    """
+    params = {f'jid_{i}': filtered_junction_ids[i] for i in range(len(filtered_junction_ids))}
+    junction_result = db_config.execute_query(junction_query, params=params)
 
     if junction_result.empty:
         return []
 
-    # Get all transcript names (without version numbers from matched_transcript_ids)
-    all_transcript_names_no_version = set()
-    for _, row in junction_result.iterrows():
-        transcript_ids_str = str(row['matched_transcript_ids'])
+    # Build a set of transcripts for EACH junction (for intersection)
+    junction_transcript_sets = []
+
+    for junction_id in filtered_junction_ids:
+        # Get the row for this specific junction
+        row = junction_result[junction_result['junction_id'] == junction_id]
+
+        if row.empty:
+            # Junction not found - intersection will be empty
+            return []
+
+        transcript_ids_str = str(row.iloc[0]['matched_transcript_ids'])
+        transcript_set = set()
 
         if pd.notna(transcript_ids_str) and transcript_ids_str not in ('nan', 'None', ''):
             transcript_names = transcript_ids_str.split(',')
 
             for name in transcript_names:
                 name = name.strip()
-
                 if name:
-                    all_transcript_names_no_version.add(name)
+                    # Strip version number for comparison
+                    name_no_version = name.split('.')[0] if '.' in name else name
+                    # Only include expressed transcripts
+                    if name_no_version in expressed_transcripts:
+                        transcript_set.add(name_no_version)
 
-    if not all_transcript_names_no_version:
+        # If no transcripts found in matched_transcript_ids, try GENCODE fallback
+        if not transcript_set:
+            gencode_set = _get_transcripts_from_gencode(db_path, junction_id, gene_name, table_prefix)
+            # Filter to expressed transcripts only
+            transcript_set = gencode_set & expressed_transcripts
+
+        if not transcript_set:
+            # Junction has no expressed transcripts - intersection will be empty
+            return []
+
+        junction_transcript_sets.append(transcript_set)
+
+    # Compute INTERSECTION of all transcript sets
+    if not junction_transcript_sets:
+        return []
+
+    common_transcripts = junction_transcript_sets[0]
+    for transcript_set in junction_transcript_sets[1:]:
+        common_transcripts = common_transcripts & transcript_set
+
+    if not common_transcripts:
         return []
 
     # Get all isoforms for this gene, then filter by matching transcript names (without version)
     # First, get all isoforms from the junctions we queried
     gene_query = f"""
     SELECT DISTINCT gene_name
-    FROM {table_prefix}junctions
+    FROM "{table_prefix}junctions"
     WHERE junction_id IN ({junction_id_placeholders})
     LIMIT 1
     """
-    gene_result = db_config.execute_query(gene_query, params=filtered_junction_ids)
+    params = {f'jid_{i}': filtered_junction_ids[i] for i in range(len(filtered_junction_ids))}
+    gene_result = db_config.execute_query(gene_query, params=params)
 
     if gene_result.empty:
         return []
@@ -967,22 +1098,22 @@ def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list, s
     # Get all isoforms for this gene
     isoforms_query = f"""
     SELECT DISTINCT id, transcript
-    FROM {table_prefix}isoforms
+    FROM "{table_prefix}isoforms"
     WHERE gene_name = :gene_name
     """
-    isoforms_result = db_config.execute_query(isoforms_query, params={'gene_name': gene_name})
+    isoforms_result = db_config.execute_query(isoforms_query, params={"gene_name": gene_name})
 
     if isoforms_result.empty:
         return []
 
-    # Filter isoforms by matching transcript names (strip version numbers for comparison)
+    # Filter isoforms by matching transcript names (strip version numbers for comparison) and use common_transcripts (intersection of all junctions' transcripts)
     matching_ids = []
     for _, row in isoforms_result.iterrows():
         transcript_with_version = row['transcript']
         # Strip version number (e.g., ENST00000416721.6 -> ENST00000416721)
         transcript_no_version = transcript_with_version.split('.')[0] if '.' in transcript_with_version else transcript_with_version
 
-        if transcript_no_version in all_transcript_names_no_version:
+        if transcript_no_version in common_transcripts:
             matching_ids.append(row['id'])
 
     return matching_ids
@@ -997,11 +1128,11 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
 
     table_prefix = get_table_prefix(species)
     # Get gene_id from db
-    gene_id_query = f"SELECT DISTINCT gene_id FROM {table_prefix}junctions WHERE gene_name = :gene_name LIMIT 1"
-    gene_result = db_config.execute_query(gene_id_query, params={'gene_name': gene_name})
+    gene_id_query = f'SELECT DISTINCT gene_id FROM "{table_prefix}junctions" WHERE gene_name = :gene_name LIMIT 1'
+    gene_result = db_config.execute_query(gene_id_query, params={"gene_name": gene_name})
 
     if gene_result.empty:
-        return {'error': f"Data for {gene_name} is not present in the short-read data."}
+        return {'error': f"No gene_id found for {gene_name}"}
 
     gene_id_with_version = gene_result.iloc[0]['gene_id']
     gene_id_base = gene_id_with_version.split('.')[0]
@@ -1009,23 +1140,43 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
 
     atse_query = f"""
     SELECT event_id, gene_id, gene_name, event_strand, chromosome,
-            start, "end", junction_id, transcripts, perfect_match_3_prime,
+            start, end, junction_id, transcripts, perfect_match_3_prime,
             perfect_match_5_prime, both_ends_transcripts,
             only_5_prime_transcripts, only_3_prime_transcripts,
             atse_start, atse_end, event_type
-    FROM {table_prefix}atse_data
-    WHERE (gene_id_clean = :gene_id_clean OR gene_name = :gene_name)
-    ORDER BY start, 7
+    FROM "{table_prefix}atse_data"
+    WHERE (gene_id_clean = :gene_id_pattern OR gene_name = :gene_name)
+    ORDER BY start, end
     """
-    gene_atse = db_config.execute_query(atse_query, params={'gene_id_clean': gene_id_base, 'gene_name': gene_name})
+    gene_atse = db_config.execute_query(atse_query, params={"gene_id_pattern": gene_id_base, "gene_name": gene_name})
     #memory_tracker.measure(f"after_atse_query_{gene_name}")
-    
-    if gene_atse.empty:
-        return {'error': f"No ATSE data found for gene {gene_name}"}
 
-    gene_info = gene_atse.iloc[0]
-    strand = gene_info.get('event_strand', gene_info.get('strand', '+'))
-    chromosome = gene_info.get('chromosome', gene_info.get('chrom', 'chr1'))
+    # Get strand and chromosome info from ATSE data if available, otherwise from junctions
+    if not gene_atse.empty:
+        gene_info = gene_atse.iloc[0]
+        strand = gene_info.get('event_strand', gene_info.get('strand', '+'))
+        chromosome = gene_info.get('chromosome', gene_info.get('chrom', 'chr1'))
+    else:
+        # No ATSE data - try to get strand/chromosome from junction_id in junctions table
+        junction_info_query = f"""
+        SELECT junction_id FROM "{table_prefix}junctions"
+        WHERE gene_id LIKE :gene_id_pattern
+        LIMIT 1
+        """
+        junction_info_df = db_config.execute_query(junction_info_query, params={"gene_id_pattern": f"{gene_id_base}%"})
+
+        if not junction_info_df.empty:
+            # Parse junction_id format: chr10_100042573_100048758_-
+            junction_id_sample = junction_info_df.iloc[0]['junction_id']
+            parts = junction_id_sample.split('_')
+            if len(parts) >= 4:
+                chromosome = parts[0] 
+                strand = parts[-1]     
+            else:
+                chromosome = 'chr1'
+                strand = '+'
+        else:
+            return {'error': f"No junction or ATSE data found for gene {gene_name}"}
     
     junctions = []
     transcripts_set = set()
@@ -1119,13 +1270,61 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
             seen.add(key)
             unique_junctions.append(j)
 
+    # Query junctions table to add GENCODE junctions that aren't in ATSE data
     db_config = get_db_config()
+    junctions_table_query = f"""
+    SELECT DISTINCT junction_id, matched_transcript_ids, event_id
+    FROM "{table_prefix}junctions"
+    WHERE gene_id LIKE :gene_id_pattern
+    """
+    junctions_table_df = db_config.execute_query(junctions_table_query, params={"gene_id_pattern": f"{gene_id_base}%"})
+    for _, row in junctions_table_df.iterrows():
+        junction_id = row['junction_id']
+        if pd.notna(junction_id) and '_' in junction_id:
+            parts = junction_id.split('_')
+            if len(parts) >= 3:
+                try:
+                    start = int(parts[1])
+                    end = int(parts[2])
+                    key = (start, end)
+
+                    # Only add if not already present
+                    if key not in seen:
+                        seen.add(key)
+
+                        # Parse transcript IDs from matched_transcript_ids
+                        transcript_list = []
+                        if pd.notna(row['matched_transcript_ids']):
+                            transcript_str = str(row['matched_transcript_ids'])
+                            if '|' in transcript_str:
+                                transcript_list = [t.strip() for t in transcript_str.split('|') if t.strip()]
+                            elif ',' in transcript_str:
+                                transcript_list = [t.strip() for t in transcript_str.split(',') if t.strip()]
+                            else:
+                                transcript_list = [transcript_str.strip()] if transcript_str.strip() else []
+
+                        unique_junctions.append({
+                            'start': start,
+                            'end': end,
+                            'event_id': row.get('event_id', ''),
+                            'event_type': 'gencode_reference',
+                            'transcripts': transcript_list
+                        })
+
+                        # Add transcripts to global set
+                        for transcript in transcript_list:
+                            if transcript and transcript not in ('nan', 'None', ''):
+                                transcripts_set.add(transcript)
+
+                except (ValueError, IndexError):
+                    pass
+
     junction_psi_query = f"""
     SELECT DISTINCT junction_id, junction_average_psi
-    FROM {table_prefix}junctions
-    WHERE gene_id LIKE :gene_id
+    FROM "{table_prefix}junctions"
+    WHERE gene_id LIKE :gene_id_pattern
     """
-    junction_psi_df = db_config.execute_query(junction_psi_query, params={'gene_id': f"{gene_id_base}%"})
+    junction_psi_df = db_config.execute_query(junction_psi_query, params={"gene_id_pattern": f"{gene_id_base}%"})
 
     # Create a mapping of junction coordinates to average PSI
     junction_psi_map = {}
@@ -1144,14 +1343,22 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
                     junction_psi_map[key] = avg_psi
 
                 else:
-                    junction_psi_map[key] = max(junction_psi_map[key], avg_psi)
+                    # Handle NaN/None values in max comparison
+                    existing_psi = junction_psi_map[key]
+                    if pd.isna(existing_psi):
+                        junction_psi_map[key] = avg_psi
+                    elif pd.notna(avg_psi):
+                        junction_psi_map[key] = max(existing_psi, avg_psi)
 
             except (ValueError, IndexError):
                 pass
 
+    # Sort junctions by PSI (descending), then by start coordinate and use positive infinity so they sort to the bottom
     unique_junctions.sort(
         key=lambda x: (
-            -junction_psi_map.get((x['start'], x['end']), 0),  # negative for descending
+            -junction_psi_map.get((x['start'], x['end']), 0)
+            if pd.notna(junction_psi_map.get((x['start'], x['end'])))
+            else float('inf'),
             x['start']
         )
     )
@@ -1209,7 +1416,7 @@ def process_transcript_structure(psl_df: pd.DataFrame,
     for _, row in gene_psl.iterrows():
         # Parse block sizes and starts
         try:
-            block_sizes = [int(x) for x in row['blocksizes'].strip(',').split(',') if x]
+            block_sizes = [int(x) for x in row['blockSizes'].strip(',').split(',') if x]
             block_starts = [int(x) for x in row['tStarts'].strip(',').split(',') if x]
             
             # Create exon coordinates
@@ -1217,10 +1424,10 @@ def process_transcript_structure(psl_df: pd.DataFrame,
                 transcript_data.append({
                     'trans_id': row['trans_id'],
                     'gene_id': row['gene_id'],
-                    'chr': row['tname'],
+                    'chr': row['tName'],
                     'strand': row['strand'],
-                    'transcript_start': row['tstart'],
-                    'transcript_end': row['tend'],
+                    'transcript_start': row['tStart'],
+                    'transcript_end': row['tEnd'],
                     'transcript_length': row['transcript_length'],
                     'exon_number': i + 1,
                     'exon_start': start,
@@ -1278,46 +1485,60 @@ def create_junction_exon_visualization(gene_data: dict,
     if not transcript_data.empty:
         transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
         db_config = get_db_config()
-        # Get gene_id from gene_data
         gene_id_with_version = gene_data.get('gene_id', '')
         gene_id_base = gene_id_with_version.split('.')[0] if gene_id_with_version else ''
-
-        if gene_id_base:
-            transcript_ids_query = f"""
-            SELECT DISTINCT id, isoform_average_tpm FROM {table_prefix}isoforms
-            WHERE gene_id LIKE :gene_id
-            ORDER BY isoform_average_tpm DESC NULLS LAST
-            """
-            ordered_ids_df = db_config.execute_query(transcript_ids_query, params={'gene_id': f"{gene_id_base}%"})
-        else:
-            ordered_ids_df = pd.DataFrame()
-        ordered_transcript_ids = ordered_ids_df['id'].tolist() if not ordered_ids_df.empty else []
-        # Reverse because transcripts are displayed from top to bottom
-        ordered_transcript_ids = ordered_transcript_ids[::-1]
-
         transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
             'trans_id': 'first',
             'transcript_start': 'min',
             'transcript_end': 'max'
         })
-
         transcript_summary['transcript_length'] = transcript_summary['transcript_end'] - transcript_summary['transcript_start']
+
+        # Query order using transcript names
+        transcript_names = transcript_summary['trans_id'].tolist()
+        if transcript_names:
+            placeholders = ','.join([f':tname_{i}' for i in range(len(transcript_names))])
+            transcript_ids_query = f"""
+            SELECT DISTINCT transcript, id FROM "{table_prefix}isoforms"
+            WHERE transcript IN ({placeholders})
+            ORDER BY isoform_average_tpm DESC NULLS LAST
+            """
+            params = {f'tname_{i}': transcript_names[i] for i in range(len(transcript_names))}
+            ordered_ids_df = db_config.execute_query(transcript_ids_query, params=params)
+            # Map back to the PSL table IDs using transcript name
+            ordered_transcript_ids = [int(transcript_summary[transcript_summary['trans_id'] == trans_name]['id'].iloc[0])
+                                     for trans_name in ordered_ids_df['transcript']
+                                     if trans_name in transcript_summary['trans_id'].values]
+        else:
+            ordered_transcript_ids = []
+        # Reverse because transcripts are displayed from top to bottom
+        ordered_transcript_ids = ordered_transcript_ids[::-1]
+
         # Reindex transcript_summary to match the original sorted order from database and sort by isoform_average_tpm descending
-        transcript_summary = transcript_summary.sort_values('id', key=lambda x: x.map({vid: idx for idx, vid in enumerate(ordered_transcript_ids)})).reset_index(drop=True)
+        transcript_summary_id_set = set(int(x) for x in transcript_summary['id'].values)
+        valid_ordered_ids = [tid for tid in ordered_transcript_ids if tid in transcript_summary_id_set]
+        transcript_summary = transcript_summary.sort_values('id', key=lambda x: x.map({vid: idx for idx, vid in enumerate(valid_ordered_ids)})).reset_index(drop=True)
         transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
 
-        if color_by_abundance and gene_id_base:
+        # Always fetch isoform_average_tpm to identify GENCODE-only transcripts
+        if gene_id_base:
             db_config = get_db_config()
             try:
                 tpm_query = f"""
-                SELECT DISTINCT id, isoform_average_tpm
-                FROM {table_prefix}isoforms
-                WHERE gene_id LIKE :gene_id
+                SELECT DISTINCT transcript, isoform_average_tpm, id
+                FROM "{table_prefix}isoforms"
+                WHERE gene_id LIKE :gene_id_pattern
                 """
-                tpm_df = db_config.execute_query(tpm_query, params={'gene_id': f"{gene_id_base}%"})
-                transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
+                tpm_df = db_config.execute_query(tpm_query, params={"gene_id_pattern": f"{gene_id_base}%"})
+                # Rename 'transcript' column to 'trans_id' to match transcript_summary
+                tpm_df = tpm_df.rename(columns={'transcript': 'trans_id'})
+                # Merge by transcript name: transcripts not in isoforms table will have NaN isoform_average_tpm
+                transcript_summary = transcript_summary.merge(tpm_df[['trans_id', 'isoform_average_tpm']], on='trans_id', how='left')
+                # Fill NaN values with 0 for transcripts that don't exist in isoforms table (GENCODE/reference only)
+                transcript_summary['isoform_average_tpm'] = transcript_summary['isoform_average_tpm'].fillna(0)
             except Exception:
-                pass  # If TPM data unavailable, continue without it
+                # If TPM query fails, continue without isoform_average_tpm data
+                pass
 
         # Calculate dynamic height if not provided or if using default slider value
         if height is None or height == 600:
@@ -1407,8 +1628,17 @@ def create_junction_exon_visualization(gene_data: dict,
 
             trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
 
-            # Check for TPM color first (highest priority when enabled)
-            if color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
+            # Check if this is a GENCODE-only transcript (null/nan isoform_average_tpm val)
+            is_gencode_only = pd.isna(transcript.get('isoform_average_tpm'))
+            if is_gencode_only:
+                exon_fill_color = '#808080'
+
+            # Check for individual transcript color (second priority, convert to string for comparison)
+            elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
+                exon_fill_color = individual_transcript_colors[str(isoform_id)]
+
+            # Check for TPM color (third priority when enabled)
+            elif color_by_abundance and transcript_tpm_dict and isoform_id in transcript_tpm_dict:
                 tpm = transcript_tpm_dict[isoform_id]
 
                 if tpm_max > tpm_min:
@@ -1420,10 +1650,6 @@ def create_junction_exon_visualization(gene_data: dict,
 
                 rgba = cmap(normalized)
                 exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
-
-            # Check for individual transcript color (second priority, convert to string for comparison)
-            elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
-                exon_fill_color = individual_transcript_colors[str(isoform_id)]
 
             else:
                 exon_fill_color = exon_color
@@ -1508,10 +1734,10 @@ def create_junction_exon_visualization(gene_data: dict,
             if gene_id_base_for_psi:
                 psi_query = f"""
                 SELECT DISTINCT junction_id, junction_average_psi
-                FROM {table_prefix}junctions
-                WHERE gene_id LIKE :gene_id
+                FROM "{table_prefix}junctions"
+                WHERE gene_id LIKE :gene_id_pattern
                 """
-                psi_df = db_config.execute_query(psi_query, params={'gene_id': f"{gene_id_base_for_psi}%"})
+                psi_df = db_config.execute_query(psi_query, params={"gene_id_pattern": f"{gene_id_base_for_psi}%"})
             else:
                 psi_df = pd.DataFrame()
             # Create a mapping of (start, end) -> junction_average_psi
@@ -1531,10 +1757,11 @@ def create_junction_exon_visualization(gene_data: dict,
                         except (ValueError, IndexError):
                             pass
         except Exception:
-            pass  # If PSI data unavailable, continue without it
+            # If PSI query fails, continue without PSI coloring
+            pass
 
-        # Calculate PSI min/max for normalization
-        psi_values = [v for v in junction_psi_data.values() if v is not None]
+        # Calculate PSI min/max for normalization, filtering out nan
+        psi_values = [v for v in junction_psi_data.values() if v is not None and pd.notna(v)]
         if psi_values:
             psi_min = min(psi_values)
             psi_max = max(psi_values)
@@ -1570,7 +1797,8 @@ def create_junction_exon_visualization(gene_data: dict,
                         'sequence_similarity': row['sequence_similarity']
                     }
         except Exception:
-            pass  # If conserved junctions data unavailable, continue without it
+            # If conserved junctions query fails, continue without conservation data
+            pass
 
     if junctions:
         for i, junction in enumerate(junctions):
@@ -1585,7 +1813,8 @@ def create_junction_exon_visualization(gene_data: dict,
             # Color priority: Average PSI color > user selected individual junction color > global color
             if color_junctions_by_psi and (start, end) in junction_psi_data:
                 psi = junction_psi_data[(start, end)]
-                if psi is not None:
+                # only color if valid PSI value
+                if psi is not None and pd.notna(psi):
                     if psi_max > psi_min:
                         normalized = (psi - psi_min) / (psi_max - psi_min)
                     else:
@@ -1593,7 +1822,7 @@ def create_junction_exon_visualization(gene_data: dict,
                     rgba = cmap(normalized)
                     junction_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
                 else:
-                    # PSI coloring enabled but no PSI data: so use individual color if available, otherwise global color
+                    # if PSI is None or NaN, use individual color if available, otherwise global grey color
                     if individual_junction_colors and junction_id in individual_junction_colors:
                         junction_fill_color = individual_junction_colors[junction_id]
                     else:
@@ -1618,7 +1847,8 @@ def create_junction_exon_visualization(gene_data: dict,
             hover_text = f'Junction ID: {junction_id}<br>Coordinates: {start:,} - {end:,}<br>Event: {junction.get("event_id", "")}<br>Type: {junction.get("event_type", "")}'
             if (start, end) in junction_psi_data:
                 psi = junction_psi_data[(start, end)]
-                if psi is not None:
+                # Only show PSI if it's a valid number (not None / nan)
+                if psi is not None and pd.notna(psi):
                     hover_text += f"<br>Average PSI: {psi:.2f}"
 
             # Add conserved junction information if available
@@ -1672,11 +1902,10 @@ def create_junction_exon_visualization(gene_data: dict,
             connectgaps=False
         ))
 
-    # Setup colorscale (needed for both junction and transcript colorbars)
     if colorscale:
-        selected_colorscale = colorscale
+        selected_colorscale = get_plotly_colorscale(colorscale)
     else:
-        selected_colorscale = 'Viridis'
+        selected_colorscale = get_plotly_colorscale('Viridis')
 
     # Create PSI colorbar for junctions (independent of transcript coloring)
     if junctions and color_junctions_by_psi and 'psi_min' in locals() and 'psi_max' in locals():

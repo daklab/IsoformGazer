@@ -7,14 +7,15 @@ import pandas as pd
 import numpy as np
 import dash_bio
 import matplotlib.pyplot as plt
+from isoformgazer._clustergram import Clustergram
 import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
+from data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap, get_table_prefix, get_plotly_colorscale
+from performance_utils import cached, memory_tracker, plot_optimizer
 from sqlalchemy import text
 from src.isoformgazer.db_config import get_db_config
-from src.isoformgazer.data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap, get_table_prefix
-from src.isoformgazer.performance_utils import cached, memory_tracker, plot_optimizer
 # suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='Mean of empty slice')
 
@@ -249,7 +250,7 @@ def load_psl_data(psl_file_path: str) -> pd.DataFrame:
         psl_df['trans_id'] = psl_df['qName'].str.split('_').str[0]
         
         # Calculate transcript length
-        psl_df['transcript_length'] = psl_df['tend'] - psl_df['tstart']
+        psl_df['transcript_length'] = psl_df['tEnd'] - psl_df['tStart']
 
         return psl_df
     
@@ -262,9 +263,8 @@ def get_gene_id_for_gene_name(db_path: str, gene_name: str, species="Human") -> 
     """Get gene_id for a given gene_name from the isoforms database"""
     db_config = get_db_config()
     table_prefix = get_table_prefix(species)
-    query = f"SELECT DISTINCT gene_id FROM {table_prefix}isoforms WHERE gene_name = :gene_name LIMIT 1"
+    query = f'SELECT DISTINCT gene_id FROM "{table_prefix}isoforms" WHERE gene_name = :gene_name LIMIT 1'
     result = db_config.execute_query(query, params={'gene_name': gene_name})
-
     if len(result) > 0:
         gene_id = result.iloc[0]['gene_id']
         # Remove version number from gene_id (e.g., ENSG00000100320.16 -> ENSG00000100320)
@@ -282,13 +282,13 @@ def prepare_gene_psl_data(psl_df: pd.DataFrame):
         psl_columns = [
                 'matches', 'misMatches', 'repMatches', 'nCount', 'qNumInsert', 'qBaseInsert',
                 'tNumInsert', 'tBaseInsert', 'strand', 'qName', 'qSize', 'qStart', 'qEnd',
-                'tname', 'tSize', 'tstart', 'tend', 'blockCount', 'blocksizes', 'qStarts', 'tstarts'
+                'tName', 'tSize', 'tStart', 'tEnd', 'blockCount', 'blockSizes', 'qStarts', 'tStarts'
         ]
 
         psl_df['gene_id'] = psl_df['qName'].str.split('_').str[1]
         psl_df['trans_id'] = psl_df['qName'].str.split('_').str[0]
 
-        psl_df['transcript_length'] = psl_df['tend'] - psl_df['tstart']
+        psl_df['transcript_length'] = psl_df['tEnd'] - psl_df['tStart']
 
         return psl_df
     
@@ -301,9 +301,11 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
     """Transcript structure processing with caching and memory optimization for faster rendering!"""
     #with ProfilerContext(f"process_transcript_structure_{gene_name}"):
     db_config = get_db_config()
+    conn.execute("PRAGMA cache_size = 10000")
+    conn.execute("PRAGMA temp_store = MEMORY")
     table_prefix = get_table_prefix(species)
-    gene_query = f"SELECT DISTINCT gene_id FROM {table_prefix}isoforms WHERE gene_name = :gene_name LIMIT 1"
-    gene_result = db_config.execute_query(gene_query, params={'gene_name': gene_name})
+    gene_query = f'SELECT DISTINCT gene_id FROM \"{table_prefix}isoforms\" WHERE gene_name = :param LIMIT 1'
+    gene_result = db_config.execute_query(gene_query, params={'param': gene_name})
 
     if gene_result.empty:
         return pd.DataFrame()
@@ -314,39 +316,37 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
     if filtered_ids and len(filtered_ids) > 0:
         filtered_ids_int = [int(id) for id in filtered_ids if str(id).isdigit()]
         if filtered_ids_int:
-            placeholders = ','.join([f':id_{j}' for j in range(len(filtered_ids_int))])
+            placeholders = ','.join(['?'] * len(filtered_ids_int))
             isoform_query = f"""
-            SELECT id, isoform_average_tpm FROM {table_prefix}isoforms
-            WHERE gene_id LIKE :gene_id AND id IN ({placeholders})
+            SELECT id FROM "{table_prefix}isoforms"
+            WHERE gene_id LIKE :param AND id IN ({placeholders})
             ORDER BY isoform_average_tpm DESC NULLS LAST
             """
-            params = {'gene_id': f"{gene_id}%", **{f'id_{j}': filtered_ids_int[j] for j in range(len(filtered_ids_int))}}
+            params = [f"{gene_id}%"] + filtered_ids_int
         else:
-            isoform_query = f"SELECT id FROM {table_prefix}isoforms WHERE gene_id LIKE :gene_id ORDER BY isoform_average_tpm DESC NULLS LAST"
-            params = {'gene_id': f"{gene_id}%"}
+            isoform_query = f'SELECT id FROM \"{table_prefix}isoforms\" WHERE gene_id LIKE :param ORDER BY isoform_average_tpm DESC NULLS LAST'
+            params = [f"{gene_id}%"]
     else:
-        isoform_query = f"SELECT id FROM {table_prefix}isoforms WHERE gene_id LIKE :gene_id ORDER BY isoform_average_tpm DESC NULLS LAST"
-        params = {'gene_id': f"{gene_id}%"}
+        isoform_query = f'SELECT id FROM \"{table_prefix}isoforms\" WHERE gene_id LIKE :param ORDER BY isoform_average_tpm DESC NULLS LAST'
+        params = [f"{gene_id}%"]
 
-    isoform_ids = db_config.execute_query(isoform_query, params=params)['id'].tolist()
+    isoform_ids = db_config.execute_query(isoform_query, params={'param': params})
 
     if not isoform_ids:
         return pd.DataFrame()
 
     #memory_tracker.measure(f"after_isoform_lookup_{gene_name}")
 
-    placeholders = ','.join([f':id_{j}' for j in range(len(isoform_ids))])
+    placeholders = ','.join(['?'] * len(isoform_ids))
     psl_query = f"""
     SELECT
-        id, trans_id, gene_id, tname, strand,
-        tstart, tend, blocksizes, tstarts
-    FROM {table_prefix}psl_data
+        id, trans_id, gene_id, tName, strand,
+        tStart, tEnd, blockSizes, tStarts
+    FROM "{table_prefix}psl_data"
     WHERE id IN ({placeholders})
-    ORDER BY tstart, id
+    ORDER BY tStart, id
     """
-    params_dict = {f'id_{j}': isoform_ids[j] for j in range(len(isoform_ids))}
-    gene_psl = db_config.execute_query(psl_query, params=params_dict)
-    
+    gene_psl = db_config.execute_query(psl_query, params={'param': isoform_ids})
     #memory_tracker.measure(f"after_psl_query_{gene_name}")
     
     # Use much faster vectorized processing instead of pandas iterrows (super slow)
@@ -354,20 +354,20 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
     
     if not gene_psl.empty:
         gene_psl = gene_psl.copy()
-        gene_psl['blocksizes'] = gene_psl['blocksizes'].str.rstrip(',')
-        gene_psl['tstarts'] = gene_psl['tstarts'].str.rstrip(',')
+        gene_psl['blockSizes'] = gene_psl['blockSizes'].str.rstrip(',')
+        gene_psl['tStarts'] = gene_psl['tStarts'].str.rstrip(',')
         
         # filter out rows with empty block data upfront for some speedup
-        valid_mask = (gene_psl['blocksizes'].notna() & 
-                        gene_psl['tstarts'].notna() & 
-                        (gene_psl['blocksizes'] != '') & 
-                        (gene_psl['tstarts'] != ''))
+        valid_mask = (gene_psl['blockSizes'].notna() & 
+                        gene_psl['tStarts'].notna() & 
+                        (gene_psl['blockSizes'] != '') & 
+                        (gene_psl['tStarts'] != ''))
         gene_psl_valid = gene_psl[valid_mask].copy()
         
         for idx, row in gene_psl_valid.iterrows():
             try:
-                block_sizes = [int(x) for x in row['blocksizes'].split(',') if x]
-                block_starts = [int(x) for x in row['tstarts'].split(',') if x]
+                block_sizes = [int(x) for x in row['blockSizes'].split(',') if x]
+                block_starts = [int(x) for x in row['tStarts'].split(',') if x]
                 
                 if not block_sizes or not block_starts or len(block_sizes) != len(block_starts):
                     continue
@@ -376,10 +376,10 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
                     'id': row['id'],
                     'trans_id': row['trans_id'], 
                     'gene_id': row['gene_id'],
-                    'chr': row['tname'],
+                    'chr': row['tName'],
                     'strand': row['strand'],
-                    'transcript_start': row['tstart'],
-                    'transcript_end': row['tend']
+                    'transcript_start': row['tStart'],
+                    'transcript_end': row['tEnd']
                 }
                 
                 for i, (size, start) in enumerate(zip(block_sizes, block_starts)):
@@ -410,6 +410,7 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
 def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm', species="Human") -> pd.DataFrame:
     """Load expression data from SQLite database with caching"""
     db_config = get_db_config()
+    conn.execute("PRAGMA cache_size = 10000")
 
     gene_id = get_gene_id_for_gene_name(db_path, gene_name, species)
     if not gene_id:
@@ -432,12 +433,12 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm', s
     FROM {table_name} exp
     JOIN {table_prefix}psl_data psl ON exp.id = psl.id
     JOIN {table_prefix}isoforms iso ON exp.id = iso.id
-    WHERE iso.gene_id LIKE :gene_id
+    WHERE iso.gene_id LIKE ?
     ORDER BY iso.isoform_average_tpm ASC NULLS LAST, psl.trans_id
     """
 
     try:
-        df = db_config.execute_query(query, params={'gene_id': f'{gene_id}%'})
+        df = db_config.execute_query(query, params={'param': f"{gene_id}%"})
         df = df.drop(['index'], axis=1)
 
         numeric_cols = [col for col in df.columns if col not in ['transcript', 'trans_id', 'gene', 'gene_name']]
@@ -456,6 +457,7 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm', s
     except Exception as e:
         print(f"Error loading {data_type} data: {e}")
         return pd.DataFrame()
+
 
 def create_transcript_structure_plot(db_path: str,
                                      transcript_data: pd.DataFrame,
@@ -480,9 +482,8 @@ def create_transcript_structure_plot(db_path: str,
 
     table_prefix = get_table_prefix(species)
     db_config = get_db_config()
-    metadata_query = f"""SELECT gene_id, orf_perplexity FROM {table_prefix}isoforms
-                        WHERE gene_name = :gene_name LIMIT 1"""
-    metadata_result = db_config.execute_query(metadata_query, params={'gene_name': gene_name})
+    metadata_query = f'SELECT gene_id, orf_perplexity FROM "{table_prefix}isoforms" WHERE gene_name = :param LIMIT 1'
+    metadata_result = db_config.execute_query(metadata_query, params={'param': gene_name})
 
     if not metadata_result.empty:
         gene_ensembl_id = metadata_result.iloc[0]['gene_id']
@@ -491,28 +492,11 @@ def create_transcript_structure_plot(db_path: str,
     else:
         gene_ensembl_id = "Unknown"
         orf_perplexity = "No data available"
-
     strand = transcript_data['strand'].iloc[0] if not transcript_data.empty else ""
 
     transcript_data_opt = plot_optimizer.preprocess_dataframe_for_plotting(transcript_data)
 
-    # Query database for transcript IDs in correct TPM order (like junction_utils.py does)
-    db_config = get_db_config()
-    # Get gene_id for gene_name
-    gene_id = get_gene_id_for_gene_name(db_path, gene_name, species)
-    if gene_id:
-        transcript_ids_query = f"""
-        SELECT DISTINCT id, isoform_average_tpm FROM {table_prefix}isoforms
-        WHERE gene_id LIKE :gene_id
-        ORDER BY isoform_average_tpm DESC NULLS LAST
-        """
-        ordered_ids_df = db_config.execute_query(transcript_ids_query, params={'gene_id': f'{gene_id}%'})
-    else:
-        ordered_ids_df = pd.DataFrame()
-    ordered_transcript_ids = ordered_ids_df['id'].tolist() if not ordered_ids_df.empty else []
-    # Reverse because transcripts are displayed from top to bottom
-    ordered_transcript_ids = ordered_transcript_ids[::-1]
-
+    # First get transcript_summary from the data
     transcript_summary = transcript_data_opt.groupby('id', as_index=False).agg({
         'trans_id': 'first',
         'transcript_start': 'min',
@@ -522,11 +506,47 @@ def create_transcript_structure_plot(db_path: str,
         transcript_summary['transcript_end'] - transcript_summary['transcript_start']
     )
 
+    db_config = get_db_config()
+    transcript_names = transcript_summary['trans_id'].tolist()
+    if transcript_names:
+        placeholders = ','.join(['?'] * len(transcript_names))
+        transcript_ids_query = f"""
+        SELECT DISTINCT transcript, id FROM "{table_prefix}isoforms"
+        WHERE transcript IN ({placeholders})
+        ORDER BY isoform_average_tpm DESC NULLS LAST
+        """
+        ordered_ids_df = db_config.execute_query(transcript_ids_query, params={'param': transcript_names})
+        # Map back to the PSL table IDs using transcript name
+        ordered_transcript_ids = [int(transcript_summary[transcript_summary['trans_id'] == trans_name]['id'].iloc[0])
+                                 for trans_name in ordered_ids_df['transcript']
+                                 if trans_name in transcript_summary['trans_id'].values]
+    else:
+        ordered_transcript_ids = []
+    # Reverse because transcripts are displayed from top to bottom
+    ordered_transcript_ids = ordered_transcript_ids[::-1]
+
     # Reindex transcript_summary to match the original sorted order from database
-    transcript_summary = transcript_summary.set_index('id').loc[ordered_transcript_ids].reset_index()
+    transcript_summary_id_set = set(int(x) for x in transcript_summary['id'].values)
+    valid_ordered_ids = [tid for tid in ordered_transcript_ids if tid in transcript_summary_id_set]
+    transcript_summary = transcript_summary.set_index('id').loc[valid_ordered_ids].reset_index()
     transcript_summary['trans_order'] = range(1, len(transcript_summary) + 1)
 
-    if color_by_abundance:
+    # Always fetch isoform_average_tpm to identify GENCODE-only transcripts
+    db_config = get_db_config()
+    try:
+        gene_id_for_tpm = get_gene_id_for_gene_name(db_path, gene_name, species)
+        if gene_id_for_tpm:
+            tpm_query = f"""
+            SELECT DISTINCT transcript, isoform_average_tpm
+            FROM "{table_prefix}isoforms"
+            WHERE gene_id LIKE :param
+            """
+            tpm_df = db_config.execute_query(tpm_query, params={'param': f"{gene_id_for_tpm}%"})
+            # Rename 'transcript' column to 'trans_id' to match transcript_summary
+            tpm_df = tpm_df.rename(columns={'transcript': 'trans_id'})
+            transcript_summary = transcript_summary.merge(tpm_df[['trans_id', 'isoform_average_tpm']], on='trans_id', how='left')
+            # Fill NaN values with 0 for transcripts that don't exist in isoforms table (GENCODE/reference only datapoints)
+            transcript_summary['isoform_average_tpm'] = transcript_summary['isoform_average_tpm'].fillna(0)
         if abundance_type == 'tissue' and tissue_name:
             tissue_tpm_dict = get_tissue_tpm_for_isoforms(db_path, gene_name, tissue_name, species)
             transcript_summary['abundance_tpm'] = transcript_summary['id'].map(tissue_tpm_dict).fillna(0)
@@ -536,21 +556,14 @@ def create_transcript_structure_plot(db_path: str,
             transcript_summary['abundance_tpm'] = transcript_summary['id'].map(organ_tpm_dict).fillna(0)
 
         else:
-            db_config = get_db_config()
-            try:
-                # Get gene_id for gene_name
-                gene_id_for_tpm = get_gene_id_for_gene_name(db_path, gene_name, species)
-                if gene_id_for_tpm:
-                    tpm_query = f"""
-                    SELECT DISTINCT id, isoform_average_tpm
-                    FROM {table_prefix}isoforms
-                    WHERE gene_id LIKE :gene_id
-                    """
-                    tpm_df = db_config.execute_query(tpm_query, params={'gene_id': f"{gene_id_for_tpm}%"})
-                    transcript_summary = transcript_summary.merge(tpm_df, on='id', how='left')
-                    transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
-            except Exception:
-                pass  # If TPM data unavailable, continue without it
+            transcript_summary['abundance_tpm'] = transcript_summary['isoform_average_tpm']
+            if transcript_summary['abundance_tpm'].isna().all():
+                print(f"WARNING: All abundance_tpm values are NaN for gene {gene_name}")
+                print(f"isoform_average_tpm values: {transcript_summary['isoform_average_tpm'].tolist()}")
+                print(f"transcript_summary IDs: {transcript_summary['id'].tolist()}")
+
+    except Exception:
+        pass
 
     # Calculate dynamic height if not provided or if using default slider value
     if height is None or height == 600:
@@ -604,8 +617,17 @@ def create_transcript_structure_plot(db_path: str,
         trans_order = transcript['trans_order']
         trans_exons = plot_data[plot_data['id'] == isoform_id].sort_values('exon_start')
 
-        # Check for TPM color first (highest priority when enabled)
-        if color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
+        # Check if this is a GENCODE-only transcript (has NULL/NaN isoform_average_tpm)
+        is_gencode_only = pd.isna(transcript.get('isoform_average_tpm'))
+        if is_gencode_only:
+            exon_fill_color = '#808080'
+
+        # Check for individual transcript color (second priority, convert to string for comparison)
+        elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
+            exon_fill_color = individual_transcript_colors[str(isoform_id)]
+
+        # Check for TPM color (third priority when enabled)
+        elif color_by_abundance and 'abundance_tpm' in transcript_summary.columns:
             tpm = transcript.get('abundance_tpm', 0)
 
             if tpm_max > tpm_min:
@@ -616,10 +638,6 @@ def create_transcript_structure_plot(db_path: str,
 
             rgba = cmap(normalized)
             exon_fill_color = f'rgba({int(rgba[0]*255)},{int(rgba[1]*255)},{int(rgba[2]*255)},{int(rgba[3]*255)})'
-
-        # Check for individual transcript color (second priority, convert to string for comparison)
-        elif individual_transcript_colors and str(isoform_id) in individual_transcript_colors:
-            exon_fill_color = individual_transcript_colors[str(isoform_id)]
 
         else:
             exon_fill_color = exon_color
@@ -678,9 +696,9 @@ def create_transcript_structure_plot(db_path: str,
 
     if color_by_abundance:
         if colorscale:
-            selected_colorscale = colorscale
+            selected_colorscale = get_plotly_colorscale(colorscale)
         else:
-            selected_colorscale = 'Viridis'
+            selected_colorscale = get_plotly_colorscale('Viridis')
 
         if not transcript_summary.empty and 'abundance_tpm' in transcript_summary.columns:
             tpm_values = transcript_summary['abundance_tpm'].dropna()
@@ -901,13 +919,13 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
             ),
             row=1, col=1
         )
-        
+
         fig.add_trace(
             go.Heatmap(
                 z=heatmap_data,
                 y=tissue_display_names,
                 x=transcript_names_abbreviated,
-                colorscale=colorscale,
+                colorscale=get_plotly_colorscale(colorscale),
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
                 colorbar=dict(title=dict(text=data_type, font=dict(size=16)), x=1.02, tickfont=dict(size=10))
             ),
@@ -927,7 +945,7 @@ def create_isoform_expression_heatmap(tpm_data: pd.DataFrame,
                 z=heatmap_data,
                 y=tissue_display_names, 
                 x=transcript_names_abbreviated,
-                colorscale=colorscale,
+                colorscale=get_plotly_colorscale(colorscale),
                 hovertemplate=f'Transcript: %{{x}}<br>Tissue: %{{y}}<br>{data_type}: %{{z:.2f}}<extra></extra>',
                 colorbar=dict(title=dict(text=data_type, font=dict(size=16)), tickfont=dict(size=10))
             )
@@ -1051,11 +1069,10 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         # Get gene_id for gene_name
         gene_id_for_tpm = get_gene_id_for_gene_name(db_path, gene_name, species)
         if gene_id_for_tpm:
-            isoform_tpm_query = f"SELECT id, isoform_average_tpm FROM {table_prefix}isoforms WHERE gene_id LIKE :gene_id"
-            isoform_tpm = db_config.execute_query(isoform_tpm_query, params={'gene_id': f"{gene_id_for_tpm}%"})
+            isoform_tpm_query = f'SELECT id, isoform_average_tpm FROM \"{table_prefix}isoforms\" WHERE gene_id LIKE :param'
+            isoform_tpm = db_config.execute_query(isoform_tpm_query, params={'param': f"{gene_id_for_tpm}%"})
         else:
             isoform_tpm = pd.DataFrame()
-
         if not isoform_tpm.empty:
             expression_data = expression_data.merge(isoform_tpm, on='id', how='left')
             tpm_data = tpm_data.merge(isoform_tpm, on='id', how='left')
@@ -1117,6 +1134,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             if tissue_name in tissue_name_to_indices:
                 kept_tissue_cols.extend(tissue_name_to_indices[tissue_name])
 
+        # Average TPM and Ratio using only the kept tissues, forcing the same output tissues
         tpm_heatmap_data, tpm_tissue_names, _ = average_lrs_by_replicates(tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         log_tpm_heatmap_data, log_tpm_tissue_names, _ = average_lrs_by_replicates(log_tpm_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
         ratio_heatmap_data, ratio_tissue_names, _ = average_lrs_by_replicates(ratio_data, kept_tissue_cols, species, force_keep_tissues=tissue_display_names)
@@ -1196,7 +1214,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         )
     
     try:
-        clustergram, computed_traces = dash_bio.Clustergram(
+        clustergram, computed_traces = Clustergram(
             data=clustergram_data_processed.values,
             column_labels=clean_tissue_names,
             row_labels=transcript_names_abbreviated,
@@ -1360,7 +1378,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
         showarrow=False,
         xanchor="left",
         yanchor="top",
-        font=dict(size=16, family="Open Sans, verdana, arial, sans-serif")
+        font=dict(size=11, family="Open Sans, verdana, arial, sans-serif")
     )
 
     for i, (organ, color) in enumerate(zip(unique_organs, unique_colors)):
@@ -1375,7 +1393,7 @@ def create_isoform_expression_clustergram(tpm_data: pd.DataFrame,
             showarrow=False,
             xanchor='left',
             yanchor='top',
-            font=dict(size=11)
+            font=dict(size=10)
         )
     
     clustergram.update_layout(
@@ -1439,7 +1457,7 @@ def create_single_transcript_heatmap(heatmap_data, tpm_heatmap_data, ratio_heatm
         z=heatmap_data,
         x=transcript_names,
         y=tissue_display_names,
-        colorscale=colorscale,
+        colorscale=get_plotly_colorscale(colorscale),
         colorbar=dict(title=dict(text=data_type, font=dict(size=16)), tickfont=dict(size=10)),
         customdata=customdata,
         hovertemplate='<b>Transcript:</b> %{x}<br><b>Tissue:</b> %{y}<br><b>TPM:</b> %{customdata[0]:.2f}<br><b>Ratio:</b> %{customdata[1]:.2f}<extra></extra>'
@@ -1461,7 +1479,7 @@ def apply_colorscale_to_clustergram(fig, colorscale, show_nan_as_black=False):
     try:
         if len(fig.data) > 0:
             heatmap_trace = fig.data[-1]
-            heatmap_trace.colorscale = colorscale
+            heatmap_trace.colorscale = get_plotly_colorscale(colorscale)
             heatmap_trace.showscale = True
     except Exception as e:
         pass

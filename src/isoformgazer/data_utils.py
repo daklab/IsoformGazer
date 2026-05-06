@@ -13,7 +13,7 @@ from pathlib import Path
 from sqlalchemy import text
 from src.isoformgazer.db_config import get_db_config
 from src.isoformgazer.gene_cache_redis import get_cached_default_gene_data, cache_gene_list, get_cached_gene_list, cache_default_gene_data
-
+from matplotlib.colors import LinearSegmentedColormap
 
 def get_table_prefix(species="Human"):
     """Convert species name to table prefix for database queries"""
@@ -74,6 +74,13 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
             elif operator == 'ge':
                 where_clauses.append(f'"{column}" >= :{param_name}')
                 params[param_name] = value
+            elif operator == 'in':
+                # Handle IN clause for multiple values
+                placeholders = ','.join([f':in_{param_count}_{i}' for i in range(len(value))])
+                where_clauses.append(f'"{column}" IN ({placeholders})')
+                for i, v in enumerate(value):
+                    params[f'in_{param_count}_{i}'] = v
+                param_count += 1
 
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
@@ -339,19 +346,19 @@ def parse_filter_query(db_path, filter_query, table_name=None):
     """Parse filter query with type validation"""
     if not filter_query:
         return []
-    
-    if table_name: 
+
+    if table_name:
         column_types = get_column_types(db_path, table_name)
-    else: 
+    else:
         column_types = {}
-    
+
     filters = []
     expressions = filter_query.split(' && ')
-    
+
     for expression in expressions:
         if not expression or expression.isspace():
             continue
-        
+
         try:
             if ' scontains ' in expression:
                 col, val = expression.split(' scontains ')
@@ -377,10 +384,17 @@ def parse_filter_query(db_path, filter_query, table_name=None):
             else:
                 print(f"Unrecognized filter operation: {expression}")
                 continue
-            
+
             col = col.strip('{} ')
             val = val.strip('" ')
-            
+
+            # Allow handling for transcript_id and junction_id columns multiple comma-separated values
+            if col in ('transcript_id', 'junction_id', 'transcript') and ',' in val:
+                values = [v.strip() for v in val.split(',') if v.strip()]
+                if values:
+                    filters.append((col, 'in', values))
+                continue
+
             col_type = column_types.get(col, 'string')
             if col_type in ('integer', 'float', 'numeric') and operator in ('eq', 'lt', 'gt', 'le', 'ge', 'ne'):
                 try:
@@ -391,7 +405,7 @@ def parse_filter_query(db_path, filter_query, table_name=None):
                 except ValueError:
                     print(f"Skipping filter: invalid numeric value '{val}' for column '{col}'")
                     continue
-            
+
             if operator == 'contains' and col_type in ('integer', 'float', 'numeric'):
                 try:
                     if col_type == 'integer':
@@ -402,12 +416,12 @@ def parse_filter_query(db_path, filter_query, table_name=None):
                 except ValueError:
                     print(f"Skipping filter: invalid numeric value '{val}' for column '{col}'")
                     continue
-            
+
             filters.append((col, operator, val))
-            
+
         except Exception as e:
             print(f"Error parsing filter expression '{expression}': {e}")
-    
+
     return filters
 
 
@@ -690,12 +704,30 @@ def get_cache_metadata_path(base_dir):
 
 
 def get_database_hash(db_path):
-    """Generates hash of database file for cache invalidation"""
+    """
+    Generates identifier for database file for cache invalidation. For large databases (>1GB), 
+    uses file size + modification time instead of MD5 hash to avoid loading entire file into memory.
+    """
     try:
+        db_stat = os.stat(db_path)
+        file_size = db_stat.st_size
+
+        # For files larger than 1GB, use size + mtime as identifier
+        if file_size > 1_000_000_000:  # 1GB
+            mtime = db_stat.st_mtime
+            identifier = f"{file_size}_{int(mtime)}"
+            return hashlib.md5(identifier.encode()).hexdigest()
+
+        # For smaller files, compute actual MD5 hash using streaming
+        md5_hash = hashlib.md5()
         with open(db_path, 'rb') as f:
-            return hashlib.md5(f.read()).hexdigest()
+            # Read in 8MB chunks to avoid memory issues
+            for chunk in iter(lambda: f.read(8388608), b''):
+                md5_hash.update(chunk)
+        return md5_hash.hexdigest()
+
     except Exception as e:
-        print(f"Warning: Could not compute database hash: {e}")
+        print(f"Warning: Could not compute database identifier: {e}")
         return None
 
 
@@ -862,7 +894,14 @@ def extract_gtf_attr_val(attr_str):
 
 
 def get_matplotlib_colormap(colorscale_name: str):
-    """Convert a Plotly colorscale name to a matplotlib colormap"""
+    """
+    Convert a Plotly colorscale name to a matplotlib colormap.
+    Used for rendering exons/junctions in structure plots with matplotlib-based coloring.
+    """
+    # Custom 'Gazing' colorscale: go purple (#301279) -> gold (#f9c83b)
+    gazing_colors = ['#301279', '#f9c83b']
+    gazing_cmap = LinearSegmentedColormap.from_list('Gazing', gazing_colors)
+
     colormap_mapping = {
         'Viridis': plt.cm.viridis,
         'Plasma': plt.cm.plasma,
@@ -876,6 +915,43 @@ def get_matplotlib_colormap(colorscale_name: str):
         'Spectral': plt.cm.Spectral,
         'YlOrRd': plt.cm.YlOrRd,
         'Turbo': plt.cm.turbo,
+        'Gazing': gazing_cmap,
+        'BrBG': plt.cm.BrBG,
+        'PRGn': plt.cm.PRGn,
+        'PuOr': plt.cm.PuOr,
+        'RdGy': plt.cm.RdGy,
+        'delta': plt.cm.seismic,
+        'oxy': plt.cm.RdYlGn_r,
+        'curl': plt.cm.PiYG,
+        'Geyser': plt.cm.coolwarm
     }
 
     return colormap_mapping.get(colorscale_name, plt.cm.viridis)
+
+
+def get_plotly_colorscale(colorscale_name: str):
+    """
+    Convert colorscale name to Plotly-compatible format.
+    For custom colorscales, converts matplotlib colormap to Plotly format.
+    For standard Plotly colorscales, returns the name as-is.
+    """
+    standard_plotly_scales = {
+        'Viridis', 'Plasma', 'Inferno', 'Magma', 'Cividis',
+        'Blues', 'Reds', 'RdBu_r', 'RdYlBu', 'Spectral', 'YlOrRd', 'Turbo',
+        'BrBG', 'PRGn', 'PuOr', 'RdGy',
+        'delta', 'oxy', 'curl', 'Geyser'
+    }
+
+    if colorscale_name in standard_plotly_scales:
+        return colorscale_name
+
+    if colorscale_name == 'Gazing':
+        return [
+            [0.0, '#301279'],
+            [0.25, '#622e9d'],
+            [0.5, '#f9c83b'],
+            [1.0, "#fff2cc"]
+        ]
+
+    # Default to Viridis
+    return 'Viridis'
