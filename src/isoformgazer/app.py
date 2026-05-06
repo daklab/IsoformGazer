@@ -2172,6 +2172,15 @@ app.layout = html.Div(className='app-layout', children=[
                     html.Div(className='table-header-controls', children=[
                         html.Div(children=[
                             dbc.Button(
+                                "Apply Filters",
+                                id='apply-left-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True,
+                                style={'marginRight': '8px'}
+                            ),
+                            dbc.Button(
                                 "Clear Filters",
                                 id='clear-left-filters',
                                 color="secondary",
@@ -2219,6 +2228,15 @@ app.layout = html.Div(className='app-layout', children=[
                 html.Div(className='table-container', id='table2-container', children=[
                     html.Div(className='table-header-controls', children=[
                         html.Div(children=[
+                            dbc.Button(
+                                "Apply Filters",
+                                id='apply-right-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True,
+                                style={'marginRight': '8px'}
+                            ),
                             dbc.Button(
                                 "Clear Filters",
                                 id='clear-right-filters',
@@ -2297,6 +2315,8 @@ app.layout.children.extend([
     dcc.Store(id='loading-progress-store', data=0),
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
+    dcc.Store(id='left-table-applied-filter-store', data=''),
+    dcc.Store(id='right-table-applied-filter-store', data=''),
     dcc.Store(id='gtf-hash-results-store', data=[]),
     dcc.Store(id='all-gene-options-store', data=get_all_gene_options(db_path)),
     dcc.Store(id='cache-used-store', data=cache_loaded_from_disk),
@@ -2894,6 +2914,68 @@ def validate_right_table_filters(current_filter_query):
     else:
         return {'display': 'none'}, [], {'valid': True, 'errors': {}, 'query': current_filter_query}
 
+
+#######################################################################
+# FILTER APPLICATION CALLBACKS (Apply Filters Button)
+#######################################################################
+@app.callback(
+    dash.dependencies.Output('left-table-applied-filter-store', 'data'),
+    [dash.dependencies.Input('apply-left-filters', 'n_clicks'),
+     dash.dependencies.Input('clear-left-filters', 'n_clicks'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')],
+    [dash.dependencies.State('left_data_table', 'filter_query'),
+     dash.dependencies.State('left-table-validation-store', 'data')]
+)
+def apply_left_filter_store(apply_clicks, clear_clicks, selected_gene, current_filter, validation_data):
+    """Apply or clear filters for left table - updates the applied filter store"""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return ''
+
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    # Clear filters when gene changes or clear button clicked
+    if trigger_id == 'gene-search-dropdown' or trigger_id == 'clear-left-filters':
+        return ''
+
+    # Apply current filter when apply button clicked (only if valid)
+    if trigger_id == 'apply-left-filters':
+        if validation_data and validation_data.get('valid', True):
+            return current_filter or ''
+        else:
+            raise PreventUpdate
+
+    return ''
+
+
+@app.callback(
+    dash.dependencies.Output('right-table-applied-filter-store', 'data'),
+    [dash.dependencies.Input('apply-right-filters', 'n_clicks'),
+     dash.dependencies.Input('clear-right-filters', 'n_clicks'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')],
+    [dash.dependencies.State('right_data_table', 'filter_query'),
+     dash.dependencies.State('right-table-validation-store', 'data')]
+)
+def apply_right_filter_store(apply_clicks, clear_clicks, selected_gene, current_filter, validation_data):
+    """Apply or clear filters for right table - updates the applied filter store"""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return ''
+
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if trigger_id == 'gene-search-dropdown' or trigger_id == 'clear-right-filters':
+        return ''
+
+    if trigger_id == 'apply-right-filters':
+        if validation_data and validation_data.get('valid', True):
+            return current_filter or ''
+        else:
+            raise PreventUpdate
+
+    return ''
+
+
 #######################################################################
 # INITIAL LOADING SCREEN CALLBACKS
 #######################################################################
@@ -2931,18 +3013,12 @@ def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_co
     [dash.dependencies.Input('isoform-full-data-store', 'data'),
      dash.dependencies.Input('junction-full-data-store', 'data'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('right_data_table', 'filter_query'),
-     dash.dependencies.Input('left-table-validation-store', 'data'),
-     dash.dependencies.Input('right-table-validation-store', 'data'),
+     dash.dependencies.Input('left-table-applied-filter-store', 'data'),
+     dash.dependencies.Input('right-table-applied-filter-store', 'data'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, left_validation, right_validation, species):
+def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, species):
     """Store ALL filtered transcript/junction IDs from FULL datasets with transcript-based junction filtering"""
-    # Check if either filter is invalid: if so, don't update filtered stores since user will need to fix errors before query proceeds
-    if ((isoform_filter_query and left_validation and not left_validation.get('valid', True)) or
-        (junction_filter_query and right_validation and not right_validation.get('valid', True))):
-        raise PreventUpdate
 
     try:
         has_isoform_filters = bool(isoform_filter_query and isoform_filter_query.strip())
@@ -3003,29 +3079,29 @@ def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_
 
 
 @app.callback(
-    [dash.dependencies.Output('left_data_table', 'filter_query'),
-     dash.dependencies.Output('right_data_table', 'filter_query')],
+    [dash.dependencies.Output('left_data_table', 'filter_query', allow_duplicate=True),
+     dash.dependencies.Output('right_data_table', 'filter_query', allow_duplicate=True)],
     [dash.dependencies.Input('clear-left-filters', 'n_clicks'),
      dash.dependencies.Input('clear-right-filters', 'n_clicks'),
      dash.dependencies.Input('gene-search-dropdown', 'value')],
     [dash.dependencies.State('left_data_table', 'filter_query'),
-     dash.dependencies.State('right_data_table', 'filter_query')]
+     dash.dependencies.State('right_data_table', 'filter_query')],
+    prevent_initial_call=True
 )
-def clear_filters(left_clicks, right_clicks, selected_gene, left_filter, right_filter):
+def clear_filter_inputs(left_clicks, right_clicks, selected_gene, left_filter, right_filter):
+    """Clear the filter input fields when clear buttons are clicked or gene changes"""
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
-    
+
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    # Clear filters if Clear All buttons are clicked
+
     if button_id == 'clear-left-filters':
         return '', right_filter
-    
+
     elif button_id == 'clear-right-filters':
         return left_filter, ''
-    
-    # Also clear all filters when gene changes
+
     elif button_id == 'gene-search-dropdown':
         return '', ''
 
@@ -3033,14 +3109,31 @@ def clear_filters(left_clicks, right_clicks, selected_gene, left_filter, right_f
 
 
 @app.callback(
+    [dash.dependencies.Output('apply-left-filters', 'disabled'),
+     dash.dependencies.Output('apply-right-filters', 'disabled')],
+    [dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('right_data_table', 'filter_query'),
+     dash.dependencies.Input('left-table-applied-filter-store', 'data'),
+     dash.dependencies.Input('right-table-applied-filter-store', 'data')]
+)
+def update_apply_button_states(left_filter, right_filter, left_applied, right_applied):
+    """Enable Apply Filters buttons only when there's a pending filter that differs from applied"""
+    # Enable Apply button if there's a filter typed AND it's different from what's currently applied
+    left_disabled = not left_filter or left_filter.strip() == '' or left_filter == left_applied
+    right_disabled = not right_filter or right_filter.strip() == '' or right_filter == right_applied
+    return left_disabled, right_disabled
+
+
+@app.callback(
     [dash.dependencies.Output('clear-left-filters', 'disabled'),
      dash.dependencies.Output('clear-right-filters', 'disabled')],
-    [dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('right_data_table', 'filter_query')]
+    [dash.dependencies.Input('left-table-applied-filter-store', 'data'),
+     dash.dependencies.Input('right-table-applied-filter-store', 'data')]
 )
-def update_button_states(left_filter, right_filter):
-    left_disabled = not left_filter or left_filter.strip() == ''
-    right_disabled = not right_filter or right_filter.strip() == ''
+def update_clear_button_states(left_applied_filter, right_applied_filter):
+    """Enable Clear Filters buttons only when filters are actually applied"""
+    left_disabled = not left_applied_filter or left_applied_filter.strip() == ''
+    right_disabled = not right_applied_filter or right_applied_filter.strip() == ''
     return left_disabled, right_disabled
 
 
@@ -3331,15 +3424,12 @@ def update_summary_blocks(selected_gene, species):
 @app.callback(
     dash.dependencies.Output('isoform-full-data-store', 'data'),
     [dash.dependencies.Input('left_data_table', 'sort_by'),
-     dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('left-table-applied-filter-store', 'data'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('left-table-validation-store', 'data'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_isoform_full_data_store(sort_by, filter_query, selected_gene, validation_data, species):
-    """Query database and store full isoform data (filtered by user's filter_query only)"""
-    if filter_query and validation_data and not validation_data.get('valid', True):
-        raise PreventUpdate
+def update_isoform_full_data_store(sort_by, filter_query, selected_gene, species):
+    """Query database and store full isoform data (filtered by applied filter only)"""
 
     table_prefix = get_table_prefix(species)
     table_name = f'{table_prefix}isoforms'
@@ -3418,15 +3508,12 @@ def update_isoform_table_display(page_current, page_size, isoform_full_data, fil
 @app.callback(
     dash.dependencies.Output('junction-full-data-store', 'data'),
     [dash.dependencies.Input('right_data_table', 'sort_by'),
-     dash.dependencies.Input('right_data_table', 'filter_query'),
+     dash.dependencies.Input('right-table-applied-filter-store', 'data'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('right-table-validation-store', 'data'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_junction_full_data_store(sort_by, filter_query, selected_gene, validation_data, species):
-    """Query database and store full junction data (filtered by user's filter_query only)"""
-    if filter_query and validation_data and not validation_data.get('valid', True):
-        raise PreventUpdate
+def update_junction_full_data_store(sort_by, filter_query, selected_gene, species):
+    """Query database and store full junction data (filtered by applied filter only)"""
 
     table_prefix = get_table_prefix(species)
     table_name = f'{table_prefix}junctions'

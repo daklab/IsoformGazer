@@ -926,10 +926,65 @@ def filter_junctions_by_transcripts(db_path: str, gene_name: str, filtered_trans
     return matching_junction_ids
 
 
+def _get_transcripts_from_gencode(conn, junction_id, gene_name, table_prefix, coord_tolerance=5):
+    """
+    Helper to get transcripts from GENCODE GTF data when matched_transcript_ids is empty.
+    Parses junction coordinates and finds matching transcripts in gencode_gtf table.
+    """
+    parts = junction_id.rsplit('_', 1)
+    if len(parts) != 2:
+        return set()
+
+    coord_part, strand = parts[0], parts[1]
+    coord_parts = coord_part.split('_')
+    if len(coord_parts) < 3:
+        return set()
+
+    try:
+        chrom = '_'.join(coord_parts[:-2])
+        target_start = int(coord_parts[-2])
+        target_end = int(coord_parts[-1])
+    except (ValueError, IndexError):
+        return set()
+
+    gencode_table = f"{table_prefix}gencode_gtf" if table_prefix else "gencode_gtf"
+    gencode_query = (
+        f"SELECT transcript_id, chromosome, exon_start, exon_end, strand "
+        f"FROM {gencode_table} WHERE gene_name = ? ORDER BY transcript_id, exon_start"
+    )
+
+    try:
+        gencode_data = pd.read_sql_query(gencode_query, conn, params=[gene_name])
+    except:
+        return set()
+
+    matching_transcripts = set()
+    for transcript_id, group in gencode_data.groupby('transcript_id'):
+        exons = group.sort_values('exon_start')
+        if exons.iloc[0]['strand'] != strand or exons.iloc[0]['chromosome'] != chrom:
+            continue
+
+        for i in range(len(exons) - 1):
+            junction_start = int(exons.iloc[i]['exon_end'])
+            junction_end = int(exons.iloc[i + 1]['exon_start'])
+
+            if (abs(junction_start - target_start) <= coord_tolerance and
+                abs(junction_end - target_end) <= coord_tolerance):
+                transcript_no_version = transcript_id.split('.')[0] if '.' in transcript_id else transcript_id
+                matching_transcripts.add(transcript_no_version)
+                break
+
+    return matching_transcripts
+
+
 def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list, species="Human") -> list:
     """
     Filter transcript IDs based on junction overlap using matched_transcript_ids column.
-    Returns a list of transcript IDs (from isoforms table) that align with the filtered junctions.
+    Returns a list of transcript IDs (from isoforms table) that contain ALL the filtered junctions (INTERSECTION).
+
+    For multiple junctions, only transcripts that contain ALL of them are returned.
+    Only returns expressed transcripts (with non-NULL TPM values).
+    Falls back to GENCODE GTF data for junctions with empty matched_transcript_ids.
     """
     if not filtered_junction_ids:
         return []
@@ -937,11 +992,43 @@ def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list, s
     conn = sqlite3.connect(db_path)
     table_prefix = get_table_prefix(species)
     junction_id_placeholders = ','.join(['?'] * len(filtered_junction_ids))
-    junction_query = f"""
-    SELECT DISTINCT matched_transcript_ids
+
+    # First, get the gene name from the junctions
+    gene_query = f"""
+    SELECT DISTINCT gene_name
     FROM {table_prefix}junctions
     WHERE junction_id IN ({junction_id_placeholders})
-    AND matched_transcript_ids IS NOT NULL
+    LIMIT 1
+    """
+    gene_result = pd.read_sql_query(gene_query, conn, params=filtered_junction_ids)
+
+    if gene_result.empty:
+        conn.close()
+        return []
+
+    gene_name = gene_result.iloc[0]['gene_name']
+
+    # Get all expressed transcripts for this gene (exclude GENCODE-only transcripts with NULL TPM)
+    expressed_query = f"""
+    SELECT DISTINCT transcript
+    FROM {table_prefix}isoforms
+    WHERE gene_name = ? AND isoform_average_tpm IS NOT NULL
+    """
+    expressed_result = pd.read_sql_query(expressed_query, conn, params=[gene_name])
+    expressed_transcripts = set()
+    for _, row in expressed_result.iterrows():
+        transcript_no_version = row['transcript'].split('.')[0] if '.' in row['transcript'] else row['transcript']
+        expressed_transcripts.add(transcript_no_version)
+
+    if not expressed_transcripts:
+        conn.close()
+        return []
+
+    # Query junctions table to get matched_transcript_ids for each junction
+    junction_query = f"""
+    SELECT junction_id, matched_transcript_ids
+    FROM {table_prefix}junctions
+    WHERE junction_id IN ({junction_id_placeholders})
     """
     junction_result = pd.read_sql_query(junction_query, conn, params=filtered_junction_ids)
 
@@ -949,21 +1036,56 @@ def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list, s
         conn.close()
         return []
 
-    # Get all transcript names (without version numbers from matched_transcript_ids)
-    all_transcript_names_no_version = set()
-    for _, row in junction_result.iterrows():
-        transcript_ids_str = str(row['matched_transcript_ids'])
+    # Build a set of transcripts for EACH junction (for intersection)
+    junction_transcript_sets = []
+
+    for junction_id in filtered_junction_ids:
+        # Get the row for this specific junction
+        row = junction_result[junction_result['junction_id'] == junction_id]
+
+        if row.empty:
+            # Junction not found - intersection will be empty
+            conn.close()
+            return []
+
+        transcript_ids_str = str(row.iloc[0]['matched_transcript_ids'])
+        transcript_set = set()
 
         if pd.notna(transcript_ids_str) and transcript_ids_str not in ('nan', 'None', ''):
             transcript_names = transcript_ids_str.split(',')
 
             for name in transcript_names:
                 name = name.strip()
-
                 if name:
-                    all_transcript_names_no_version.add(name)
+                    # Strip version number for comparison
+                    name_no_version = name.split('.')[0] if '.' in name else name
+                    # Only include expressed transcripts
+                    if name_no_version in expressed_transcripts:
+                        transcript_set.add(name_no_version)
 
-    if not all_transcript_names_no_version:
+        # If no transcripts found in matched_transcript_ids, try GENCODE fallback
+        if not transcript_set:
+            gencode_set = _get_transcripts_from_gencode(conn, junction_id, gene_name, table_prefix)
+            # Filter to expressed transcripts only
+            transcript_set = gencode_set & expressed_transcripts
+
+        if not transcript_set:
+            # Junction has no expressed transcripts - intersection will be empty
+            conn.close()
+            return []
+
+        junction_transcript_sets.append(transcript_set)
+
+    # Compute INTERSECTION of all transcript sets
+    if not junction_transcript_sets:
+        conn.close()
+        return []
+
+    common_transcripts = junction_transcript_sets[0]
+    for transcript_set in junction_transcript_sets[1:]:
+        common_transcripts = common_transcripts & transcript_set
+
+    if not common_transcripts:
         conn.close()
         return []
 
@@ -995,14 +1117,14 @@ def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list, s
     if isoforms_result.empty:
         return []
 
-    # Filter isoforms by matching transcript names (strip version numbers for comparison)
+    # Filter isoforms by matching transcript names (strip version numbers for comparison) and use common_transcripts (intersection of all junctions' transcripts)
     matching_ids = []
     for _, row in isoforms_result.iterrows():
         transcript_with_version = row['transcript']
         # Strip version number (e.g., ENST00000416721.6 -> ENST00000416721)
         transcript_no_version = transcript_with_version.split('.')[0] if '.' in transcript_with_version else transcript_with_version
 
-        if transcript_no_version in all_transcript_names_no_version:
+        if transcript_no_version in common_transcripts:
             matching_ids.append(row['id'])
 
     return matching_ids

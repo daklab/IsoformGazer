@@ -60,6 +60,11 @@ def query_master_table(db_path, table_name, page=0, page_size=10, sort_by=None, 
             elif operator == 'ge':
                 where_clauses.append(f"{column} >= ?")
                 params.append(value)
+            elif operator == 'in':
+                # Handle IN clause for multiple values
+                placeholders = ','.join(['?'] * len(value))
+                where_clauses.append(f"{column} IN ({placeholders})")
+                params.extend(value)
     
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
@@ -232,19 +237,19 @@ def parse_filter_query(db_path, filter_query, table_name=None):
     """Parse filter query with type validation"""
     if not filter_query:
         return []
-    
-    if table_name: 
+
+    if table_name:
         column_types = get_column_types(db_path, table_name)
-    else: 
+    else:
         column_types = {}
-    
+
     filters = []
     expressions = filter_query.split(' && ')
-    
+
     for expression in expressions:
         if not expression or expression.isspace():
             continue
-        
+
         try:
             if ' scontains ' in expression:
                 col, val = expression.split(' scontains ')
@@ -270,10 +275,17 @@ def parse_filter_query(db_path, filter_query, table_name=None):
             else:
                 print(f"Unrecognized filter operation: {expression}")
                 continue
-            
+
             col = col.strip('{} ')
             val = val.strip('" ')
-            
+
+            # Allow handling for transcript_id and junction_id columns multiple comma-separated values
+            if col in ('transcript_id', 'junction_id', 'transcript') and ',' in val:
+                values = [v.strip() for v in val.split(',') if v.strip()]
+                if values:
+                    filters.append((col, 'in', values))
+                continue
+
             col_type = column_types.get(col, 'string')
             if col_type in ('integer', 'float', 'numeric') and operator in ('eq', 'lt', 'gt', 'le', 'ge', 'ne'):
                 try:
@@ -284,7 +296,7 @@ def parse_filter_query(db_path, filter_query, table_name=None):
                 except ValueError:
                     print(f"Skipping filter: invalid numeric value '{val}' for column '{col}'")
                     continue
-            
+
             if operator == 'contains' and col_type in ('integer', 'float', 'numeric'):
                 try:
                     if col_type == 'integer':
@@ -295,12 +307,12 @@ def parse_filter_query(db_path, filter_query, table_name=None):
                 except ValueError:
                     print(f"Skipping filter: invalid numeric value '{val}' for column '{col}'")
                     continue
-            
+
             filters.append((col, operator, val))
-            
+
         except Exception as e:
             print(f"Error parsing filter expression '{expression}': {e}")
-    
+
     return filters
 
 
