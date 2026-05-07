@@ -5,7 +5,7 @@
 </td>
 <td>
   <h1 style="margin-bottom:0;">Isoform Gazer</h1>
-  <p style="margin-top:5px;"><em>A comprehensive dashboard application for visualizing RNA splicing events across pseudobulked single-cell junction usage and long-read isoform expression data.</em></p>
+  <p style="margin-top:5px;"><em>A webtool for visualizing alternative RNA isoforms across integrated long-read RNA-seq and pseudobulked single-cell short-read RNA-seq data.</em></p>
 </td>
 </tr>
 </table>
