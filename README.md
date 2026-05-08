@@ -144,7 +144,14 @@ See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-Developed by the [Knowles Lab](https://knowleslab.com/) at the New York Genome Center.
+Isoform Gazer is developed and maintained by the [Knowles Lab](https://daklab.github.io/) at the New York Genome Center: 
+- **Julia T. Lewandowski**: Application backend and front-end development, database design and management, deployment
+- **Megan D. Schertzer**: ENCODE4 PacBio LRS data processing and analysis
+- **Keren Isaev**: Single-cell SRS data processing and analysis
+- **Stella H. Park**: ENCODE4 PacBio LRS data processing and analysis
+- **David A. Knowles**: Project support, supervision, and funding 
+
+We sincerely thank and acknowledge **Steve Brock** (Principal Scientific System Administrator, New York Genome Center) for their extensive support in the successful deployment of this webtool. 
 
 ## Citations 
 Reese, F. et al. (2023). The ENCODE4 long-read RNA-seq collection reveals distinct classes of transcript structure diversity. bioRxiv, doi: 10.1101/2023.05.15.540865.
