@@ -1,6 +1,5 @@
 import os
 import math
-import json
 import traceback
 from tqdm import tqdm
 import sqlite3
@@ -11,7 +10,6 @@ import base64
 import matplotlib
 matplotlib.use('Agg')
 from pathlib import Path
-from flask import Response
 import dash
 from dash import html, dcc, dash_table, callback_context, no_update
 import dash_bootstrap_components as dbc
@@ -78,13 +76,14 @@ def check_database_status():
     return False
 
 
-def setup_local_database(data_dir=None, force_rebuild=False):
+def setup_local_database(data_dir=None, force_rebuild=False, include_mouse=True):
     """
-    Sets up SQLite database from data files for both human and mouse data.
+    Sets up SQLite database from data files for human and optionally mouse data.
 
     Args:
         data_dir: Optional path to data directory. Defaults to src/isoformgazer/data
         force_rebuild: If True, rebuild the database even if it exists
+        include_mouse: If True, load mouse data; if False, only load human data (default: True)
     """
     if data_dir is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -98,43 +97,64 @@ def setup_local_database(data_dir=None, force_rebuild=False):
 
     print()
     print(f"Creating new database at {db_path}.")
+    if not include_mouse:
+        print("NOTE: Mouse data will be excluded from this build.")
     print()
 
     if Path(db_path).exists():
         os.remove(db_path)
 
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA cache_size = 50000")
-    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA journal_mode = OFF")  
+    conn.execute("PRAGMA synchronous = OFF")  
+    conn.execute("PRAGMA cache_size = -200000")  # 200MB cache (negative = KB)
+    conn.execute("PRAGMA temp_store = MEMORY") 
+    conn.execute("PRAGMA locking_mode = EXCLUSIVE") 
+    conn.execute("PRAGMA page_size = 4096")  # Smaller page size for less waste
 
     human_data_dir = os.path.join(data_dir, "human")
     load_species_data(conn, human_data_dir, table_prefix="", species_name="Human")
 
-    mouse_data_dir = os.path.join(data_dir, "mouse")
-    load_species_data(conn, mouse_data_dir, table_prefix="mouse_", species_name="Mouse")
+    if include_mouse:
+        mouse_data_dir = os.path.join(data_dir, "mouse")
+        load_species_data(conn, mouse_data_dir, table_prefix="mouse_", species_name="Mouse")
+    else:
+        print("\n" + "="*80)
+        print("Skipping mouse data (include_mouse=False)")
+        print("="*80 + "\n")
 
     ######################################################################
     # Load human-mouse high-confidence conserved junctions mapping table
     ######################################################################
-    print(f"\n================================================================================")
-    print(f"Loading human-mouse conserved junctions mapping")
-    print(f"================================================================================\n")
-    conserved_junctions_file = os.path.join(mouse_data_dir, "junction_mapping_mouse_human_with_annotations.csv")
+    if include_mouse:
+        print(f"\n================================================================================")
+        print(f"Loading human-mouse conserved junctions mapping")
+        print(f"================================================================================\n")
+        conserved_junctions_file = os.path.join(mouse_data_dir, "junction_mapping_mouse_human_with_annotations.csv")
 
-    with tqdm(desc="Loading conserved junctions mapping data", unit=" rows") as pbar:
-        df_conserved = pd.read_csv(conserved_junctions_file)
-        pbar.update(len(df_conserved))
+        with tqdm(desc="Loading conserved junctions mapping data", unit=" rows") as pbar:
+            df_conserved = pd.read_csv(conserved_junctions_file)
+            pbar.update(len(df_conserved))
 
-    with tqdm(desc="Writing conserved junctions mapping to local database", unit="rows", total=len(df_conserved)) as pbar:
-        df_conserved.to_sql('human_mouse_conserved_junctions', conn, if_exists='replace', index=False)
-        pbar.update(len(df_conserved))
+        with tqdm(desc="Writing conserved junctions mapping to local database", unit="rows", total=len(df_conserved)) as pbar:
+            df_conserved.to_sql('human_mouse_conserved_junctions', conn, if_exists='replace', index=False)
+            pbar.update(len(df_conserved))
 
-    print(f" Processed all {len(df_conserved):,} rows from conserved junctions mapping!")
-    print()
+        print(f" Processed all {len(df_conserved):,} rows from conserved junctions mapping!")
+        print()
+    else:
+        print("\nSkipping human-mouse conserved junctions mapping (mouse data not included)")
+        print()
 
+    print("\nFinalizing database...")
     conn.commit()
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.commit()
+
+    print("Optimizing database. This may take a few minutes.")
+    conn.execute("VACUUM")
+
     conn.close()
 
     print("Database setup complete!")
@@ -261,8 +281,8 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
                     # fallback: use entire qName as transcript
                     chunk['trans_id'] = chunk['qName']
                     chunk['gene_id'] = 'unknown'
-            chunk['transcript_length'] = chunk['tend'] - chunk['tstart']
-
+            chunk['transcript_length'] = chunk['tEnd'] - chunk['tStart']
+            
             if 'index' in chunk.columns:
                 chunk.drop(columns=['index'], inplace=True)
 
@@ -340,6 +360,148 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
     conn.commit()
 
     ########################################################
+    # Append GENCODE-only transcripts (not detected in expression data)
+    ########################################################
+    if species_name == "Human":
+        gencode_csv = os.path.join(species_data_dir, "expected_transcripts_human_v46_gencode.csv")
+        gencode_psl = os.path.join(species_data_dir, "expected_transcripts_human_v46_gencode_psl.tsv")
+    elif species_name == "Mouse":
+        gencode_csv = os.path.join(species_data_dir, "expected_transcripts_mouse_m25_gencode.csv")
+        gencode_psl = os.path.join(species_data_dir, "expected_transcripts_mouse_m25_gencode_psl.tsv")
+    else:
+        gencode_csv = None
+        gencode_psl = None
+
+    if gencode_csv and gencode_psl and os.path.exists(gencode_csv) and os.path.exists(gencode_psl):
+        print(f"\nAppending {species_name} GENCODE-only transcripts (not in expression data)...")
+        with tqdm(desc=f"Loading {species_name} GENCODE transcripts", unit=" rows") as pbar:
+            df_gencode_isoforms = pd.read_csv(gencode_csv)
+            pbar.update(len(df_gencode_isoforms))
+
+        # Get list of genes that already exist in the expression data (isoforms table): 
+        # we only add reference non-detected transcripts for these currently
+        existing_genes_query = f"SELECT DISTINCT gene_name FROM {isoforms_table}"
+        existing_genes_df = pd.read_sql_query(existing_genes_query, conn)
+        existing_genes = set(existing_genes_df['gene_name'].str.upper())
+
+        print(f"  Found {len(existing_genes):,} genes in expression data")
+        # Ensure gene_name is uppercase for matching
+        if 'gene_name' in df_gencode_isoforms.columns:
+            df_gencode_isoforms['gene_name'] = df_gencode_isoforms['gene_name'].astype(str).str.upper()
+        original_count = len(df_gencode_isoforms)
+        df_gencode_isoforms = df_gencode_isoforms[df_gencode_isoforms['gene_name'].isin(existing_genes)]
+        filtered_count = len(df_gencode_isoforms)
+        print(f"  Filtered GENCODE transcripts: {original_count:,} -> {filtered_count:,} (kept only genes with expression data)")
+
+        # Get current max ID from isoforms table to continue numbering, assign sequential IDs starting after the last existing ID
+        max_id_result = conn.execute(f"SELECT MAX(id) FROM {isoforms_table}").fetchone()
+        max_id = max_id_result[0] if max_id_result[0] is not None else 0
+        df_gencode_isoforms['id'] = range(max_id + 1, max_id + 1 + len(df_gencode_isoforms))
+
+        # Ensure gene_id column exists (no version number)
+        if 'gene_id' in df_gencode_isoforms.columns:
+            df_gencode_isoforms['gene_id'] = df_gencode_isoforms['gene_id'].str.split('.').str[0]
+
+        cursor = conn.execute(f"PRAGMA table_info({isoforms_table})")
+        table_columns = {row[1] for row in cursor.fetchall()}  # row[1] is column name
+        gencode_columns = set(df_gencode_isoforms.columns)
+        columns_to_drop = gencode_columns - table_columns
+        if columns_to_drop:
+            df_gencode_isoforms = df_gencode_isoforms.drop(columns=list(columns_to_drop))
+            print(f"  Dropped {len(columns_to_drop)} incompatible columns: {', '.join(sorted(columns_to_drop))}")
+
+        # Verify all required table columns are present (fill with NaN if missing)
+        for col in table_columns:
+            if col not in df_gencode_isoforms.columns:
+                df_gencode_isoforms[col] = None
+
+        # Append to isoforms table
+        with tqdm(desc=f"Writing {species_name} GENCODE transcripts to database", unit="rows", total=len(df_gencode_isoforms)) as pbar:
+            df_gencode_isoforms.to_sql(isoforms_table, conn, if_exists='append', index=False)
+            pbar.update(len(df_gencode_isoforms))
+
+        print(f" Appended {len(df_gencode_isoforms):,} GENCODE-only transcripts to isoform table!")
+        print(f"Loading {species_name} GENCODE PSL structures...")
+        with tqdm(desc=f"Loading {species_name} GENCODE PSL data", unit=" rows") as pbar:
+            df_gencode_psl = pd.read_csv(gencode_psl, sep='\t')
+            pbar.update(len(df_gencode_psl))
+
+        # Assign same IDs as the isoform table (matching by transcript ID), create mapping from transcript ID to the assigned database ID
+        transcript_id_map = dict(zip(df_gencode_isoforms['transcript'], df_gencode_isoforms['id']))
+        df_gencode_psl['id'] = df_gencode_psl['trans_id'].map(transcript_id_map)
+
+        # Filter out PSL rows that don't have a matching transcript ID (gene was filtered out)
+        psl_original_count = len(df_gencode_psl)
+        df_gencode_psl = df_gencode_psl[df_gencode_psl['id'].notna()]
+        psl_filtered_count = len(df_gencode_psl)
+        print(f"  Filtered GENCODE PSL data: {psl_original_count:,} -> {psl_filtered_count:,} (kept only transcripts with expression data genes)")
+
+        df_gencode_psl['gene_id'] = df_gencode_psl['gene_id'].str.split('.').str[0]
+
+        # Add transcript_length column (sum of blockSizes)
+        def calculate_transcript_length(block_sizes_str):
+            if pd.isna(block_sizes_str):
+                return 0
+            sizes = [int(s) for s in str(block_sizes_str).rstrip(',').split(',') if s]
+            return sum(sizes)
+
+        df_gencode_psl['transcript_length'] = df_gencode_psl['blockSizes'].apply(calculate_transcript_length)
+
+        # Convert relative tStarts to absolute genomic coordinates
+        def convert_relative_to_absolute_starts(row):
+            """Convert relative tStarts (0-based from transcript start) to absolute genomic coordinates"""
+            if pd.isna(row['tStarts']) or pd.isna(row['tStart']):
+                return row['tStarts']
+            relative_starts = row['tStarts'].rstrip(',').split(',')
+            absolute_starts = [str(int(start) + int(row['tStart'])) for start in relative_starts if start]
+            return ', '.join(absolute_starts) + ','
+
+        df_gencode_psl['tStarts_absolute'] = df_gencode_psl.apply(convert_relative_to_absolute_starts, axis=1)
+
+        df_psl_to_append = pd.DataFrame()
+        df_psl_to_append['id'] = df_gencode_psl['id']
+        df_psl_to_append['qName'] = df_gencode_psl['trans_id']
+        df_psl_to_append['tName'] = df_gencode_psl['tName']
+        df_psl_to_append['strand'] = df_gencode_psl['strand']
+        df_psl_to_append['tStart'] = df_gencode_psl['tStart']
+        df_psl_to_append['tEnd'] = df_gencode_psl['tEnd']
+        df_psl_to_append['qSize'] = df_gencode_psl['transcript_length']
+        df_psl_to_append['blockCount'] = df_gencode_psl['blockCount']
+        df_psl_to_append['blockSizes'] = df_gencode_psl['blockSizes']
+        df_psl_to_append['tStarts'] = df_gencode_psl['tStarts_absolute']
+        df_psl_to_append['gene_id'] = df_gencode_psl['gene_id']
+        df_psl_to_append['trans_id'] = df_gencode_psl['trans_id']
+        df_psl_to_append['transcript_length'] = df_gencode_psl['transcript_length']
+        df_psl_to_append['matches'] = 0
+        df_psl_to_append['misMatches'] = 0
+        df_psl_to_append['repMatches'] = 0
+        df_psl_to_append['nCount'] = 0
+        df_psl_to_append['qNumInsert'] = 0
+        df_psl_to_append['qBaseInsert'] = 0
+        df_psl_to_append['tNumInsert'] = df_gencode_psl['blockCount'] - 1  # Number of introns
+        df_psl_to_append['tBaseInsert'] = 0
+        df_psl_to_append['qStart'] = 0
+        df_psl_to_append['qEnd'] = df_gencode_psl['transcript_length']
+        df_psl_to_append['tSize'] = 0
+        df_psl_to_append['qStarts'] = '0,'
+
+        with tqdm(desc=f"Writing {species_name} GENCODE PSL data to database", unit="rows", total=len(df_psl_to_append)) as pbar:
+            df_psl_to_append.to_sql(psl_table, conn, if_exists='append', index=False)
+            pbar.update(len(df_psl_to_append))
+
+        print(f" Appended {len(df_psl_to_append):,} GENCODE PSL structures to PSL table!")
+        print()
+
+    else:
+        if gencode_csv and not os.path.exists(gencode_csv):
+            print(f"\nNote: GENCODE transcript file not found at {gencode_csv}")
+            print(f"Skipping GENCODE-only transcript append for {species_name}")
+        if gencode_psl and not os.path.exists(gencode_psl):
+            print(f"\nNote: GENCODE PSL file not found at {gencode_psl}")
+            print(f"Skipping GENCODE PSL structure append for {species_name}")
+        print()
+
+    ########################################################
     # Load junction master table data
     ########################################################
     if species_name == "Human":
@@ -402,6 +564,10 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
             else:
                 chunk.to_sql(temp_table, conn, if_exists='append', index=False)
 
+            # Commit every 10 chunks to free up memory and reduce temp filesize
+            if i % 10 == 0 and i > 0:
+                conn.commit()
+
             row_count += len(chunk)
             chunk_pbar.update(1)
 
@@ -411,6 +577,64 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
             })
 
     print(f" Loaded all {row_count:,} rows from {species_name} junction file into temporary table!")
+
+    ########################################################
+    # Append GENCODE junctions (non-expressed junctions for structure plot)
+    ########################################################
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(species_data_dir))))
+    gencode_dir = os.path.join(repo_root, "adding_GENCODE_junctions")
+    if species_name == "Human":
+        gencode_junction_file = os.path.join(gencode_dir, "expected_junctions_human_043026.csv")
+    elif species_name == "Mouse":
+        gencode_junction_file = os.path.join(gencode_dir, "expected_junctions_mouse_043026.csv")
+    else:
+        gencode_junction_file = None
+
+    if gencode_junction_file and os.path.exists(gencode_junction_file):
+        print(f"\nAppending {species_name} GENCODE junctions to temporary table...")
+
+        # Count total GENCODE junction rows for progress tracking
+        with open(gencode_junction_file, 'r') as f:
+            gencode_total_lines = sum(1 for _ in f) - 1
+
+        gencode_chunk_size = 100000
+        gencode_estimated_chunks = (gencode_total_lines // gencode_chunk_size) + 1
+        gencode_row_count = 0
+
+        print(f"Loading {gencode_total_lines:,} GENCODE junction rows in chunks of {gencode_chunk_size:,}...")
+
+        with tqdm(desc=f"Appending {species_name} GENCODE junctions",
+                  unit="chunk",
+                  total=gencode_estimated_chunks) as gencode_pbar:
+
+            for i, gencode_chunk in enumerate(pd.read_csv(gencode_junction_file,
+                                                          chunksize=gencode_chunk_size,
+                                                          low_memory=False)):
+                if 'gene_symbol' in gencode_chunk.columns:
+                    gencode_chunk['gene_symbol'] = gencode_chunk['gene_symbol'].astype(str).str.upper()
+
+                gencode_chunk.to_sql(temp_table, conn, if_exists='append', index=False)
+
+                # Commit every 10 chunks to free up memory and reduce temp file size
+                if i % 10 == 0:
+                    conn.commit()
+
+                gencode_row_count += len(gencode_chunk)
+                gencode_pbar.update(1)
+
+                gencode_pbar.set_postfix({
+                    'rows': f"{gencode_row_count:,}",
+                    'chunk': f"{i+1}/{gencode_estimated_chunks}"
+                })
+
+        row_count += gencode_row_count
+        print(f" Appended all {gencode_row_count:,} GENCODE junction rows!")
+        print(f" Total rows in temporary table: {row_count:,}")
+        
+    else:
+        if gencode_junction_file:
+            print(f"\nWarning: GENCODE junction file not found at {gencode_junction_file}")
+            print(f"Skipping GENCODE junction append for {species_name}")
 
     # Rename gene_symbol to gene_name
     conn.execute(f"ALTER TABLE {temp_table} RENAME COLUMN gene_symbol TO gene_name")
@@ -739,7 +963,7 @@ def load_species_data(conn, species_data_dir, table_prefix="", species_name="Hum
         idx_pbar.update(1)
         conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_gene ON {atse_table}(gene_id_clean, gene_name)")
         idx_pbar.update(1)
-        conn.execute(f'CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_coords ON {atse_table}(chromosome, start, "end")')
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_atse_coords ON {atse_table}(chromosome, start, end)")
         idx_pbar.update(1)
         if species_name == "Human":
             conn.execute(f"CREATE INDEX IF NOT EXISTS {table_prefix}idx_gencode_transcript ON {gencode_table}(gene_id, transcript_id)")
@@ -1986,6 +2210,15 @@ app.layout = html.Div(className='app-layout', children=[
                     html.Div(className='table-header-controls', children=[
                         html.Div(children=[
                             dbc.Button(
+                                "Apply Filters",
+                                id='apply-left-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True,
+                                style={'marginRight': '8px'}
+                            ),
+                            dbc.Button(
                                 "Clear Filters",
                                 id='clear-left-filters',
                                 color="secondary",
@@ -2033,6 +2266,15 @@ app.layout = html.Div(className='app-layout', children=[
                 html.Div(className='table-container', id='table2-container', children=[
                     html.Div(className='table-header-controls', children=[
                         html.Div(children=[
+                            dbc.Button(
+                                "Apply Filters",
+                                id='apply-right-filters',
+                                color="secondary",
+                                size="sm",
+                                className="clear-filters-btn",
+                                disabled=True,
+                                style={'marginRight': '8px'}
+                            ),
                             dbc.Button(
                                 "Clear Filters",
                                 id='clear-right-filters',
@@ -2111,6 +2353,8 @@ app.layout.children.extend([
     dcc.Store(id='loading-progress-store', data=0),
     dcc.Store(id='left-table-validation-store', data={'valid': True, 'errors': {}}),
     dcc.Store(id='right-table-validation-store', data={'valid': True, 'errors': {}}),
+    dcc.Store(id='left-table-applied-filter-store', data=''),
+    dcc.Store(id='right-table-applied-filter-store', data=''),
     dcc.Store(id='gtf-hash-results-store', data=[]),
     dcc.Store(id='all-gene-options-store', data=get_all_gene_options(db_path)),
     dcc.Store(id='cache-used-store', data=cache_loaded_from_disk),
@@ -2708,6 +2952,68 @@ def validate_right_table_filters(current_filter_query):
     else:
         return {'display': 'none'}, [], {'valid': True, 'errors': {}, 'query': current_filter_query}
 
+
+#######################################################################
+# FILTER APPLICATION CALLBACKS (Apply Filters Button)
+#######################################################################
+@app.callback(
+    dash.dependencies.Output('left-table-applied-filter-store', 'data'),
+    [dash.dependencies.Input('apply-left-filters', 'n_clicks'),
+     dash.dependencies.Input('clear-left-filters', 'n_clicks'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')],
+    [dash.dependencies.State('left_data_table', 'filter_query'),
+     dash.dependencies.State('left-table-validation-store', 'data')]
+)
+def apply_left_filter_store(apply_clicks, clear_clicks, selected_gene, current_filter, validation_data):
+    """Apply or clear filters for left table - updates the applied filter store"""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return ''
+
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    # Clear filters when gene changes or clear button clicked
+    if trigger_id == 'gene-search-dropdown' or trigger_id == 'clear-left-filters':
+        return ''
+
+    # Apply current filter when apply button clicked (only if valid)
+    if trigger_id == 'apply-left-filters':
+        if validation_data and validation_data.get('valid', True):
+            return current_filter or ''
+        else:
+            raise PreventUpdate
+
+    return ''
+
+
+@app.callback(
+    dash.dependencies.Output('right-table-applied-filter-store', 'data'),
+    [dash.dependencies.Input('apply-right-filters', 'n_clicks'),
+     dash.dependencies.Input('clear-right-filters', 'n_clicks'),
+     dash.dependencies.Input('gene-search-dropdown', 'value')],
+    [dash.dependencies.State('right_data_table', 'filter_query'),
+     dash.dependencies.State('right-table-validation-store', 'data')]
+)
+def apply_right_filter_store(apply_clicks, clear_clicks, selected_gene, current_filter, validation_data):
+    """Apply or clear filters for right table - updates the applied filter store"""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return ''
+
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if trigger_id == 'gene-search-dropdown' or trigger_id == 'clear-right-filters':
+        return ''
+
+    if trigger_id == 'apply-right-filters':
+        if validation_data and validation_data.get('valid', True):
+            return current_filter or ''
+        else:
+            raise PreventUpdate
+
+    return ''
+
+
 #######################################################################
 # INITIAL LOADING SCREEN CALLBACKS
 #######################################################################
@@ -2745,18 +3051,12 @@ def hide_loading_screen(isoform_data, junction_data, timer_intervals, loading_co
     [dash.dependencies.Input('isoform-full-data-store', 'data'),
      dash.dependencies.Input('junction-full-data-store', 'data'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('right_data_table', 'filter_query'),
-     dash.dependencies.Input('left-table-validation-store', 'data'),
-     dash.dependencies.Input('right-table-validation-store', 'data'),
+     dash.dependencies.Input('left-table-applied-filter-store', 'data'),
+     dash.dependencies.Input('right-table-applied-filter-store', 'data'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, left_validation, right_validation, species):
+def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_gene, isoform_filter_query, junction_filter_query, species):
     """Store ALL filtered transcript/junction IDs from FULL datasets with transcript-based junction filtering"""
-    # Check if either filter is invalid: if so, don't update filtered stores since user will need to fix errors before query proceeds
-    if ((isoform_filter_query and left_validation and not left_validation.get('valid', True)) or
-        (junction_filter_query and right_validation and not right_validation.get('valid', True))):
-        raise PreventUpdate
 
     try:
         has_isoform_filters = bool(isoform_filter_query and isoform_filter_query.strip())
@@ -2771,16 +3071,23 @@ def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_
             filtered_junction_ids = [row.get('junction_id', '') for row in junction_full_data if row.get('junction_id')]
 
         # Handle bidirectional filtering between transcripts and junctions when filters are applied
-        if has_isoform_filters or has_junction_filters:
-            transcript_based_junction_ids = []
-            junction_based_transcript_ids = []
+        # Start with the filtered IDs from the full data stores, apply bidirectional filtering (intersection of filters focusing on coords)
+        final_transcript_ids = filtered_transcript_ids
+        final_junction_ids = filtered_junction_ids
 
+        if has_isoform_filters or has_junction_filters:
             # Isoform filtering → Junction filtering
             if selected_gene and has_isoform_filters and filtered_transcript_ids:
                 try:
                     transcript_based_junction_ids = filter_junctions_by_transcripts(
                         db_path, selected_gene, filtered_transcript_ids, species
                     )
+                    # If we also have junction filters, intersect them
+                    if has_junction_filters and transcript_based_junction_ids:
+                        final_junction_ids = list(set(filtered_junction_ids) & set(transcript_based_junction_ids))
+                    elif transcript_based_junction_ids:
+                        # Only isoform filter active
+                        final_junction_ids = transcript_based_junction_ids
                 except Exception as e:
                     print(f"Error in transcript-based junction filtering: {e}")
 
@@ -2790,28 +3097,17 @@ def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_
                     junction_based_transcript_ids = filter_transcripts_by_junctions(
                         db_path, filtered_junction_ids, species
                     )
+                    # If we also have isoform filters, intersect them
+                    if has_isoform_filters and junction_based_transcript_ids:
+                        final_transcript_ids = list(set(filtered_transcript_ids) & set(junction_based_transcript_ids))
+                    elif junction_based_transcript_ids:
+                        # Only junction filter active
+                        final_transcript_ids = junction_based_transcript_ids
                 except Exception as e:
                     print(f"Error in junction-based transcript filtering: {e}")
-            
-            # Intersect filters from both master tables for joint filtering
-            if has_isoform_filters and has_junction_filters:
-                final_transcript_ids = list(set(filtered_transcript_ids) & set(junction_based_transcript_ids)) if junction_based_transcript_ids else filtered_transcript_ids
-                final_junction_ids = list(set(filtered_junction_ids) & set(transcript_based_junction_ids)) if transcript_based_junction_ids else filtered_junction_ids
 
-            elif has_isoform_filters:
-                final_transcript_ids = filtered_transcript_ids
-                final_junction_ids = transcript_based_junction_ids
-
-            elif has_junction_filters:
-                final_transcript_ids = junction_based_transcript_ids
-                final_junction_ids = filtered_junction_ids
-
-            else:
-                final_transcript_ids = filtered_transcript_ids
-                final_junction_ids = filtered_junction_ids
-            
-            filtered_transcript_ids = final_transcript_ids
-            filtered_junction_ids = final_junction_ids
+        filtered_transcript_ids = final_transcript_ids
+        filtered_junction_ids = final_junction_ids
         
         return filtered_transcript_ids, filtered_junction_ids
     
@@ -2821,29 +3117,29 @@ def update_filtered_data_stores(isoform_full_data, junction_full_data, selected_
 
 
 @app.callback(
-    [dash.dependencies.Output('left_data_table', 'filter_query'),
-     dash.dependencies.Output('right_data_table', 'filter_query')],
+    [dash.dependencies.Output('left_data_table', 'filter_query', allow_duplicate=True),
+     dash.dependencies.Output('right_data_table', 'filter_query', allow_duplicate=True)],
     [dash.dependencies.Input('clear-left-filters', 'n_clicks'),
      dash.dependencies.Input('clear-right-filters', 'n_clicks'),
      dash.dependencies.Input('gene-search-dropdown', 'value')],
     [dash.dependencies.State('left_data_table', 'filter_query'),
-     dash.dependencies.State('right_data_table', 'filter_query')]
+     dash.dependencies.State('right_data_table', 'filter_query')],
+    prevent_initial_call=True
 )
-def clear_filters(left_clicks, right_clicks, selected_gene, left_filter, right_filter):
+def clear_filter_inputs(left_clicks, right_clicks, selected_gene, left_filter, right_filter):
+    """Clear the filter input fields when clear buttons are clicked or gene changes"""
     ctx = dash.callback_context
     if not ctx.triggered:
         raise PreventUpdate
-    
+
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    # Clear filters if Clear All buttons are clicked
+
     if button_id == 'clear-left-filters':
         return '', right_filter
-    
+
     elif button_id == 'clear-right-filters':
         return left_filter, ''
-    
-    # Also clear all filters when gene changes
+
     elif button_id == 'gene-search-dropdown':
         return '', ''
 
@@ -2851,14 +3147,31 @@ def clear_filters(left_clicks, right_clicks, selected_gene, left_filter, right_f
 
 
 @app.callback(
+    [dash.dependencies.Output('apply-left-filters', 'disabled'),
+     dash.dependencies.Output('apply-right-filters', 'disabled')],
+    [dash.dependencies.Input('left_data_table', 'filter_query'),
+     dash.dependencies.Input('right_data_table', 'filter_query'),
+     dash.dependencies.Input('left-table-applied-filter-store', 'data'),
+     dash.dependencies.Input('right-table-applied-filter-store', 'data')]
+)
+def update_apply_button_states(left_filter, right_filter, left_applied, right_applied):
+    """Enable Apply Filters buttons only when there's a pending filter that differs from applied"""
+    # Enable Apply button if there's a filter typed AND it's different from what's currently applied
+    left_disabled = not left_filter or left_filter.strip() == '' or left_filter == left_applied
+    right_disabled = not right_filter or right_filter.strip() == '' or right_filter == right_applied
+    return left_disabled, right_disabled
+
+
+@app.callback(
     [dash.dependencies.Output('clear-left-filters', 'disabled'),
      dash.dependencies.Output('clear-right-filters', 'disabled')],
-    [dash.dependencies.Input('left_data_table', 'filter_query'),
-     dash.dependencies.Input('right_data_table', 'filter_query')]
+    [dash.dependencies.Input('left-table-applied-filter-store', 'data'),
+     dash.dependencies.Input('right-table-applied-filter-store', 'data')]
 )
-def update_button_states(left_filter, right_filter):
-    left_disabled = not left_filter or left_filter.strip() == ''
-    right_disabled = not right_filter or right_filter.strip() == ''
+def update_clear_button_states(left_applied_filter, right_applied_filter):
+    """Enable Clear Filters buttons only when filters are actually applied"""
+    left_disabled = not left_applied_filter or left_applied_filter.strip() == ''
+    right_disabled = not right_applied_filter or right_applied_filter.strip() == ''
     return left_disabled, right_disabled
 
 
@@ -2898,11 +3211,11 @@ def reset_gene_on_species_change(species, current_gene):
     [dash.dependencies.Output('gene-search-dropdown', 'options'),
      dash.dependencies.Output('gene-search-dropdown', 'value')],
     [dash.dependencies.Input('gene-search-dropdown', 'search_value'),
-     dash.dependencies.Input('species-dropdown', 'value'),
-     dash.dependencies.Input('all-gene-options-store', 'data')],
-    [dash.dependencies.State('gene-search-dropdown', 'value')]
+     dash.dependencies.Input('species-dropdown', 'value')],
+    [dash.dependencies.State('gene-search-dropdown', 'value'),
+     dash.dependencies.State('all-gene-options-store', 'data')]
 )
-def update_gene_options(search_value, species, all_gene_options, current_value):
+def update_gene_options(search_value, species, current_value, all_gene_options):
     """Update gene options using client-side filtering from cached data"""
     # If no cached options available, fall back to database query (shouldn't happen)
     if not all_gene_options:
@@ -2919,16 +3232,16 @@ def update_gene_options(search_value, species, all_gene_options, current_value):
         filtered = [opt for opt in all_gene_options if search_lower in opt.get('search', '')]
         options = filtered[:50]
 
-    # Bug fix for figures refreshing every time user interacts with gene dropdown:
-    # - If species changed (or gene store updated), preserve current value if it exists in new options
+    # Bug fix for figures refreshing every time user interacts with gene dropdown: 
+    # - If species changed, preserve current value if it exists in new options
     # - If user is just typing (search_value changed), don't update the value
     ctx = dash.callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0] if ctx.triggered else None
+
     if current_value is None:
         return options, 'AACS'
-
-    # When species changes or gene store updates, reset if current gene not in new species
-    if triggered_id in ['species-dropdown', 'all-gene-options-store']:
+    
+    if triggered_id == 'species-dropdown':
         option_values = [opt['value'] for opt in options]
         if current_value in option_values:
             return options, current_value
@@ -2944,7 +3257,6 @@ def update_gene_options(search_value, species, all_gene_options, current_value):
         current_option = next((opt for opt in all_gene_options if opt['value'] == current_value), None)
         if current_option:
             options = [current_option] + [opt for opt in options if opt['value'] != current_value]
-
         return options, dash.no_update
 
 
@@ -2957,31 +3269,12 @@ def update_gene_options(search_value, species, all_gene_options, current_value):
      dash.dependencies.Output('organ-abundance-dropdown', 'value', allow_duplicate=True),
      dash.dependencies.Output('gridlines-toggle', 'value')],
     [dash.dependencies.Input('gene-search-dropdown', 'value')],
-    [dash.dependencies.State('species-dropdown', 'value')],
     prevent_initial_call=True
 )
-def reset_custom_settings_on_gene_change(selected_gene, species):
+def reset_custom_settings_on_gene_change(selected_gene):
     """Reset all custom settings to defaults when a new gene is selected (except colorscales)"""
-    # Check if gene exists in junction data
-    hide_junctions_default = False  # Default: show junctions
-
-    if selected_gene:
-        # Use 'Human' as default if species is not set
-        species = species if species else 'Human'
-        try:
-            gene_data = process_gene_atse_data(selected_gene, db_path, filtered_junction_ids=None, species=species)
-            # If gene not found in junction data, default to hiding junctions (showing transcript-only plot)
-            if 'error' in gene_data:
-                hide_junctions_default = True
-                print(f"Gene {selected_gene} not found in junction data, defaulting to transcript-only view")
-        except Exception as e:
-            print(f"Error checking gene in junction data: {e}")
-            traceback.print_exc()
-            # On error, keep default as False (show junctions)
-            pass
-
     return (
-        hide_junctions_default,  # hide-junctions-toggle: auto-set based on junction data availability
+        False,      # hide-junctions-toggle: show junctions by default
         True,       # color-junctions-by-psi-toggle: on by default
         True,       # color-by-abundance-toggle: on by default
         'average',  # abundance-color-type-radio: average by default
@@ -3167,33 +3460,22 @@ def update_summary_blocks(selected_gene, species):
 ######################################################################
 # SQLLITE MASTER TABLE PROCESSING CALLBACKS
 ######################################################################
+# Callback 1: Update isoform-full-data-store (does NOT depend on filtered stores)
 @app.callback(
-    [dash.dependencies.Output('left_data_table', 'data'),
-     dash.dependencies.Output('left_data_table', 'page_count'),
-     dash.dependencies.Output('isoform-full-data-store', 'data')],
-    [dash.dependencies.Input('left_data_table', 'page_current'),
-     dash.dependencies.Input('left_data_table', 'page_size'),
-     dash.dependencies.Input('left_data_table', 'sort_by'),
-     dash.dependencies.Input('left_data_table', 'filter_query'),
+    dash.dependencies.Output('isoform-full-data-store', 'data'),
+    [dash.dependencies.Input('left_data_table', 'sort_by'),
+     dash.dependencies.Input('left-table-applied-filter-store', 'data'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('left-table-validation-store', 'data'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_isoform_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
-    if filter_query and validation_data and not validation_data.get('valid', True):
-        raise PreventUpdate
-
-    # Check what triggered this callback: if only pagination changes, do not need to update full data store.
-    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
-    ctx = dash.callback_context
-    triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
-    pagination_only = triggered_prop in ['left_data_table.page_current', 'left_data_table.page_size']
+def update_isoform_full_data_store(sort_by, filter_query, selected_gene, species):
+    """Query database and store full isoform data (filtered by applied filter only)"""
 
     table_prefix = get_table_prefix(species)
     table_name = f'{table_prefix}isoforms'
     filters = parse_filter_query(db_path, filter_query, table_name=table_name)
 
-    # Convert gene_name to gene_id for filtering to get all transcripts (including those with gene_name='NAN')
+    # Convert gene_name to gene_id for filtering
     gene_filter = selected_gene
     if selected_gene:
         gene_id = get_gene_id_for_gene_name(db_path, selected_gene, species)
@@ -3220,6 +3502,37 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
         gene_filter=gene_filter
     )
 
+    return full_data
+
+
+# Callback 2: Update table display (depends on both stores, applies bidirectional filtering)
+@app.callback(
+    [dash.dependencies.Output('left_data_table', 'data'),
+     dash.dependencies.Output('left_data_table', 'page_count')],
+    [dash.dependencies.Input('left_data_table', 'page_current'),
+     dash.dependencies.Input('left_data_table', 'page_size'),
+     dash.dependencies.Input('isoform-full-data-store', 'data'),
+     dash.dependencies.Input('filtered-isoform-store', 'data')],
+    [dash.dependencies.State('right_data_table', 'filter_query')]
+)
+def update_isoform_table_display(page_current, page_size, isoform_full_data, filtered_isoform_ids, junction_filter_query):
+    """Display paginated isoform data with bidirectional filtering applied"""
+    if not isoform_full_data:
+        return [], 0
+
+    full_data = list(isoform_full_data)  # Make a copy
+
+    # Apply bidirectional filtering: use filtered_isoform_ids if it represents a filtered subset
+    if filtered_isoform_ids and isinstance(filtered_isoform_ids, list) and len(filtered_isoform_ids) > 0:
+        # Get all IDs from full data
+        all_ids_in_full_data = set(row.get('id') for row in full_data if row.get('id'))
+        filtered_ids_set = set(filtered_isoform_ids)
+
+        # Apply filtering if filtered set is different from full set
+        if filtered_ids_set != all_ids_in_full_data:
+            full_data = [row for row in full_data if row.get('id') in filtered_ids_set]
+
+    total_count = len(full_data)
     page_current = page_current or 0
     page_size = page_size or 10
 
@@ -3228,39 +3541,25 @@ def update_isoform_table(page_current, page_size, sort_by, filter_query, selecte
     paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
 
-    if pagination_only:
-        return paginated_data, page_count, no_update
-
-    return paginated_data, page_count, full_data
+    return paginated_data, page_count
 
 
+# Callback 3: Update junction-full-data-store (does NOT depend on filtered stores)
 @app.callback(
-    [dash.dependencies.Output('right_data_table', 'data'),
-     dash.dependencies.Output('right_data_table', 'page_count'),
-     dash.dependencies.Output('junction-full-data-store', 'data')],
-    [dash.dependencies.Input('right_data_table', 'page_current'),
-     dash.dependencies.Input('right_data_table', 'page_size'),
-     dash.dependencies.Input('right_data_table', 'sort_by'),
-     dash.dependencies.Input('right_data_table', 'filter_query'),
+    dash.dependencies.Output('junction-full-data-store', 'data'),
+    [dash.dependencies.Input('right_data_table', 'sort_by'),
+     dash.dependencies.Input('right-table-applied-filter-store', 'data'),
      dash.dependencies.Input('gene-search-dropdown', 'value'),
-     dash.dependencies.Input('right-table-validation-store', 'data'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
-def update_junction_table(page_current, page_size, sort_by, filter_query, selected_gene, validation_data, species):
-    if filter_query and validation_data and not validation_data.get('valid', True):
-        raise PreventUpdate
-
-    # Check what triggered this callback: if only pagination changes, do not need to update full data store.
-    # this avoids triggering downstream callbacks that refresh clustergrams unnecessarily
-    ctx = dash.callback_context
-    triggered_prop = ctx.triggered[0]['prop_id'] if ctx.triggered else None
-    pagination_only = triggered_prop in ['right_data_table.page_current', 'right_data_table.page_size']
+def update_junction_full_data_store(sort_by, filter_query, selected_gene, species):
+    """Query database and store full junction data (filtered by applied filter only)"""
 
     table_prefix = get_table_prefix(species)
     table_name = f'{table_prefix}junctions'
     filters = parse_filter_query(db_path, filter_query, table_name=table_name)
 
-    # Convert gene_name to gene_id for filtering to get all junctions (including those for transcripts with gene_name='NAN')
+    # Convert gene_name to gene_id for filtering
     gene_filter = selected_gene
     if selected_gene:
         gene_id = get_gene_id_from_atse(db_path, selected_gene, species)
@@ -3287,6 +3586,37 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
         gene_filter=gene_filter
     )
 
+    return full_data
+
+
+# Callback 4: Update table display (depends on both stores, applies bidirectional filtering)
+@app.callback(
+    [dash.dependencies.Output('right_data_table', 'data'),
+     dash.dependencies.Output('right_data_table', 'page_count')],
+    [dash.dependencies.Input('right_data_table', 'page_current'),
+     dash.dependencies.Input('right_data_table', 'page_size'),
+     dash.dependencies.Input('junction-full-data-store', 'data'),
+     dash.dependencies.Input('filtered-junction-store', 'data')],
+    [dash.dependencies.State('left_data_table', 'filter_query')]
+)
+def update_junction_table_display(page_current, page_size, junction_full_data, filtered_junction_ids, isoform_filter_query):
+    """Display paginated junction data with bidirectional filtering applied"""
+    if not junction_full_data:
+        return [], 0
+
+    full_data = list(junction_full_data)  # Make a copy
+
+    # Apply bidirectional filtering: use filtered_junction_ids if it represents a filtered subset
+    if filtered_junction_ids and isinstance(filtered_junction_ids, list) and len(filtered_junction_ids) > 0:
+        # Get all IDs from full data
+        all_ids_in_full_data = set(row.get('junction_id') for row in full_data if row.get('junction_id'))
+        filtered_ids_set = set(filtered_junction_ids)
+
+        # Apply filtering if filtered set is different from full set
+        if filtered_ids_set != all_ids_in_full_data:
+            full_data = [row for row in full_data if row.get('junction_id') in filtered_ids_set]
+
+    total_count = len(full_data)
     page_current = page_current or 0
     page_size = page_size or 10
 
@@ -3295,10 +3625,7 @@ def update_junction_table(page_current, page_size, sort_by, filter_query, select
     paginated_data = full_data[start_idx:end_idx]
     page_count = math.ceil(total_count / page_size) if page_size else 1
 
-    if pagination_only:
-        return paginated_data, page_count, no_update
-
-    return paginated_data, page_count, full_data
+    return paginated_data, page_count
 
 
 
@@ -3769,8 +4096,26 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
     if isoform_filter_query and validation_data and not validation_data.get('valid', True):
         raise PreventUpdate
 
-    has_isoform_filter = bool(isoform_filter_query and isoform_filter_query.strip())
-    actual_filtered_transcript_ids = filtered_transcript_ids if has_isoform_filter else None
+    # Determine if actual filtering is happening by checking if filtered IDs is a subset: both direct isoform filtering AND bidirectional filtering from junctions
+    actual_filtered_transcript_ids = None
+    if filtered_transcript_ids and isinstance(filtered_transcript_ids, list) and len(filtered_transcript_ids) > 0 and selected_gene:
+        try:
+            # Get total transcript count for this gene
+            conn = sqlite3.connect(db_path)
+            table_prefix = '' if species == "Human" else 'mouse_'
+            count_query = f"SELECT COUNT(*) FROM {table_prefix}isoforms WHERE gene_name = ?"
+            total_count = conn.execute(count_query, [selected_gene]).fetchone()[0]
+            conn.close()
+
+            # Only apply filtering if filtered list is smaller than total (actual filtering is happening)
+            if len(filtered_transcript_ids) < total_count:
+                actual_filtered_transcript_ids = filtered_transcript_ids
+            # If filtered_transcript_ids has same count as total, pass None (no filtering)
+            else:
+                actual_filtered_transcript_ids = None
+        except Exception as e:
+            print(f"Error checking filter status: {e}")
+            actual_filtered_transcript_ids = None
 
     if not selected_gene:
         empty_fig = create_empty_atse_message("Select a gene to view splice junctions and exons")
@@ -4504,6 +4849,54 @@ def convert_dimensions(width, height, from_unit, to_unit='px', dpi=96):
         return width * dpi, height * dpi
 
     return width, height
+
+
+@app.callback(
+    [dash.dependencies.Output('export-status-message', 'style'),
+     dash.dependencies.Output('export-status-timer', 'disabled')],
+    [dash.dependencies.Input('export-unified-btn', 'n_clicks'),
+     dash.dependencies.Input('export-status-timer', 'n_intervals')],
+    [dash.dependencies.State('export-width-value', 'value'),
+     dash.dependencies.State('export-height-value', 'value'),
+     dash.dependencies.State('gene-search-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def manage_download_status(n_clicks, n_intervals, width, height, selected_gene):
+    """Manage download status message display and timer"""
+    if not callback_context.triggered:
+        raise PreventUpdate
+
+    triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
+
+    if triggered_id == 'export-unified-btn':
+        if not n_clicks or not width or not height or not selected_gene:
+            raise PreventUpdate
+
+        return (
+            {
+                'marginTop': '15px',
+                'fontSize': '12px',
+                'color': '#301279',
+                'fontWeight': '600',
+                'display': 'block'
+            },
+            False
+        )
+
+    elif triggered_id == 'export-status-timer':
+        if not n_intervals:
+            raise PreventUpdate
+
+        return (
+            {
+                'marginTop': '15px',
+                'fontSize': '12px',
+                'color': '#301279',
+                'fontWeight': '600',
+                'display': 'none'
+            },
+            True
+        )
 
 
 @app.callback(
