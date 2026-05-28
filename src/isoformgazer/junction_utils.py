@@ -853,7 +853,7 @@ def get_gene_id_from_atse(db_path: str, gene_name: str, species="Human") -> str:
     """Get gene_id for a given gene_name from the database"""
     db_config = get_db_config()
     table_prefix = get_table_prefix(species)
-    query = f"SELECT DISTINCT gene_id FROM ""{table_prefix}junctions"" WHERE gene_name = :gene_name LIMIT 1"
+    query = f'SELECT DISTINCT gene_id FROM "{table_prefix}junctions" WHERE gene_name = :gene_name LIMIT 1'
     result = db_config.execute_query(query, params={"gene_name": gene_name})
 
     if len(result) > 0:
@@ -920,7 +920,7 @@ def filter_junctions_by_transcripts(db_path: str, gene_name: str, filtered_trans
     return matching_junction_ids
 
 
-def _get_transcripts_from_gencode(conn, junction_id, gene_name, table_prefix, coord_tolerance=5):
+def _get_transcripts_from_gencode(junction_id, gene_name, table_prefix, coord_tolerance=5):
     """
     Helper to get transcripts from GENCODE GTF data when matched_transcript_ids is empty.
     Parses junction coordinates and finds matching transcripts in gencode_gtf table.
@@ -1058,7 +1058,7 @@ def filter_transcripts_by_junctions(db_path: str, filtered_junction_ids: list, s
 
         # If no transcripts found in matched_transcript_ids, try GENCODE fallback
         if not transcript_set:
-            gencode_set = _get_transcripts_from_gencode(db_path, junction_id, gene_name, table_prefix)
+            gencode_set = _get_transcripts_from_gencode(junction_id, gene_name, table_prefix)
             # Filter to expressed transcripts only
             transcript_set = gencode_set & expressed_transcripts
 
@@ -1140,13 +1140,13 @@ def process_gene_atse_data(gene_name: str, db_path: str, filtered_junction_ids=N
 
     atse_query = f"""
     SELECT event_id, gene_id, gene_name, event_strand, chromosome,
-            start, end, junction_id, transcripts, perfect_match_3_prime,
+            "start", "end", junction_id, transcripts, perfect_match_3_prime,
             perfect_match_5_prime, both_ends_transcripts,
             only_5_prime_transcripts, only_3_prime_transcripts,
             atse_start, atse_end, event_type
     FROM "{table_prefix}atse_data"
     WHERE (gene_id_clean = :gene_id_pattern OR gene_name = :gene_name)
-    ORDER BY start, end
+    ORDER BY "start", "end"
     """
     gene_atse = db_config.execute_query(atse_query, params={"gene_id_pattern": gene_id_base, "gene_name": gene_name})
     #memory_tracker.measure(f"after_atse_query_{gene_name}")
@@ -1499,7 +1499,7 @@ def create_junction_exon_visualization(gene_data: dict,
         if transcript_names:
             placeholders = ','.join([f':tname_{i}' for i in range(len(transcript_names))])
             transcript_ids_query = f"""
-            SELECT DISTINCT transcript, id FROM "{table_prefix}isoforms"
+            SELECT DISTINCT transcript, id, isoform_average_tpm FROM "{table_prefix}isoforms"
             WHERE transcript IN ({placeholders})
             ORDER BY isoform_average_tpm DESC NULLS LAST
             """

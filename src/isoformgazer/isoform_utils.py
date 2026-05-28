@@ -12,8 +12,8 @@ import plotly.graph_objs as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from typing import List, Tuple
-from data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap, get_table_prefix, get_plotly_colorscale
-from performance_utils import cached, memory_tracker, plot_optimizer
+from src.isoformgazer.data_utils import apply_distance_preprocessing, extract_gtf_attr_val, get_matplotlib_colormap, get_table_prefix, get_plotly_colorscale
+from src.isoformgazer.performance_utils import cached, memory_tracker, plot_optimizer
 from sqlalchemy import text
 from src.isoformgazer.db_config import get_db_config
 # suppresses "Mean of empty slice" warnings coming from numpy when computing nanmean on all-NaN arrays for isoform clustergram log(TPM) data display...
@@ -301,8 +301,6 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
     """Transcript structure processing with caching and memory optimization for faster rendering!"""
     #with ProfilerContext(f"process_transcript_structure_{gene_name}"):
     db_config = get_db_config()
-    conn.execute("PRAGMA cache_size = 10000")
-    conn.execute("PRAGMA temp_store = MEMORY")
     table_prefix = get_table_prefix(species)
     gene_query = f'SELECT DISTINCT gene_id FROM \"{table_prefix}isoforms\" WHERE gene_name = :param LIMIT 1'
     gene_result = db_config.execute_query(gene_query, params={'param': gene_name})
@@ -316,37 +314,42 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
     if filtered_ids and len(filtered_ids) > 0:
         filtered_ids_int = [int(id) for id in filtered_ids if str(id).isdigit()]
         if filtered_ids_int:
-            placeholders = ','.join(['?'] * len(filtered_ids_int))
+            # Create named parameters for each ID
+            id_params = {f'id_{i}': id_val for i, id_val in enumerate(filtered_ids_int)}
+            placeholders = ','.join([f':id_{i}' for i in range(len(filtered_ids_int))])
             isoform_query = f"""
             SELECT id FROM "{table_prefix}isoforms"
-            WHERE gene_id LIKE :param AND id IN ({placeholders})
+            WHERE gene_id LIKE :gene_pattern AND id IN ({placeholders})
             ORDER BY isoform_average_tpm DESC NULLS LAST
             """
-            params = [f"{gene_id}%"] + filtered_ids_int
+            params = {'gene_pattern': f"{gene_id}%", **id_params}
         else:
-            isoform_query = f'SELECT id FROM \"{table_prefix}isoforms\" WHERE gene_id LIKE :param ORDER BY isoform_average_tpm DESC NULLS LAST'
-            params = [f"{gene_id}%"]
+            isoform_query = f'SELECT id FROM \"{table_prefix}isoforms\" WHERE gene_id LIKE :gene_pattern ORDER BY isoform_average_tpm DESC NULLS LAST'
+            params = {'gene_pattern': f"{gene_id}%"}
     else:
-        isoform_query = f'SELECT id FROM \"{table_prefix}isoforms\" WHERE gene_id LIKE :param ORDER BY isoform_average_tpm DESC NULLS LAST'
-        params = [f"{gene_id}%"]
+        isoform_query = f'SELECT id FROM \"{table_prefix}isoforms\" WHERE gene_id LIKE :gene_pattern ORDER BY isoform_average_tpm DESC NULLS LAST'
+        params = {'gene_pattern': f"{gene_id}%"}
 
-    isoform_ids = db_config.execute_query(isoform_query, params={'param': params})
+    isoform_ids = db_config.execute_query(isoform_query, params=params)
 
-    if not isoform_ids:
+    if isoform_ids.empty:
         return pd.DataFrame()
 
     #memory_tracker.measure(f"after_isoform_lookup_{gene_name}")
 
-    placeholders = ','.join(['?'] * len(isoform_ids))
+    # Create named parameters for each isoform ID
+    isoform_id_list = isoform_ids['id'].tolist() if isinstance(isoform_ids, pd.DataFrame) else list(isoform_ids)
+    psl_id_params = {f'psl_id_{i}': id_val for i, id_val in enumerate(isoform_id_list)}
+    psl_placeholders = ','.join([f':psl_id_{i}' for i in range(len(isoform_id_list))])
     psl_query = f"""
     SELECT
-        id, trans_id, gene_id, tName, strand,
-        tStart, tEnd, blockSizes, tStarts
+        id, trans_id, gene_id, "tName", strand,
+        "tStart", "tEnd", "blockSizes", "tStarts"
     FROM "{table_prefix}psl_data"
-    WHERE id IN ({placeholders})
-    ORDER BY tStart, id
+    WHERE id IN ({psl_placeholders})
+    ORDER BY "tStart", id
     """
-    gene_psl = db_config.execute_query(psl_query, params={'param': isoform_ids})
+    gene_psl = db_config.execute_query(psl_query, params=psl_id_params)
     #memory_tracker.measure(f"after_psl_query_{gene_name}")
     
     # Use much faster vectorized processing instead of pandas iterrows (super slow)
@@ -410,7 +413,6 @@ def process_transcript_structure(db_path: str, gene_name: str, filtered_ids: lis
 def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm', species="Human") -> pd.DataFrame:
     """Load expression data from SQLite database with caching"""
     db_config = get_db_config()
-    conn.execute("PRAGMA cache_size = 10000")
 
     gene_id = get_gene_id_for_gene_name(db_path, gene_name, species)
     if not gene_id:
@@ -430,18 +432,20 @@ def load_expression_data(db_path: str, gene_name: str, data_type: str = 'tpm', s
         psl.trans_id,
         iso.gene_name,
         iso.isoform_average_tpm
-    FROM {table_name} exp
-    JOIN {table_prefix}psl_data psl ON exp.id = psl.id
-    JOIN {table_prefix}isoforms iso ON exp.id = iso.id
-    WHERE iso.gene_id LIKE ?
+    FROM "{table_name}" exp
+    JOIN "{table_prefix}psl_data" psl ON exp.id = psl.id
+    JOIN "{table_prefix}isoforms" iso ON exp.id = iso.id
+    WHERE iso.gene_id LIKE :gene_id_pattern
     ORDER BY iso.isoform_average_tpm ASC NULLS LAST, psl.trans_id
     """
 
     try:
-        df = db_config.execute_query(query, params={'param': f"{gene_id}%"})
-        df = df.drop(['index'], axis=1)
+        df = db_config.execute_query(query, params={'gene_id_pattern': f"{gene_id}%"})
+        # Drop 'index' column if it exists
+        if 'index' in df.columns:
+            df = df.drop(['index'], axis=1)
 
-        numeric_cols = [col for col in df.columns if col not in ['transcript', 'trans_id', 'gene', 'gene_name']]
+        numeric_cols = [col for col in df.columns if col not in ['id', 'transcript', 'trans_id', 'gene', 'gene_name']]
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
@@ -482,12 +486,12 @@ def create_transcript_structure_plot(db_path: str,
 
     table_prefix = get_table_prefix(species)
     db_config = get_db_config()
-    metadata_query = f'SELECT gene_id, orf_perplexity FROM "{table_prefix}isoforms" WHERE gene_name = :param LIMIT 1'
+    metadata_query = f'SELECT gene_id, "ORF_perplexity" FROM "{table_prefix}isoforms" WHERE gene_name = :param LIMIT 1'
     metadata_result = db_config.execute_query(metadata_query, params={'param': gene_name})
 
     if not metadata_result.empty:
         gene_ensembl_id = metadata_result.iloc[0]['gene_id']
-        orf_value = metadata_result.iloc[0]['orf_perplexity']
+        orf_value = metadata_result.iloc[0]['ORF_perplexity']
         orf_perplexity = "None" if pd.isna(orf_value) else f"{orf_value:.3f}"
     else:
         gene_ensembl_id = "Unknown"
@@ -509,13 +513,15 @@ def create_transcript_structure_plot(db_path: str,
     db_config = get_db_config()
     transcript_names = transcript_summary['trans_id'].tolist()
     if transcript_names:
-        placeholders = ','.join(['?'] * len(transcript_names))
+        # Create named parameters for each transcript name
+        trans_params = {f'trans_{i}': name for i, name in enumerate(transcript_names)}
+        placeholders = ','.join([f':trans_{i}' for i in range(len(transcript_names))])
         transcript_ids_query = f"""
-        SELECT DISTINCT transcript, id FROM "{table_prefix}isoforms"
+        SELECT DISTINCT transcript, id, isoform_average_tpm FROM "{table_prefix}isoforms"
         WHERE transcript IN ({placeholders})
         ORDER BY isoform_average_tpm DESC NULLS LAST
         """
-        ordered_ids_df = db_config.execute_query(transcript_ids_query, params={'param': transcript_names})
+        ordered_ids_df = db_config.execute_query(transcript_ids_query, params=trans_params)
         # Map back to the PSL table IDs using transcript name
         ordered_transcript_ids = [int(transcript_summary[transcript_summary['trans_id'] == trans_name]['id'].iloc[0])
                                  for trans_name in ordered_ids_df['transcript']

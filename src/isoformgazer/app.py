@@ -1456,7 +1456,7 @@ app.layout = html.Div(className='app-layout', children=[
                         ]),
 
                         html.H3('ORF-Level Summary', className='summary-section-header'),
-                        html.Div(id='orf-level-summary', className='summary-block', children=[
+                        html.Div(id='ORF-level-summary', className='summary-block', children=[
                             html.P("Select a gene to view summary information", className='summary-placeholder')
                         ]),
 
@@ -3319,7 +3319,7 @@ def format_value(val, field_name=None):
 
 @app.callback(
     [dash.dependencies.Output('gene-level-summary', 'children'),
-     dash.dependencies.Output('orf-level-summary', 'children')],
+     dash.dependencies.Output('ORF-level-summary', 'children')],
     [dash.dependencies.Input('gene-search-dropdown', 'value'),
      dash.dependencies.Input('species-dropdown', 'value')]
 )
@@ -3346,9 +3346,9 @@ def update_summary_blocks(selected_gene, species):
                 ptc_perplexity,
                 gene_average_tpm,
                 gene_expressed_samples,
-                ORF_potential,
-                ORF_perplexity,
-                ORF_expressed_samples
+                "ORF_potential",
+                "ORF_perplexity",
+                "ORF_expressed_samples"
             FROM {table_prefix}isoforms
             WHERE gene_name = :gene_name
             LIMIT 1
@@ -3363,9 +3363,9 @@ def update_summary_blocks(selected_gene, species):
                 ptc_perplexity,
                 gene_average_tpm,
                 gene_expressed_samples,
-                orf_potential,
-                orf_perplexity,
-                orf_expressed_samples
+                "ORF_potential",
+                "ORF_perplexity",
+                "ORF_expressed_samples"
             FROM {table_prefix}isoforms
             WHERE gene_name = :gene_name
             LIMIT 1
@@ -3387,12 +3387,12 @@ def update_summary_blocks(selected_gene, species):
         if species == "Mouse":
             (gene_potential, gene_perplexity, ptc_potential,
              ptc_perplexity, gene_average_tpm, gene_expressed_samples,
-             orf_potential, orf_perplexity, orf_expressed_samples) = row
+             ORF_potential, ORF_perplexity, ORF_expressed_samples) = row
             gene_protein_category = None
         else:
             (gene_protein_category, gene_potential, gene_perplexity, ptc_potential,
              ptc_perplexity, gene_average_tpm, gene_expressed_samples,
-             orf_potential, orf_perplexity, orf_expressed_samples) = row
+             ORF_potential, ORF_perplexity, ORF_expressed_samples) = row
 
         gene_summary = []
 
@@ -3432,22 +3432,22 @@ def update_summary_blocks(selected_gene, species):
             ])
         ])
 
-        orf_summary = [
+        ORF_summary = [
             html.Div(className='summary-item', children=[
                 html.Span('Number of detected ORFs:', className='summary-label'),
-                html.Span(format_value(orf_potential, 'orf_potential'), className='summary-value')
+                html.Span(format_value(ORF_potential, 'ORF_potential'), className='summary-value')
             ]),
             html.Div(className='summary-item', children=[
                 html.Span('ORF Perplexity:', className='summary-label'),
-                html.Span(format_value(orf_perplexity), className='summary-value')
+                html.Span(format_value(ORF_perplexity), className='summary-value')
             ]),
             html.Div(className='summary-item', children=[
                 html.Span('ORF Expressed Samples:', className='summary-label'),
-                html.Span(format_value(orf_expressed_samples, 'ORF_expressed_samples'), className='summary-value')
+                html.Span(format_value(ORF_expressed_samples, 'ORF_expressed_samples'), className='summary-value')
             ])
         ]
 
-        return gene_summary, orf_summary
+        return gene_summary, ORF_summary
 
     except Exception as e:
         print(f"Error updating summary blocks: {e}")
@@ -4101,11 +4101,11 @@ def update_atse_visualization(selected_gene, filtered_junction_ids, filtered_tra
     if filtered_transcript_ids and isinstance(filtered_transcript_ids, list) and len(filtered_transcript_ids) > 0 and selected_gene:
         try:
             # Get total transcript count for this gene
-            conn = sqlite3.connect(db_path)
+            db_config = get_db_config()
             table_prefix = '' if species == "Human" else 'mouse_'
-            count_query = f"SELECT COUNT(*) FROM {table_prefix}isoforms WHERE gene_name = ?"
-            total_count = conn.execute(count_query, [selected_gene]).fetchone()[0]
-            conn.close()
+            count_query = f'SELECT COUNT(*) FROM "{table_prefix}isoforms" WHERE gene_name = :gene_name'
+            result = db_config.execute_query(count_query, params={'gene_name': selected_gene})
+            total_count = result.iloc[0, 0]
 
             # Only apply filtering if filtered list is smaller than total (actual filtering is happening)
             if len(filtered_transcript_ids) < total_count:

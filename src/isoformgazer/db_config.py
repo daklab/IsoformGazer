@@ -182,16 +182,10 @@ class DatabaseConfig:
             else:
                 query_to_execute = query
 
-            raw_conn = self.engine.raw_connection()
-
-            try:
-                result = pd.read_sql_query(query_to_execute, raw_conn, params=params)
-            finally:
-                raw_conn.close()
+            result = pd.read_sql_query(query_to_execute, self.engine, params=params)
+            
         else:
-            # For queries without parameters, use SQLAlchemy connection
-            with self.get_connection() as conn:
-                result = pd.read_sql_query(query, conn)
+            result = pd.read_sql_query(query, self.engine)
 
         return result
 
