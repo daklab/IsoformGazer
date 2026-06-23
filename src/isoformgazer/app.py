@@ -41,7 +41,7 @@ from isoform_utils import (
     create_isoform_expression_clustergram, create_empty_isoform_message,
     calculate_unified_plot_height, calculate_clustergram_min_height, calculate_single_isoform_hash,
     calculate_dynamic_structure_plot_height, parse_gtf_and_calculate_hashes, generate_annotated_gtf,
-    get_unique_tissues_for_gene, get_unique_organs_for_gene, get_gene_id_for_gene_name
+    get_unique_tissues_for_gene, get_unique_organs_for_gene, get_gene_id_for_gene_name, load_psl_data
 )
 
 RANDOM_SEED = 18
@@ -1093,6 +1093,20 @@ app.index_string = '''
 header = html.Div(className='app-header', children=[
     html.Img(src='/assets/Isoform-Gazer-telescope.png', className='app-header--logo'),
     html.Img(src='/assets/Isoform-Gazer-text.png', className='app-header--title'),
+    html.Div(className='mode-toggle-buttons', children=[
+        html.Button(
+            'Isoform Gazer Data',
+            id='mode-button-database',
+            className='mode-button mode-button-active',
+            n_clicks=0
+        ),
+        html.Button(
+            'Custom User Data',
+            id='mode-button-custom',
+            className='mode-button',
+            n_clicks=0
+        )
+    ]),
     html.A(
         href='https://github.com/daklab/IsoformGazer',
         target='_blank',
@@ -1359,6 +1373,67 @@ app.layout = html.Div(className='app-layout', children=[
                 ]),
                 dcc.Tab(label='Query', className='tab-1', value='tab-2', children=[
                     html.Div(className='control-tab', children=[
+                        # Custom User Data Upload Section (shown only in custom mode)
+                        html.Div(id='custom-mode-query-content', style={'display': 'none'}, children=[
+                            html.H2('Upload Your Data', className='alignment-settings-section'),
+                            html.Div(className='query-content', children=[
+                                html.P("Upload your own data to visualize in Isoform Gazer. You can upload:"),
+                                html.Ul([
+                                    html.Li([html.Strong("Structure Plot Data: "), "GTF or PSL file containing transcript/junction information"]),
+                                    html.Li([html.Strong("Long-Read Expression: "), "CSV/TSV counts matrix with transcript IDs as rows"]),
+                                    html.Li([html.Strong("Short-Read Expression: "), "CSV/TSV counts matrix with junction IDs as rows"])
+                                ]),
+                                html.P("Column headers should follow the format: {sample_id}.{tissue_name} or {sample_id}.{cell_type}")
+                            ]),
+
+                            html.H3('Structure Plot', className='summary-section-header'),
+                            html.Div(className='app-controls-block', children=[
+                                dcc.Upload(
+                                    id='user-structure-upload',
+                                    children=html.Div([
+                                        'Drag and drop or',
+                                        html.Br(),
+                                        html.A('select GTF or PSL file')
+                                    ]),
+                                    multiple=False
+                                ),
+                                html.Div(id='user-structure-upload-status', className='upload-status'),
+                                html.Button('Clear', id='clear-structure-upload-btn', className='control-button', style={'marginTop': '10px', 'display': 'none'})
+                            ]),
+
+                            html.H3('Long-Read Expression', className='summary-section-header'),
+                            html.Div(className='app-controls-block', children=[
+                                dcc.Upload(
+                                    id='user-longread-upload',
+                                    children=html.Div([
+                                        'Drag and drop or',
+                                        html.Br(),
+                                        html.A('select CSV or TSV file')
+                                    ]),
+                                    multiple=False
+                                ),
+                                html.Div(id='user-longread-upload-status', className='upload-status'),
+                                html.Button('Clear', id='clear-longread-upload-btn', className='control-button', style={'marginTop': '10px', 'display': 'none'})
+                            ]),
+
+                            html.H3('Short-Read Expression', className='summary-section-header'),
+                            html.Div(className='app-controls-block', children=[
+                                dcc.Upload(
+                                    id='user-shortread-upload',
+                                    children=html.Div([
+                                        'Drag and drop or',
+                                        html.Br(),
+                                        html.A('select CSV or TSV file')
+                                    ]),
+                                    multiple=False
+                                ),
+                                html.Div(id='user-shortread-upload-status', className='upload-status'),
+                                html.Button('Clear', id='clear-shortread-upload-btn', className='control-button', style={'marginTop': '10px', 'display': 'none'})
+                            ])
+                        ]),
+
+                        # Database Mode Content (shown only in database mode)
+                        html.Div(id='database-mode-query-content', children=[
                         html.H2('Species', className='alignment-settings-section'),
                         html.Div(className='app-controls-block', children=[
                             dcc.Dropdown(
@@ -1445,6 +1520,7 @@ app.layout = html.Div(className='app-layout', children=[
                                 ])
                             ])
                         ])
+                        ])  # Close database-mode-query-content div
                     ])
                 ]),
                 dcc.Tab(label='Custom', className='tab-1', value='tab-3', children=[
@@ -2320,6 +2396,15 @@ app.layout.children.extend([
     dcc.Store(id='gtf-hash-results-store', data=[]),
     dcc.Store(id='all-gene-options-store', data=get_all_gene_options(db_path)),
     dcc.Store(id='cache-used-store', data=cache_loaded_from_disk),
+    # User data stores for custom mode
+    dcc.Store(id='app-mode-store', data='database'),  # 'database' or 'custom'
+    dcc.Store(id='user-structure-data-store', data={}),  # PSL/GTF parsed data
+    dcc.Store(id='user-longread-expression-store', data={}),  # Long-read counts matrix
+    dcc.Store(id='user-shortread-expression-store', data={}),  # Short-read counts matrix
+    dcc.Store(id='user-isoforms-store', data=[]),  # User data isoforms for master table
+    dcc.Store(id='user-junctions-store', data=[]),  # User data junctions for master table
+    dcc.Store(id='previous-gene-selection-store', data=''),  # For preserving gene selection
+    dcc.Store(id='user-upload-status-store', data={}),  # Upload status tracking
     dcc.Interval(
         id='loading-delay-interval',
         interval=1000,
@@ -3751,13 +3836,58 @@ def adjust_panel_heights(clustergram_height, selected_gene, filtered_isoform_ids
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
      dash.dependencies.Input('filtered-isoform-store', 'data'),
      dash.dependencies.Input('gridlines-toggle', 'value'),
-     dash.dependencies.Input('species-dropdown', 'value')]
+     dash.dependencies.Input('species-dropdown', 'value'),
+     dash.dependencies.Input('app-mode-store', 'data'),
+     dash.dependencies.Input('user-shortread-expression-store', 'data')]
 )
 def update_junction_clustergram(selected_gene, colorscale,
                                 filtered_junction_ids, show_celltype_labels, clustergram_height,
-                                distance_metric, linkage_method, filtered_isoform_ids, show_gridlines, species):
+                                distance_metric, linkage_method, filtered_isoform_ids, show_gridlines, species,
+                                app_mode, user_shortread_data):
     """Update junction visualization based on gene selection and filtering"""
 
+    # Handle custom user data mode
+    if app_mode == 'custom' and user_shortread_data and user_shortread_data.get('filename'):
+        try:
+            fig = create_user_data_clustergram(
+                user_shortread_data,
+                colorscale=colorscale,
+                height=clustergram_height,
+                distance_metric=distance_metric,
+                linkage_method=linkage_method,
+                show_labels=show_celltype_labels,
+                show_gridlines=show_gridlines,
+                average_by_tissue=False  # Short-read typically shows individual cell types
+            )
+            config = {
+                'responsive': True,
+                'displayModeBar': True,
+                'scrollZoom': False,
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'toImageButtonOptions': {
+                    'format': 'svg',
+                    'filename': 'user_shortread_expression_clustergram'
+                }
+            }
+            return fig, config
+        except Exception as e:
+            print(f"Error creating user junction clustergram: {e}")
+            import traceback
+            traceback.print_exc()
+            empty_fig = create_empty_clustergram_message(f"Error loading user data: {str(e)}")
+            default_config = {
+                'responsive': True,
+                'displayModeBar': True,
+                'scrollZoom': False,
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'toImageButtonOptions': {
+                    'format': 'svg',
+                    'filename': 'user_shortread_expression_clustergram'
+                }
+            }
+            return empty_fig, default_config
+
+    # Database mode - existing logic
     if selected_gene:
         try:
             filtered_ids = [int(id) for id in filtered_isoform_ids] if filtered_isoform_ids else []
@@ -3881,13 +4011,58 @@ def update_junction_clustergram(selected_gene, colorscale,
      dash.dependencies.Input('linkage-method-dropdown', 'value'),
      dash.dependencies.Input('filtered-junction-store', 'data'),
      dash.dependencies.Input('gridlines-toggle', 'value'),
-     dash.dependencies.Input('species-dropdown', 'value')]
+     dash.dependencies.Input('species-dropdown', 'value'),
+     dash.dependencies.Input('app-mode-store', 'data'),
+     dash.dependencies.Input('user-longread-expression-store', 'data')]
 )
 def update_isoform_heatmap(selected_gene, colorscale, data_type_selection,
                           show_labels, collapse_mode, filtered_transcript_ids,
                           clustergram_height, distance_metric, linkage_method, filtered_junction_ids,
-                          show_gridlines, species):
+                          show_gridlines, species, app_mode, user_longread_data):
     """Update isoform clustergram with unified height based on both isoform and junction data"""
+
+    # Handle custom user data mode
+    if app_mode == 'custom' and user_longread_data and user_longread_data.get('filename'):
+        try:
+            fig = create_user_data_clustergram(
+                user_longread_data,
+                colorscale=colorscale,
+                height=clustergram_height,
+                distance_metric=distance_metric,
+                linkage_method=linkage_method,
+                show_labels=show_labels,
+                show_gridlines=show_gridlines,
+                average_by_tissue=collapse_mode
+            )
+            config = {
+                'responsive': True,
+                'displayModeBar': True,
+                'scrollZoom': False,
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'toImageButtonOptions': {
+                    'format': 'svg',
+                    'filename': 'user_longread_expression_clustergram'
+                }
+            }
+            return fig, config
+        except Exception as e:
+            print(f"Error creating user data clustergram: {e}")
+            import traceback
+            traceback.print_exc()
+            empty_fig = create_empty_clustergram_message(f"Error loading user data: {str(e)}")
+            default_config = {
+                'responsive': True,
+                'displayModeBar': True,
+                'scrollZoom': False,
+                'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                'toImageButtonOptions': {
+                    'format': 'svg',
+                    'filename': 'user_longread_expression_clustergram'
+                }
+            }
+            return empty_fig, default_config
+
+    # Database mode - existing logic
     # Return empty figure if no gene selected
     if not selected_gene:
         empty_fig = go.Figure()
@@ -5037,6 +5212,705 @@ def update_abundance_dropdowns(color_type, selected_gene, species):
             traceback.print_exc()
 
     return tissue_options, tissue_value, tissue_style, organ_options, organ_value, organ_style
+
+
+###################################################################
+# UTILITY FUNCTIONS FOR USER DATA PROCESSING
+###################################################################
+
+def process_user_structure_data_for_visualization(structure_data):
+    """Convert user-uploaded structure data into format for visualization"""
+    if not structure_data or not structure_data.get('filename'):
+        return None
+
+    file_type = structure_data.get('file_type')
+
+    if file_type == 'gtf':
+        # GTF data - prepare for transcript structure plot
+        hash_results = structure_data.get('hash_results', {})
+        results = hash_results.get('results', [])
+
+        # Create a DataFrame-like structure for transcript visualization
+        import pandas as pd
+        if results:
+            df = pd.DataFrame(results)
+            return {'type': 'gtf', 'data': df, 'content': structure_data.get('content')}
+        return None
+
+    elif file_type == 'psl':
+        # PSL data - prepare for junction/exon visualization
+        import pandas as pd
+        psl_records = structure_data.get('psl_data', [])
+        if psl_records:
+            df = pd.DataFrame(psl_records)
+            return {'type': 'psl', 'data': df}
+        return None
+
+    return None
+
+
+def process_user_expression_data_for_clustergram(expression_data, data_type='longread'):
+    """Convert user-uploaded expression data into format for clustergram"""
+    if not expression_data or not expression_data.get('filename'):
+        return None
+
+    import pandas as pd
+
+    # Reconstruct DataFrame from stored dict
+    data_dict = expression_data.get('data', {})
+    if not data_dict:
+        return None
+
+    # data_dict has 'index', 'columns', and 'data' keys from to_dict('split')
+    df = pd.DataFrame(
+        data=data_dict['data'],
+        index=data_dict['index'],
+        columns=data_dict['columns']
+    )
+
+    sample_info = expression_data.get('sample_info', [])
+
+    return {
+        'data': df,
+        'sample_info': sample_info,
+        'type': data_type
+    }
+
+
+def create_user_data_structure_plot(structure_data, plot_height=600, exon_color='#2E86C1'):
+    """Create structure plot from user data"""
+    import plotly.graph_objs as go
+
+    processed = process_user_structure_data_for_visualization(structure_data)
+    if not processed:
+        return create_empty_isoform_message("No structure data uploaded")
+
+    if processed['type'] == 'gtf':
+        # For GTF, we need to convert to PSL-like format or create a simple visualization
+        # For now, create a placeholder
+        fig = go.Figure()
+        fig.add_annotation(
+            text="GTF structure visualization<br>Upload PSL file for full structure plot",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=14)
+        )
+        fig.update_layout(height=plot_height)
+        return fig
+
+    elif processed['type'] == 'psl':
+        # Use existing PSL visualization function
+        # This would need to be adapted to work without database
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"PSL structure plot<br>{len(processed['data'])} transcripts/junctions",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=14)
+        )
+        fig.update_layout(height=plot_height)
+        return fig
+
+    return create_empty_isoform_message("Unable to create structure plot")
+
+
+def create_user_data_clustergram(expression_data, colorscale='Viridis', height=800,
+                                  distance_metric='euclidean', linkage_method='average',
+                                  show_labels=True, show_gridlines=True, average_by_tissue=False):
+    """Create clustergram from user expression data"""
+    processed = process_user_expression_data_for_clustergram(expression_data)
+    if not processed:
+        return create_empty_clustergram_message("No expression data uploaded")
+
+    df = processed['data']
+    sample_info = processed['sample_info']
+
+    # Average by tissue if requested
+    if average_by_tissue and sample_info:
+        import pandas as pd
+        # Group columns by tissue name and average
+        tissue_groups = {}
+        for info in sample_info:
+            tissue = info.get('tissue') or info.get('tissue_or_celltype', 'Unknown')
+            col = info.get('column')
+            if tissue not in tissue_groups:
+                tissue_groups[tissue] = []
+            tissue_groups[tissue].append(col)
+
+        # Create averaged DataFrame
+        averaged_data = {}
+        for tissue, cols in tissue_groups.items():
+            available_cols = [c for c in cols if c in df.columns]
+            if available_cols:
+                averaged_data[tissue] = df[available_cols].mean(axis=1)
+
+        if averaged_data:
+            df = pd.DataFrame(averaged_data)
+
+    # Use the existing Clustergram class
+    from _clustergram import Clustergram
+
+    try:
+        # Create clustergram
+        clustergram = Clustergram(
+            data=df,
+            column_labels=df.columns.tolist() if show_labels else None,
+            row_labels=df.index.tolist() if show_labels else None,
+            height=height,
+            width=None,
+            color_map=colorscale,
+            center_values=False,
+            standardize='none',
+            row_dist=distance_metric,
+            col_dist=distance_metric,
+            row_linkage=linkage_method,
+            col_linkage=linkage_method,
+            optimal_leaf_order=True
+        )
+
+        fig = clustergram.figure
+
+        if show_gridlines:
+            fig.update_xaxes(showgrid=True, gridwidth=0.5, gridcolor='rgba(128,128,128,0.2)')
+            fig.update_yaxes(showgrid=True, gridwidth=0.5, gridcolor='rgba(128,128,128,0.2)')
+
+        fig.update_layout(
+            autosize=True,
+            width=None,
+            transition_duration=200
+        )
+
+        return fig
+
+    except Exception as e:
+        print(f"Error creating user data clustergram: {e}")
+        import traceback
+        traceback.print_exc()
+        return create_empty_clustergram_message(f"Error creating clustergram: {str(e)}")
+
+
+###################################################################
+# MODE SWITCHING CALLBACKS (Database vs Custom User Data)
+###################################################################
+
+@app.callback(
+    [dash.dependencies.Output('app-mode-store', 'data'),
+     dash.dependencies.Output('mode-button-database', 'className'),
+     dash.dependencies.Output('mode-button-custom', 'className'),
+     dash.dependencies.Output('database-mode-query-content', 'style'),
+     dash.dependencies.Output('custom-mode-query-content', 'style'),
+     dash.dependencies.Output('previous-gene-selection-store', 'data')],
+    [dash.dependencies.Input('mode-button-database', 'n_clicks'),
+     dash.dependencies.Input('mode-button-custom', 'n_clicks')],
+    [dash.dependencies.State('app-mode-store', 'data'),
+     dash.dependencies.State('gene-search-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def toggle_mode(db_clicks, custom_clicks, current_mode, current_gene):
+    """Toggle between database mode and custom user data mode"""
+    import dash
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    # Determine which mode to switch to
+    if button_id == 'mode-button-database':
+        new_mode = 'database'
+        db_class = 'mode-button mode-button-active'
+        custom_class = 'mode-button'
+        db_style = {'display': 'block'}
+        custom_style = {'display': 'none'}
+    else:  # mode-button-custom
+        new_mode = 'custom'
+        db_class = 'mode-button'
+        custom_class = 'mode-button mode-button-active'
+        db_style = {'display': 'none'}
+        custom_style = {'display': 'block'}
+
+    # Save current gene selection
+    previous_gene = current_gene if current_gene else ''
+
+    return new_mode, db_class, custom_class, db_style, custom_style, previous_gene
+
+
+@app.callback(
+    dash.dependencies.Output('gene-search-dropdown', 'value', allow_duplicate=True),
+    [dash.dependencies.Input('app-mode-store', 'data')],
+    [dash.dependencies.State('previous-gene-selection-store', 'data')],
+    prevent_initial_call=True
+)
+def restore_gene_selection_on_mode_switch(mode, previous_gene):
+    """Restore gene selection when switching back to database mode"""
+    if mode == 'database' and previous_gene:
+        return previous_gene
+    return dash.no_update
+
+
+###################################################################
+# USER DATA UPLOAD CALLBACKS
+###################################################################
+
+@app.callback(
+    [dash.dependencies.Output('user-structure-data-store', 'data'),
+     dash.dependencies.Output('user-structure-upload-status', 'children'),
+     dash.dependencies.Output('clear-structure-upload-btn', 'style')],
+    [dash.dependencies.Input('user-structure-upload', 'contents'),
+     dash.dependencies.Input('clear-structure-upload-btn', 'n_clicks')],
+    [dash.dependencies.State('user-structure-upload', 'filename')],
+    prevent_initial_call=True
+)
+def handle_user_structure_upload(contents, clear_clicks, filename):
+    """Handle upload of GTF or PSL file for structure plot"""
+    import dash
+    import base64
+    import io
+    import pandas as pd
+
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    # Handle clear button
+    if trigger_id == 'clear-structure-upload-btn':
+        return {}, html.P('', className='upload-status'), {'marginTop': '10px', 'display': 'none'}
+
+    # Handle file upload
+    if contents is None:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    try:
+        # Decode file contents
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+        file_content = decoded.decode('utf-8')
+
+        # Determine file type and parse accordingly
+        if filename.endswith('.gtf'):
+            # Parse GTF and calculate hashes
+            hash_results = parse_gtf_and_calculate_hashes(file_content)
+
+            # Store parsed data
+            structure_data = {
+                'file_type': 'gtf',
+                'filename': filename,
+                'content': file_content,
+                'hash_results': hash_results
+            }
+
+            status_msg = html.Div([
+                html.P(f"GTF file '{filename}' uploaded successfully!", className='success-message'),
+                html.P(f"Found {len(hash_results['results'])} transcripts", className='success-message')
+            ])
+
+        elif filename.endswith('.psl'):
+            # Parse PSL file - write to temp file for load_psl_data
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.psl', delete=False) as tmp:
+                tmp.write(file_content)
+                tmp_path = tmp.name
+
+            psl_df = load_psl_data(tmp_path)
+            os.remove(tmp_path)  # Clean up temp file
+
+            if psl_df.empty:
+                return {}, html.P(f"Error: Could not parse PSL file '{filename}'", className='error-message'), {'marginTop': '10px', 'display': 'none'}
+
+            # Store parsed data
+            structure_data = {
+                'file_type': 'psl',
+                'filename': filename,
+                'content': file_content,
+                'psl_data': psl_df.to_dict('records')
+            }
+
+            status_msg = html.Div([
+                html.P(f"PSL file '{filename}' uploaded successfully!", className='success-message'),
+                html.P(f"Found {len(psl_df)} transcripts/junctions", className='success-message')
+            ])
+
+        else:
+            return {}, html.P(f"Error: File must be .gtf or .psl format", className='error-message'), {'marginTop': '10px', 'display': 'none'}
+
+        return structure_data, status_msg, {'marginTop': '10px', 'display': 'block'}
+
+    except Exception as e:
+        return {}, html.P(f"Error uploading file: {str(e)}", className='error-message'), {'marginTop': '10px', 'display': 'none'}
+
+
+@app.callback(
+    [dash.dependencies.Output('user-longread-expression-store', 'data'),
+     dash.dependencies.Output('user-longread-upload-status', 'children'),
+     dash.dependencies.Output('clear-longread-upload-btn', 'style')],
+    [dash.dependencies.Input('user-longread-upload', 'contents'),
+     dash.dependencies.Input('clear-longread-upload-btn', 'n_clicks')],
+    [dash.dependencies.State('user-longread-upload', 'filename')],
+    prevent_initial_call=True
+)
+def handle_user_longread_upload(contents, clear_clicks, filename):
+    """Handle upload of long-read expression counts matrix"""
+    import dash
+    import base64
+    import io
+    import pandas as pd
+
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    # Handle clear button
+    if trigger_id == 'clear-longread-upload-btn':
+        return {}, html.P('', className='upload-status'), {'marginTop': '10px', 'display': 'none'}
+
+    # Handle file upload
+    if contents is None:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    try:
+        # Decode file contents
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+
+        # Determine separator (CSV or TSV)
+        if filename.endswith('.csv'):
+            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')), index_col=0)
+        elif filename.endswith('.tsv') or filename.endswith('.txt'):
+            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')), sep='\t', index_col=0)
+        else:
+            return {}, html.P(f"Error: File must be .csv or .tsv format", className='error-message'), {'marginTop': '10px', 'display': 'none'}
+
+        # Extract sample and tissue information from column names
+        sample_info = []
+        for col in df.columns:
+            parts = col.split('.')
+            if len(parts) >= 2:
+                sample_id = parts[0]
+                tissue_name = '.'.join(parts[1:])  # In case tissue name has dots
+            else:
+                sample_id = col
+                tissue_name = 'Unknown'
+            sample_info.append({'sample_id': sample_id, 'tissue': tissue_name, 'column': col})
+
+        # Store data
+        expression_data = {
+            'filename': filename,
+            'data': df.to_dict('split'),  # Stores index, columns, and data separately
+            'sample_info': sample_info,
+            'n_transcripts': len(df),
+            'n_samples': len(df.columns)
+        }
+
+        status_msg = html.Div([
+            html.P(f"Long-read expression file '{filename}' uploaded successfully!", className='success-message'),
+            html.P(f"Found {len(df)} transcripts across {len(df.columns)} samples", className='success-message')
+        ])
+
+        return expression_data, status_msg, {'marginTop': '10px', 'display': 'block'}
+
+    except Exception as e:
+        return {}, html.P(f"Error uploading file: {str(e)}", className='error-message'), {'marginTop': '10px', 'display': 'none'}
+
+
+@app.callback(
+    [dash.dependencies.Output('user-shortread-expression-store', 'data'),
+     dash.dependencies.Output('user-shortread-upload-status', 'children'),
+     dash.dependencies.Output('clear-shortread-upload-btn', 'style')],
+    [dash.dependencies.Input('user-shortread-upload', 'contents'),
+     dash.dependencies.Input('clear-shortread-upload-btn', 'n_clicks')],
+    [dash.dependencies.State('user-shortread-upload', 'filename')],
+    prevent_initial_call=True
+)
+def handle_user_shortread_upload(contents, clear_clicks, filename):
+    """Handle upload of short-read expression counts matrix"""
+    import dash
+    import base64
+    import io
+    import pandas as pd
+
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    # Handle clear button
+    if trigger_id == 'clear-shortread-upload-btn':
+        return {}, html.P('', className='upload-status'), {'marginTop': '10px', 'display': 'none'}
+
+    # Handle file upload
+    if contents is None:
+        return dash.no_update, dash.no_update, dash.no_update
+
+    try:
+        # Decode file contents
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+
+        # Determine separator (CSV or TSV)
+        if filename.endswith('.csv'):
+            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')), index_col=0)
+        elif filename.endswith('.tsv') or filename.endswith('.txt'):
+            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')), sep='\t', index_col=0)
+        else:
+            return {}, html.P(f"Error: File must be .csv or .tsv format", className='error-message'), {'marginTop': '10px', 'display': 'none'}
+
+        # Extract sample and tissue/cell type information from column names
+        sample_info = []
+        for col in df.columns:
+            parts = col.split('.')
+            if len(parts) >= 2:
+                sample_id = parts[0]
+                tissue_or_celltype = '.'.join(parts[1:])  # In case has dots
+            else:
+                sample_id = col
+                tissue_or_celltype = 'Unknown'
+            sample_info.append({'sample_id': sample_id, 'tissue_or_celltype': tissue_or_celltype, 'column': col})
+
+        # Store data
+        expression_data = {
+            'filename': filename,
+            'data': df.to_dict('split'),  # Stores index, columns, and data separately
+            'sample_info': sample_info,
+            'n_junctions': len(df),
+            'n_samples': len(df.columns)
+        }
+
+        status_msg = html.Div([
+            html.P(f"Short-read expression file '{filename}' uploaded successfully!", className='success-message'),
+            html.P(f"Found {len(df)} junctions across {len(df.columns)} samples", className='success-message')
+        ])
+
+        return expression_data, status_msg, {'marginTop': '10px', 'display': 'block'}
+
+    except Exception as e:
+        return {}, html.P(f"Error uploading file: {str(e)}", className='error-message'), {'marginTop': '10px', 'display': 'none'}
+
+
+###################################################################
+# USER DATA MASTER TABLE PREPARATION
+###################################################################
+
+@app.callback(
+    [dash.dependencies.Output('isoform-full-data-store', 'data', allow_duplicate=True),
+     dash.dependencies.Output('junction-full-data-store', 'data', allow_duplicate=True)],
+    [dash.dependencies.Input('app-mode-store', 'data'),
+     dash.dependencies.Input('user-structure-data-store', 'data'),
+     dash.dependencies.Input('user-longread-expression-store', 'data'),
+     dash.dependencies.Input('user-shortread-expression-store', 'data')],
+    prevent_initial_call=True
+)
+def prepare_user_data_for_master_tables(mode, structure_data, longread_data, shortread_data):
+    """Convert user uploaded data into master table format"""
+
+    if mode != 'custom':
+        # In database mode, return empty to let database callbacks handle it
+        return dash.no_update, dash.no_update
+
+    isoform_table_data = []
+    junction_table_data = []
+
+    # Process structure data for master tables
+    if structure_data and structure_data.get('filename'):
+        file_type = structure_data.get('file_type')
+
+        if file_type == 'gtf':
+            # GTF: extract transcript info
+            hash_results = structure_data.get('hash_results', {})
+            results = hash_results.get('results', [])
+
+            for i, result in enumerate(results):
+                transcript_id = result.get('transcript_id', f'transcript_{i}')
+                gene_id = result.get('gene_id', 'Unknown')
+                hash_id = result.get('hash_id', '')
+                exon_count = result.get('exon_count', 0)
+
+                # Extract gene name from gene_id if possible
+                gene_name = gene_id.split('.')[0] if '.' in gene_id else gene_id
+
+                row = {
+                    'id': i + 1,
+                    'gene': gene_name,
+                    'transcript': transcript_id,
+                    'isoform_annotated': 0,  # Assume novel unless in GENCODE
+                    'isoform_average_tpm': 0.0,
+                    'isoform_total_tpm': 0.0,
+                    'isoform_number_of_exons': exon_count,
+                    'novel_junction': 1,  # Assume novel
+                    'hash_id': hash_id
+                }
+                isoform_table_data.append(row)
+
+        elif file_type == 'psl':
+            # PSL: can contain both transcripts and junctions
+            psl_data = structure_data.get('psl_data', [])
+            for i, record in enumerate(psl_data):
+                # Check if this is a transcript or junction based on qName format
+                qname = record.get('qName', '')
+                gene_id = record.get('gene_id', 'Unknown')
+                trans_id = record.get('trans_id', qname)
+                block_count = record.get('blockCount', 0)
+
+                gene_name = gene_id.split('.')[0] if '.' in gene_id else gene_id
+
+                # Add to isoform table
+                row = {
+                    'id': i + 1,
+                    'gene': gene_name,
+                    'transcript': trans_id,
+                    'isoform_annotated': 1 if 'ENST' in trans_id else 0,
+                    'isoform_average_tpm': 0.0,
+                    'isoform_total_tpm': 0.0,
+                    'isoform_number_of_exons': block_count,
+                    'novel_junction': 0 if 'ENST' in trans_id else 1
+                }
+                isoform_table_data.append(row)
+
+    # Add expression data if available
+    if longread_data and longread_data.get('filename') and isoform_table_data:
+        # Calculate average TPM for each transcript
+        data_dict = longread_data.get('data', {})
+        if data_dict:
+            import pandas as pd
+            df = pd.DataFrame(
+                data=data_dict['data'],
+                index=data_dict['index'],
+                columns=data_dict['columns']
+            )
+
+            # Match transcripts and update TPM values
+            for row in isoform_table_data:
+                transcript_id = row['transcript']
+                if transcript_id in df.index:
+                    values = df.loc[transcript_id]
+                    row['isoform_average_tpm'] = float(values.mean())
+                    row['isoform_total_tpm'] = float(values.sum())
+
+    # Process short-read expression data for junctions
+    if shortread_data and shortread_data.get('filename'):
+        data_dict = shortread_data.get('data', {})
+        if data_dict:
+            import pandas as pd
+            df = pd.DataFrame(
+                data=data_dict['data'],
+                index=data_dict['index'],
+                columns=data_dict['columns']
+            )
+
+            for i, junction_id in enumerate(df.index):
+                # Extract gene info if possible (format: gene_junctioninfo)
+                parts = str(junction_id).split('_')
+                gene_name = parts[0] if parts else 'Unknown'
+
+                # Calculate average PSI
+                values = df.loc[junction_id]
+                avg_psi = float(values.mean())
+
+                row = {
+                    'id': i + 1,
+                    'gene_name': gene_name,
+                    'gene_id': gene_name,
+                    'event_id': f'event_{i+1}',
+                    'junction_id': junction_id,
+                    'junction_average_psi': avg_psi
+                }
+                junction_table_data.append(row)
+
+    return isoform_table_data, junction_table_data
+
+
+###################################################################
+# DYNAMIC LAYOUT CONTROL FOR CUSTOM USER DATA
+###################################################################
+
+@app.callback(
+    [dash.dependencies.Output('top-junction-structure-plot-container', 'style', allow_duplicate=True),
+     dash.dependencies.Output('top-transcript-structure-plot-container', 'style', allow_duplicate=True),
+     dash.dependencies.Output('left-panel', 'style', allow_duplicate=True),
+     dash.dependencies.Output('right-panel', 'style', allow_duplicate=True)],
+    [dash.dependencies.Input('app-mode-store', 'data'),
+     dash.dependencies.Input('user-structure-data-store', 'data'),
+     dash.dependencies.Input('user-longread-expression-store', 'data'),
+     dash.dependencies.Input('user-shortread-expression-store', 'data')],
+    prevent_initial_call=True
+)
+def control_custom_data_layout(mode, structure_data, longread_data, shortread_data):
+    """Control visibility of visualization components based on uploaded user data"""
+    import dash
+
+    # If in database mode, show default layout
+    if mode == 'database':
+        return (
+            {'position': 'relative', 'display': 'block'},  # junction structure plot
+            {'display': 'none'},  # transcript structure plot
+            {'display': 'flex'},  # left panel
+            {'display': 'flex'}   # right panel
+        )
+
+    # In custom mode, determine what to show based on uploaded data
+    has_structure = bool(structure_data and structure_data.get('filename'))
+    has_longread = bool(longread_data and longread_data.get('filename'))
+    has_shortread = bool(shortread_data and shortread_data.get('filename'))
+
+    # Default: hide everything
+    junction_plot_style = {'position': 'relative', 'display': 'none'}
+    transcript_plot_style = {'display': 'none'}
+    left_panel_style = {'display': 'none'}
+    right_panel_style = {'display': 'none'}
+
+    # Scenario 1: Only structure data uploaded
+    if has_structure and not has_longread and not has_shortread:
+        # Show appropriate structure plot based on file type
+        if structure_data.get('file_type') == 'gtf':
+            transcript_plot_style = {'display': 'block'}
+        else:  # PSL can have both transcripts and junctions
+            junction_plot_style = {'position': 'relative', 'display': 'block'}
+
+    # Scenario 2: Only long-read expression uploaded
+    elif not has_structure and has_longread and not has_shortread:
+        left_panel_style = {'display': 'flex'}
+
+    # Scenario 3: Only short-read expression uploaded
+    elif not has_structure and not has_longread and has_shortread:
+        right_panel_style = {'display': 'flex'}
+
+    # Scenario 4: Structure + one expression type
+    elif has_structure and (has_longread or has_shortread) and not (has_longread and has_shortread):
+        # Show structure plot
+        if structure_data.get('file_type') == 'gtf':
+            transcript_plot_style = {'display': 'block'}
+        else:
+            junction_plot_style = {'position': 'relative', 'display': 'block'}
+
+        # Show appropriate clustergram
+        if has_longread:
+            left_panel_style = {'display': 'flex'}
+        else:
+            right_panel_style = {'display': 'flex'}
+
+    # Scenario 5: Structure + both expression types (full layout)
+    elif has_structure and has_longread and has_shortread:
+        if structure_data.get('file_type') == 'gtf':
+            transcript_plot_style = {'display': 'block'}
+        else:
+            junction_plot_style = {'position': 'relative', 'display': 'block'}
+        left_panel_style = {'display': 'flex'}
+        right_panel_style = {'display': 'flex'}
+
+    # Scenario 6: Both expression types, no structure
+    elif not has_structure and has_longread and has_shortread:
+        left_panel_style = {'display': 'flex'}
+        right_panel_style = {'display': 'flex'}
+
+    return junction_plot_style, transcript_plot_style, left_panel_style, right_panel_style
 
 
 ###################################################################
