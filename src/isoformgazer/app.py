@@ -3351,6 +3351,7 @@ def update_summary_blocks(selected_gene, species):
                 "ORF_expressed_samples"
             FROM {table_prefix}isoforms
             WHERE gene_name = :gene_name
+            ORDER BY gene_potential IS NULL, gene_perplexity IS NULL
             LIMIT 1
             """
         else:
@@ -3368,6 +3369,7 @@ def update_summary_blocks(selected_gene, species):
                 "ORF_expressed_samples"
             FROM {table_prefix}isoforms
             WHERE gene_name = :gene_name
+            ORDER BY gene_potential IS NULL, gene_perplexity IS NULL
             LIMIT 1
             """
 
